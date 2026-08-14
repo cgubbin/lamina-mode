@@ -1,0 +1,41 @@
+[package]
+name = "my-project"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Rust project template with library and binary"
+license = "MIT"
+
+[lib]
+name = "my_project"
+path = "src/lib.rs"
+
+[[bin]]
+name = "my-project"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "hello_bench"
+harness = false
+
+[profile.dev]
+debug = true
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+
+[workspace.metadata.release]
+tag = true
+push = true
+publish = true
+sign-commit = false
