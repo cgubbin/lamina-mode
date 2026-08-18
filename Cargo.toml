@@ -1,5 +1,5 @@
 [package]
-name = "my-project"
+name = "lamina-mode"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
@@ -7,25 +7,26 @@ description = "Rust project template with library and binary"
 license = "MIT"
 
 [lib]
-name = "my_project"
+name = "lamina_mode"
 path = "src/lib.rs"
 
-[[bin]]
-name = "my-project"
-path = "src/main.rs"
 
 [dependencies]
-anyhow = "1"
-clap = { version = "4", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+argloc = { path = "../argloc" }
+
+lamina-core = {path = "../lamina-core"}
+lamina-materials = {path = "../lamina-materials"}
+lamina-units = {path = "../lamina-units"}
+nalgebra = "0.33.3"
+ndarray = "0.17.2"
+num-traits = "0.2.19"
+
+thiserror = "2.0.20"
 
 [dev-dependencies]
-criterion = "0.5"
+approx = "0.5.1"
+num-complex = "0.4.6"
 
-[[bench]]
-name = "hello_bench"
-harness = false
 
 [profile.dev]
 debug = true

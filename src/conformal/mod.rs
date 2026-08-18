@@ -9,6 +9,8 @@
 //! choice forms part of the modal radiation condition. Interior transverse
 //! wavevectors remain the responsibility of `lamina-core`.
 
+mod branch;
+mod chart;
 mod region;
 
 pub mod in_plane;
@@ -62,9 +64,9 @@ impl<A> ConformalPoint<A> {
 ///
 /// Construction and search-domain validation are responsible for ensuring
 /// that the map is only used where its analytic assumptions hold.
-pub trait ConformalMap<A> {
+pub trait RawConformalMap<A> {
     /// Evaluate the physical problem corresponding to conformal coordinate `z`.
-    fn map(&self, z: A) -> ConformalPoint<A>;
+    fn map_raw(&self, z: A) -> ConformalPoint<A>;
 }
 
 pub trait ValidateConformalRegion<R> {
