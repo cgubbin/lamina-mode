@@ -1,16 +1,11 @@
+use crate::conformal::landmarks::{ExteriorSide, finite_t_preimage, require_finite_pair};
+
 use super::{ComplexInPlaneMap, InPlaneSearchError};
 
 use lamina_core::{ComplexScalar, ScalarAlgebra};
 use nalgebra::ComplexField;
 use ndarray::Ix0;
-use num_traits::{Float, FloatConst, One, Zero};
-
-/// Which semi-infinite exterior defines a light-line landmark.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExteriorSide {
-    Left,
-    Right,
-}
+use num_traits::{Float, FloatConst};
 
 /// Distinguished conformal landmarks for the canonical lossless in-plane map.
 ///
@@ -112,15 +107,16 @@ where
 
         let outer_light_line = self.physical_preimages(outer_kx)?;
 
-        let inner_light_line = require_finite_pair(inner_light_line)?;
+        let inner_light_line =
+            require_finite_pair(inner_light_line).ok_or(InPlaneSearchError::SymmetricExterior)?;
 
-        let outer_light_line = require_finite_pair(outer_light_line)?;
+        let outer_light_line =
+            require_finite_pair(outer_light_line).ok_or(InPlaneSearchError::SymmetricExterior)?;
 
-        let coordinate_branch_points = self
-            .branch_roots
-            .map(|root| branch_root_to_representative(root));
+        let coordinate_branch_points = self.branch_roots.map(finite_t_preimage);
 
-        let coordinate_branch_points = require_finite_pair(coordinate_branch_points)?;
+        let coordinate_branch_points = require_finite_pair(coordinate_branch_points)
+            .ok_or(InPlaneSearchError::SymmetricExterior)?;
 
         Ok(InPlaneLandmarks {
             inner_light_line,
@@ -132,35 +128,6 @@ where
             coordinate_branch_points,
         })
     }
-}
-
-fn require_finite_pair<C>(values: [Option<C>; 2]) -> Result<[C; 2], InPlaneSearchError>
-where
-    C: Copy,
-{
-    match values {
-        [Some(first), Some(second)] => Ok([first, second]),
-
-        _ => Err(InPlaneSearchError::SymmetricExterior),
-    }
-}
-
-fn branch_root_to_representative<C>(t: C) -> Option<C>
-where
-    C: ComplexScalar + Copy,
-    C::RealField: Float + Copy,
-{
-    if t.modulus_squared() == <C::RealField as Zero>::zero() {
-        return None;
-    }
-
-    let two = <C::RealField as One>::one() + <C::RealField as One>::one();
-
-    let re = Float::ln(t.modulus()) / two;
-
-    let im = t.argument() / two;
-
-    Some(C::from_real(re) + C::i() * C::from_real(im))
 }
 
 #[cfg(test)]

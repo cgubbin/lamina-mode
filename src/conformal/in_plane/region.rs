@@ -1,3 +1,4 @@
+use argloc::Rect;
 use lamina_core::{ComplexScalar, ScalarAlgebra};
 use nalgebra::ComplexField;
 use ndarray::Ix0;
@@ -75,12 +76,23 @@ pub struct InPlaneSearchExtent<R> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct InPlaneSearchRegion<R>(ConformalRegion<R>);
 
+impl<R> TryInto<Rect<R>> for InPlaneSearchRegion<R>
+where
+    ConformalRegion<R>: TryInto<Rect<R>>,
+{
+    type Error = <ConformalRegion<R> as TryInto<Rect<R>>>::Error;
+
+    fn try_into(self) -> Result<Rect<R>, Self::Error> {
+        self.0.try_into()
+    }
+}
+
 impl<R> InPlaneSearchRegion<R> {
     fn new(region: ConformalRegion<R>) -> Self {
         Self(region)
     }
 
-    pub(super) fn into_inner(self) -> ConformalRegion<R> {
+    pub(crate) fn into_inner(self) -> ConformalRegion<R> {
         self.0
     }
 }

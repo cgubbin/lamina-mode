@@ -218,21 +218,18 @@
 //! [`ComplexInPlaneMap::search_region`] are intentionally restricted to real,
 //! positive exterior constitutive products.
 
-mod landmarks;
-mod region;
+pub(crate) mod landmarks;
+pub(crate) mod region;
 
-pub use landmarks::{ExteriorSide, InPlaneLandmarks};
-pub use region::{
-    InPlaneRegionError, InPlaneSearchError, InPlaneSearchExtent, InPlaneSearchRegion,
-};
+pub use region::InPlaneSearchError;
 
 use lamina_core::{CanonicalCoordinates, ComplexScalar, ExteriorWavevectors, ScalarAlgebra};
 use nalgebra::ComplexField;
 use ndarray::{Ix0, arr0};
-use num_traits::{Float, FloatConst, FromPrimitive, One, Zero, float::FloatCore};
+use num_traits::{One, Zero};
 
 use super::{
-    ConformalPoint, ConformalRegion, RawConformalMap, ValidateConformalRegion,
+    ConformalPoint, RawConformalMap,
     branch::stable_quadratic_roots,
     chart::{ConformalChart, LinearCoordinateMap},
 };
@@ -505,8 +502,6 @@ where
     A: ScalarAlgebra<Dimension = Ix0> + Clone,
     A::Scalar: ComplexScalar,
 {
-    type RegionError = InPlaneRegionError;
-
     fn coordinate_squared_scalar(&self, z: A::Scalar) -> A::Scalar {
         self.kx_squared_scalar(z)
     }
@@ -522,6 +517,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::conformal::{
+        ConformalRegion, ValidateConformalRegion,
+        in_plane::region::{InPlaneRegionError, InPlaneSearchExtent},
+    };
+
     use super::*;
 
     use approx::assert_relative_eq;

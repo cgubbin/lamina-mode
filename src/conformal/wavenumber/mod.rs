@@ -201,23 +201,19 @@
 //! Automatic continuation of a known lossless chart into complex exterior
 //! media is deferred to the mode-continuation layer.
 
-mod landmarks;
-mod region;
+pub(crate) mod landmarks;
+pub(crate) mod region;
 
-pub use region::{
-    WavenumberRegionError, WavenumberSearchError, WavenumberSearchExtent, WavenumberSearchRegions,
-};
+pub use region::WavenumberSearchError;
 
 use lamina_core::{CanonicalCoordinates, ComplexScalar, ExteriorWavevectors, ScalarAlgebra};
 use nalgebra::ComplexField;
 use ndarray::{Ix0, arr0};
-use num_traits::{Float, FloatConst, One, Zero};
+use num_traits::{Float, One, Zero};
 
 use super::{
-    ConformalPoint, ConformalRegion, RawConformalMap, ValidateConformalRegion,
-    branch::{
-        branch_root_intersects_region, should_swap_preimages, stable_quadratic_roots, t_to_z,
-    },
+    ConformalPoint, RawConformalMap,
+    branch::stable_quadratic_roots,
     chart::{ConformalChart, LinearCoordinateMap},
 };
 
@@ -478,8 +474,6 @@ where
     A: ScalarAlgebra<Dimension = Ix0> + Clone,
     A::Scalar: ComplexScalar,
 {
-    type RegionError = WavenumberRegionError;
-
     fn coordinate_squared_scalar(&self, z: A::Scalar) -> A::Scalar {
         self.k0_squared_scalar(z)
     }
@@ -498,7 +492,9 @@ mod tests {
     use super::*;
 
     use crate::conformal::{
-        ConformalRegion, RawConformalMap, ValidateConformalRegion, chart::LinearCoordinateMap,
+        ConformalRegion, RawConformalMap, ValidateConformalRegion,
+        chart::LinearCoordinateMap,
+        wavenumber::region::{WavenumberRegionError, WavenumberSearchExtent},
     };
     use approx::assert_relative_eq;
     use lamina_core::{ModeJet1, ScalarAlgebra, SeedJet};
@@ -1257,5 +1253,548 @@ mod tests {
         let region = ConformalRegion::new(-100.0, -90.0, 0.2, 0.8).unwrap();
 
         assert!(map.validate_region(&region).is_ok());
+    }
+
+    // =============================================================================
+    // Physical inverse: real k0 -> conformal preimages
+    // =============================================================================
+
+    #[test]
+    fn physical_preimages_round_trip_below_both_light_lines() {
+        let map = lossless_map();
+
+        // kx = 1.5
+        //
+        // chi_L = 4 => k0,L = 1.5 / 2 = 0.75
+        // chi_R = 1 => k0,R = 1.5
+        //
+        // k0 = 0.5 lies below both light lines.
+        let k0 = 0.5;
+
+        let preimages = map.physical_preimages(k0).unwrap();
+
+        for z in preimages.into_iter().flatten() {
+            assert_complex_close(map.k0_squared_scalar(z), c(k0 * k0, 0.0));
+        }
+    }
+
+    #[test]
+    fn physical_preimages_round_trip_between_light_lines() {
+        let map = lossless_map();
+
+        // 0.75 < k0 < 1.5.
+        let k0 = 1.0;
+
+        let preimages = map.physical_preimages(k0).unwrap();
+
+        for z in preimages.into_iter().flatten() {
+            assert_complex_close(map.k0_squared_scalar(z), c(k0 * k0, 0.0));
+        }
+    }
+
+    #[test]
+    fn physical_preimages_round_trip_above_both_light_lines() {
+        let map = lossless_map();
+
+        let k0 = 2.0;
+
+        let preimages = map.physical_preimages(k0).unwrap();
+
+        for z in preimages.into_iter().flatten() {
+            assert_complex_close(map.k0_squared_scalar(z), c(k0 * k0, 0.0));
+        }
+    }
+
+    #[test]
+    fn below_both_light_lines_preimages_are_real() {
+        let map = lossless_map();
+
+        let [first, second] = map.physical_preimages(0.5).unwrap();
+
+        let first = first.unwrap();
+        let second = second.unwrap();
+
+        assert_relative_eq!(first.im, 0.0, epsilon = ABS_TOL,);
+
+        assert_relative_eq!(second.im, 0.0, epsilon = ABS_TOL,);
+
+        assert!(first.re < second.re);
+    }
+
+    #[test]
+    fn singly_open_preimages_have_equal_real_parts() {
+        let map = lossless_map();
+
+        let [first, second] = map.physical_preimages(1.0).unwrap();
+
+        let first = first.unwrap();
+        let second = second.unwrap();
+
+        assert_relative_eq!(
+            first.re,
+            second.re,
+            epsilon = ABS_TOL,
+            max_relative = REL_TOL,
+        );
+    }
+
+    #[test]
+    fn singly_open_preimages_are_complex_conjugates() {
+        let map = lossless_map();
+
+        let [first, second] = map.physical_preimages(1.0).unwrap();
+
+        let first = first.unwrap();
+        let second = second.unwrap();
+
+        assert_relative_eq!(
+            first.re,
+            second.re,
+            epsilon = ABS_TOL,
+            max_relative = REL_TOL,
+        );
+
+        assert_relative_eq!(
+            first.im,
+            -second.im,
+            epsilon = ABS_TOL,
+            max_relative = REL_TOL,
+        );
+    }
+
+    #[test]
+    fn singly_open_preimages_lie_on_half_log_abs_r() {
+        let map = lossless_map();
+
+        let [first, second] = map.physical_preimages(1.0).unwrap();
+
+        let first = first.unwrap();
+        let second = second.unwrap();
+
+        let r = jet_value(map.r());
+
+        let expected_re = 0.5 * r.modulus().ln();
+
+        assert_relative_eq!(
+            first.re,
+            expected_re,
+            epsilon = ABS_TOL,
+            max_relative = REL_TOL,
+        );
+
+        assert_relative_eq!(
+            second.re,
+            expected_re,
+            epsilon = ABS_TOL,
+            max_relative = REL_TOL,
+        );
+    }
+
+    #[test]
+    fn above_both_light_lines_preimages_lie_on_periodic_boundaries() {
+        let map = lossless_map();
+
+        let [first, second] = map.physical_preimages(2.0).unwrap();
+
+        let first = first.unwrap();
+        let second = second.unwrap();
+
+        assert_relative_eq!(
+            first.im.abs(),
+            std::f64::consts::FRAC_PI_2,
+            epsilon = ABS_TOL,
+            max_relative = REL_TOL,
+        );
+
+        assert_relative_eq!(
+            second.im.abs(),
+            std::f64::consts::FRAC_PI_2,
+            epsilon = ABS_TOL,
+            max_relative = REL_TOL,
+        );
+    }
+
+    #[test]
+    fn low_frequency_preimages_are_symmetric_about_half_log_abs_r() {
+        let map = lossless_map();
+
+        let [left, right] = map.physical_preimages(0.5).unwrap();
+
+        let left = left.unwrap();
+        let right = right.unwrap();
+
+        let r = jet_value(map.r());
+
+        let centre = 0.5 * r.modulus().ln();
+
+        assert_relative_eq!(
+            0.5 * (left.re + right.re),
+            centre,
+            epsilon = ABS_TOL,
+            max_relative = REL_TOL,
+        );
+    }
+
+    #[test]
+    fn lower_light_line_maps_to_coincident_real_preimage() {
+        let map = lossless_map();
+
+        let [first, second] = map.physical_preimages(0.75).unwrap();
+
+        let first = first.unwrap();
+        let second = second.unwrap();
+
+        assert_complex_close(first, second);
+
+        assert_relative_eq!(first.im, 0.0, epsilon = ABS_TOL,);
+
+        assert_complex_close(map.k0_squared_scalar(first), c(0.75_f64.powi(2), 0.0));
+    }
+
+    #[test]
+    fn upper_light_line_maps_to_periodically_equivalent_preimages() {
+        let map = lossless_map();
+
+        let [first, second] = map.physical_preimages(1.5).unwrap();
+
+        let first = first.unwrap();
+        let second = second.unwrap();
+
+        assert_relative_eq!(
+            first.re,
+            second.re,
+            epsilon = ABS_TOL,
+            max_relative = REL_TOL,
+        );
+
+        assert_relative_eq!(
+            first.im.abs(),
+            std::f64::consts::FRAC_PI_2,
+            epsilon = ABS_TOL,
+        );
+
+        assert_relative_eq!(
+            second.im.abs(),
+            std::f64::consts::FRAC_PI_2,
+            epsilon = ABS_TOL,
+        );
+
+        assert_relative_eq!(
+            (first.im - second.im).abs(),
+            std::f64::consts::PI,
+            epsilon = ABS_TOL,
+        );
+
+        assert_complex_close(map.k0_squared_scalar(first), c(1.5_f64.powi(2), 0.0));
+
+        assert_complex_close(map.k0_squared_scalar(second), c(1.5_f64.powi(2), 0.0));
+    }
+
+    #[test]
+    fn physical_preimages_reject_lossy_exteriors() {
+        let map = lossy_map();
+
+        assert_eq!(
+            map.physical_preimages(1.0),
+            Err(WavenumberSearchError::UnsupportedExterior,),
+        );
+    }
+
+    #[test]
+    fn physical_preimages_reject_negative_k0() {
+        let map = lossless_map();
+
+        assert_eq!(
+            map.physical_preimages(-1.0),
+            Err(WavenumberSearchError::InvalidVacuumWavenumber,),
+        );
+    }
+
+    // =============================================================================
+    // Canonical upper/lower search regions
+    // =============================================================================
+
+    #[test]
+    fn search_regions_have_identical_real_bounds() {
+        let map = lossless_map();
+
+        let regions = map
+            .search_regions(WavenumberSearchExtent {
+                max_vacuum_wavenumber: 2.5,
+                imaginary_margin: 0.05,
+            })
+            .unwrap();
+
+        assert_eq!(regions.lower().real_bounds(), regions.upper().real_bounds(),);
+    }
+
+    #[test]
+    fn search_region_real_bounds_come_from_high_frequency_preimages() {
+        let map = lossless_map();
+
+        let max_k0 = 2.5;
+
+        let regions = map
+            .search_regions(WavenumberSearchExtent {
+                max_vacuum_wavenumber: max_k0,
+                imaginary_margin: 0.05,
+            })
+            .unwrap();
+
+        let (re_min, re_max) = regions.upper().real_bounds();
+
+        // At high frequency the physical representatives live on the +/-pi/2
+        // boundaries, so evaluate q at those boundary representatives rather
+        // than on the real axis.
+        let q_lower = map.k0_squared_scalar(c(re_min, -std::f64::consts::FRAC_PI_2));
+
+        let q_upper = map.k0_squared_scalar(c(re_max, std::f64::consts::FRAC_PI_2));
+
+        assert_complex_close(q_lower, c(max_k0 * max_k0, 0.0));
+
+        assert_complex_close(q_upper, c(max_k0 * max_k0, 0.0));
+    }
+
+    #[test]
+    fn search_region_real_bounds_match_max_k0_preimages() {
+        let map = lossless_map();
+
+        let max_k0 = 2.5;
+
+        let [first, second] = map.physical_preimages(max_k0).unwrap();
+
+        let first = first.unwrap();
+        let second = second.unwrap();
+
+        let expected_min = first.re.min(second.re);
+
+        let expected_max = first.re.max(second.re);
+
+        let regions = map
+            .search_regions(WavenumberSearchExtent {
+                max_vacuum_wavenumber: max_k0,
+                imaginary_margin: 0.05,
+            })
+            .unwrap();
+
+        let (actual_min, actual_max) = regions.upper().real_bounds();
+
+        assert_relative_eq!(
+            actual_min,
+            expected_min,
+            epsilon = ABS_TOL,
+            max_relative = REL_TOL,
+        );
+
+        assert_relative_eq!(
+            actual_max,
+            expected_max,
+            epsilon = ABS_TOL,
+            max_relative = REL_TOL,
+        );
+    }
+
+    #[test]
+    fn search_regions_use_requested_imaginary_margin() {
+        let map = lossless_map();
+
+        let margin = 0.05;
+
+        let regions = map
+            .search_regions(WavenumberSearchExtent {
+                max_vacuum_wavenumber: 2.5,
+                imaginary_margin: margin,
+            })
+            .unwrap();
+
+        let (lower_min, lower_max) = regions.lower().imaginary_bounds();
+
+        let (upper_min, upper_max) = regions.upper().imaginary_bounds();
+
+        assert_relative_eq!(
+            lower_min,
+            -std::f64::consts::FRAC_PI_2 + margin,
+            epsilon = ABS_TOL,
+        );
+
+        assert_relative_eq!(lower_max, -margin, epsilon = ABS_TOL,);
+
+        assert_relative_eq!(upper_min, margin, epsilon = ABS_TOL,);
+
+        assert_relative_eq!(
+            upper_max,
+            std::f64::consts::FRAC_PI_2 - margin,
+            epsilon = ABS_TOL,
+        );
+    }
+
+    #[test]
+    fn search_regions_exclude_real_axis() {
+        let map = lossless_map();
+
+        let regions = map
+            .search_regions(WavenumberSearchExtent {
+                max_vacuum_wavenumber: 2.5,
+                imaginary_margin: 0.05,
+            })
+            .unwrap();
+
+        let (_, lower_max) = regions.lower().imaginary_bounds();
+
+        let (upper_min, _) = regions.upper().imaginary_bounds();
+
+        assert!(lower_max < 0.0);
+        assert!(upper_min > 0.0);
+    }
+
+    #[test]
+    fn search_regions_exclude_periodic_boundaries() {
+        let map = lossless_map();
+
+        let regions = map
+            .search_regions(WavenumberSearchExtent {
+                max_vacuum_wavenumber: 2.5,
+                imaginary_margin: 0.05,
+            })
+            .unwrap();
+
+        let (lower_min, _) = regions.lower().imaginary_bounds();
+
+        let (_, upper_max) = regions.upper().imaginary_bounds();
+
+        assert!(lower_min > -std::f64::consts::FRAC_PI_2);
+
+        assert!(upper_max < std::f64::consts::FRAC_PI_2);
+    }
+
+    #[test]
+    fn both_search_regions_pass_generic_validation() {
+        let map = lossless_map();
+
+        let regions = map
+            .search_regions(WavenumberSearchExtent {
+                max_vacuum_wavenumber: 2.5,
+                imaginary_margin: 0.05,
+            })
+            .unwrap();
+
+        assert!(map.validate_region(regions.lower()).is_ok());
+
+        assert!(map.validate_region(regions.upper()).is_ok());
+    }
+
+    #[test]
+    fn search_regions_reject_lossy_exteriors() {
+        let map = lossy_map();
+
+        assert_eq!(
+            map.search_regions(WavenumberSearchExtent {
+                max_vacuum_wavenumber: 2.5,
+                imaginary_margin: 0.05,
+            },),
+            Err(WavenumberSearchError::UnsupportedExterior,),
+        );
+    }
+
+    #[test]
+    fn search_regions_reject_maximum_below_upper_light_line() {
+        let map = lossless_map();
+
+        // Upper light line is k0 = 1.5.
+        assert_eq!(
+            map.search_regions(WavenumberSearchExtent {
+                max_vacuum_wavenumber: 1.4,
+                imaginary_margin: 0.05,
+            },),
+            Err(WavenumberSearchError::MaxVacuumWavenumberBelowUpperLightLine,),
+        );
+    }
+
+    #[test]
+    fn search_regions_reject_maximum_at_upper_light_line() {
+        let map = lossless_map();
+
+        assert_eq!(
+            map.search_regions(WavenumberSearchExtent {
+                max_vacuum_wavenumber: 1.5,
+                imaginary_margin: 0.05,
+            },),
+            Err(WavenumberSearchError::MaxVacuumWavenumberBelowUpperLightLine,),
+        );
+    }
+
+    #[test]
+    fn search_regions_reject_zero_margin() {
+        let map = lossless_map();
+
+        assert_eq!(
+            map.search_regions(WavenumberSearchExtent {
+                max_vacuum_wavenumber: 2.5,
+                imaginary_margin: 0.0,
+            },),
+            Err(WavenumberSearchError::InvalidImaginaryMargin,),
+        );
+    }
+
+    #[test]
+    fn search_regions_reject_margin_at_quarter_pi() {
+        let map = lossless_map();
+
+        assert_eq!(
+            map.search_regions(WavenumberSearchExtent {
+                max_vacuum_wavenumber: 2.5,
+                imaginary_margin: std::f64::consts::FRAC_PI_4,
+            },),
+            Err(WavenumberSearchError::InvalidImaginaryMargin,),
+        );
+    }
+
+    #[test]
+    fn search_regions_reject_symmetric_exteriors() {
+        let map = symmetric_map();
+
+        assert_eq!(
+            map.search_regions(WavenumberSearchExtent {
+                max_vacuum_wavenumber: 2.5,
+                imaginary_margin: 0.05,
+            },),
+            Err(WavenumberSearchError::DegenerateExterior,),
+        );
+    }
+
+    #[test]
+    fn search_regions_reject_zero_kx_geometry() {
+        let map = zero_kx_map();
+
+        assert_eq!(
+            map.search_regions(WavenumberSearchExtent {
+                max_vacuum_wavenumber: 2.5,
+                imaginary_margin: 0.05,
+            },),
+            Err(WavenumberSearchError::DegenerateExterior,),
+        );
+    }
+
+    #[test]
+    fn coordinate_branch_points_separate_canonical_upper_and_lower_regions() {
+        let map = lossless_map();
+
+        let regions = map
+            .search_regions(WavenumberSearchExtent {
+                max_vacuum_wavenumber: 2.5,
+                imaginary_margin: 0.05,
+            })
+            .unwrap();
+
+        let (_, lower_max) = regions.lower().imaginary_bounds();
+
+        let (upper_min, _) = regions.upper().imaginary_bounds();
+
+        for branch in map.landmarks().unwrap().coordinate_branch_points() {
+            assert_relative_eq!(branch.im, 0.0, epsilon = ABS_TOL,);
+
+            assert!(branch.im > lower_max);
+            assert!(branch.im < upper_min);
+        }
     }
 }

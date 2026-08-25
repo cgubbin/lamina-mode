@@ -9,7 +9,7 @@ use lamina_core::{
 };
 use lamina_units::InverseLengthUnit;
 use nalgebra::ComplexField;
-use ndarray::{Ix0, arr0};
+use ndarray::Ix0;
 use num_traits::{Float, FloatConst, FromPrimitive};
 
 struct ComplexAngularWavenumberProblem<'a, M, C>
@@ -42,7 +42,7 @@ where
     }
 
     /// Convert z to physical vacuum_angular_wavenumber
-    fn conformal_mapping(&self, z: C) -> C {
+    fn conformal_mapping(&self, _z: C) -> C {
         todo!()
     }
 }

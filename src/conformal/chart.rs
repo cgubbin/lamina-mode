@@ -71,8 +71,6 @@ pub(crate) trait LinearCoordinateMap<A>
 where
     A: ScalarAlgebra<Dimension = Ix0>,
 {
-    type RegionError;
-
     /// Evaluate the squared varying physical coordinate `q(z)`.
     fn coordinate_squared_scalar(&self, z: A::Scalar) -> A::Scalar;
 
@@ -170,8 +168,7 @@ where
     A: ScalarAlgebra<Dimension = Ix0> + Clone,
     A::Scalar: ComplexScalar + ComplexField<RealField = R> + Copy,
     R: Float + FromPrimitive + Copy,
-    M: LinearCoordinateMap<A, RegionError = <M as ValidateConformalRegion<R>>::Error>
-        + ValidateConformalRegion<R>,
+    M: LinearCoordinateMap<A> + ValidateConformalRegion<R>,
 {
     /// Construct a chart using the centre of `region` as its reference point.
     pub fn new(
@@ -520,22 +517,14 @@ mod tests {
     use super::*;
 
     use crate::conformal::{
-        in_plane::{
-            ComplexInPlaneMap,
-            InPlaneRegionError,
-        },
-        ConformalRegion,
-        ValidateConformalRegion,
+        ConformalRegion, ValidateConformalRegion,
+        in_plane::{ComplexInPlaneMap, region::InPlaneRegionError},
     };
 
     use approx::assert_relative_eq;
-    use lamina_core::{
-        ModeJet1,
-        ScalarAlgebra,
-        SeedJet,
-    };
+    use lamina_core::{ModeJet1, ScalarAlgebra, SeedJet};
     use nalgebra::ComplexField;
-    use ndarray::{arr0, Ix0};
+    use ndarray::{Ix0, arr0};
     use num_complex::Complex64;
     use std::f64::consts::PI;
 
@@ -551,10 +540,7 @@ mod tests {
         Complex64::new(re, im)
     }
 
-    fn assert_complex_close(
-        actual: Complex64,
-        expected: Complex64,
-    ) {
+    fn assert_complex_close(actual: Complex64, expected: Complex64) {
         assert_relative_eq!(
             actual.re,
             expected.re,
@@ -570,11 +556,7 @@ mod tests {
         );
     }
 
-    fn assert_complex_close_tol(
-        actual: Complex64,
-        expected: Complex64,
-        tolerance: f64,
-    ) {
+    fn assert_complex_close_tol(actual: Complex64, expected: Complex64, tolerance: f64) {
         assert_relative_eq!(
             actual.re,
             expected.re,
@@ -615,24 +597,11 @@ mod tests {
     // -------------------------------------------------------------------------
 
     fn lossless_map() -> Map {
-        ComplexInPlaneMap::new(
-            2.0,
-            c(4.0, 0.0),
-            c(1.0, 0.0),
-            c(1.0, 0.0),
-            c(1.0, 0.0),
-        )
-        .unwrap()
+        ComplexInPlaneMap::new(2.0, c(4.0, 0.0), c(1.0, 0.0), c(1.0, 0.0), c(1.0, 0.0)).unwrap()
     }
 
     fn lossless_region() -> ConformalRegion<f64> {
-        ConformalRegion::new(
-            -1.0,
-            1.0,
-            -1.0,
-            1.0,
-        )
-        .unwrap()
+        ConformalRegion::new(-1.0, 1.0, -1.0, 1.0).unwrap()
     }
 
     fn lossless_chart(sheet: CoordinateSheet) -> Chart {
@@ -651,24 +620,11 @@ mod tests {
     // -------------------------------------------------------------------------
 
     fn lossy_map() -> Map {
-        ComplexInPlaneMap::new(
-            2.0,
-            c(4.0, 0.8),
-            c(1.0, 0.0),
-            c(1.5, 0.35),
-            c(1.0, 0.0),
-        )
-        .unwrap()
+        ComplexInPlaneMap::new(2.0, c(4.0, 0.8), c(1.0, 0.0), c(1.5, 0.35), c(1.0, 0.0)).unwrap()
     }
 
     fn lossy_region() -> ConformalRegion<f64> {
-        ConformalRegion::new(
-            -0.5,
-            0.4,
-            -0.8,
-            0.7,
-        )
-        .unwrap()
+        ConformalRegion::new(-0.5, 0.4, -0.8, 0.7).unwrap()
     }
 
     fn lossy_chart() -> Chart {
@@ -700,28 +656,16 @@ mod tests {
     fn cut_crossing_map() -> Map {
         ComplexInPlaneMap::new(
             2.0,
-            c(
-                -7.037_440_270_253_994,
-                -5.086_084_917_885_638,
-            ),
+            c(-7.037_440_270_253_994, -5.086_084_917_885_638),
             c(1.0, 0.0),
-            c(
-                -4.003_045_984_369_058,
-                5.328_848_852_382_237,
-            ),
+            c(-4.003_045_984_369_058, 5.328_848_852_382_237),
             c(1.0, 0.0),
         )
         .unwrap()
     }
 
     fn cut_crossing_region() -> ConformalRegion<f64> {
-        ConformalRegion::new(
-            0.03,
-            0.63,
-            -0.40,
-            0.00,
-        )
-        .unwrap()
+        ConformalRegion::new(0.03, 0.63, -0.40, 0.00).unwrap()
     }
 
     fn cut_crossing_chart() -> Chart {
@@ -738,8 +682,7 @@ mod tests {
         .unwrap()
     }
 
-    const CUT_CROSSING_X: f64 =
-        0.329_942_900_121_112_44;
+    const CUT_CROSSING_X: f64 = 0.329_942_900_121_112_44;
 
     const CUT_CROSSING_Y: f64 = -0.20;
 
@@ -762,13 +705,7 @@ mod tests {
 
     #[test]
     fn chart_rejects_invalid_map_region() {
-        let region = ConformalRegion::new(
-            -1.0,
-            1.0,
-            1.4,
-            1.7,
-        )
-        .unwrap();
+        let region = ConformalRegion::new(-1.0, 1.0, 1.4, 1.7).unwrap();
 
         let result = Chart::with_reference(
             lossless_map(),
@@ -780,9 +717,7 @@ mod tests {
 
         assert_eq!(
             result.unwrap_err(),
-            ChartError::InvalidRegion(
-                InPlaneRegionError::CoordinateBranchPoint,
-            ),
+            ChartError::InvalidRegion(InPlaneRegionError::CoordinateBranchPoint,),
         );
     }
 
@@ -796,21 +731,12 @@ mod tests {
             ConformalChartConfig::default(),
         );
 
-        assert_eq!(
-            result.unwrap_err(),
-            ChartError::ReferenceOutsideRegion,
-        );
+        assert_eq!(result.unwrap_err(), ChartError::ReferenceOutsideRegion,);
     }
 
     #[test]
     fn automatically_selected_reference_is_region_centre() {
-        let region = ConformalRegion::new(
-            -1.2,
-            0.8,
-            -0.6,
-            0.4,
-        )
-        .unwrap();
+        let region = ConformalRegion::new(-1.2, 0.8, -0.6, 0.4).unwrap();
 
         let chart = Chart::new(
             lossless_map(),
@@ -820,10 +746,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_complex_close(
-            chart.reference(),
-            c(-0.2, -0.1),
-        );
+        assert_complex_close(chart.reference(), c(-0.2, -0.1));
     }
 
     // =========================================================================
@@ -832,44 +755,29 @@ mod tests {
 
     #[test]
     fn principal_sheet_uses_principal_root_at_reference() {
-        let chart =
-            lossless_chart(CoordinateSheet::Principal);
+        let chart = lossless_chart(CoordinateSheet::Principal);
 
         let z = chart.reference();
 
-        let expected = chart
-            .raw_map()
-            .coordinate_squared_scalar(z)
-            .sqrt();
+        let expected = chart.raw_map().coordinate_squared_scalar(z).sqrt();
 
-        assert_complex_close(
-            chart.reference_coordinate(),
-            expected,
-        );
+        assert_complex_close(chart.reference_coordinate(), expected);
     }
 
     #[test]
     fn opposite_sheet_uses_negative_principal_root_at_reference() {
-        let chart =
-            lossless_chart(CoordinateSheet::Opposite);
+        let chart = lossless_chart(CoordinateSheet::Opposite);
 
         let z = chart.reference();
 
-        let expected = -chart
-            .raw_map()
-            .coordinate_squared_scalar(z)
-            .sqrt();
+        let expected = -chart.raw_map().coordinate_squared_scalar(z).sqrt();
 
-        assert_complex_close(
-            chart.reference_coordinate(),
-            expected,
-        );
+        assert_complex_close(chart.reference_coordinate(), expected);
     }
 
     #[test]
     fn coordinate_at_reference_is_reference_coordinate_exactly() {
-        let chart =
-            lossless_chart(CoordinateSheet::Principal);
+        let chart = lossless_chart(CoordinateSheet::Principal);
 
         assert_eq!(
             chart.coordinate(chart.reference()).unwrap(),
@@ -883,8 +791,7 @@ mod tests {
         let region = lossless_region();
         let reference = c(0.2, -0.1);
 
-        let reference_coordinate =
-            map.coordinate_squared_scalar(reference).sqrt();
+        let reference_coordinate = map.coordinate_squared_scalar(reference).sqrt();
 
         let chart = Chart::with_reference_coordinate(
             map,
@@ -895,10 +802,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            chart.reference_coordinate(),
-            reference_coordinate,
-        );
+        assert_eq!(chart.reference_coordinate(), reference_coordinate,);
     }
 
     #[test]
@@ -915,10 +819,7 @@ mod tests {
             ConformalChartConfig::default(),
         );
 
-        assert_eq!(
-            result.unwrap_err(),
-            ChartError::InconsistentContinuation,
-        );
+        assert_eq!(result.unwrap_err(), ChartError::InconsistentContinuation,);
     }
 
     // =========================================================================
@@ -936,28 +837,19 @@ mod tests {
             c(0.25, -0.30),
             c(0.30, 0.45),
         ] {
-            let coordinate =
-                chart.coordinate(z).unwrap();
+            let coordinate = chart.coordinate(z).unwrap();
 
-            let q = chart
-                .raw_map()
-                .coordinate_squared_scalar(z);
+            let q = chart.raw_map().coordinate_squared_scalar(z);
 
-            assert_complex_close_tol(
-                coordinate * coordinate,
-                q,
-                1.0e-9,
-            );
+            assert_complex_close_tol(coordinate * coordinate, q, 1.0e-9);
         }
     }
 
     #[test]
     fn opposite_and_principal_charts_differ_by_global_sign() {
-        let principal =
-            lossless_chart(CoordinateSheet::Principal);
+        let principal = lossless_chart(CoordinateSheet::Principal);
 
-        let opposite =
-            lossless_chart(CoordinateSheet::Opposite);
+        let opposite = lossless_chart(CoordinateSheet::Opposite);
 
         for z in [
             c(-0.7, -0.5),
@@ -979,8 +871,7 @@ mod tests {
 
     #[test]
     fn chart_agrees_with_principal_sqrt_on_principal_chart() {
-        let chart =
-            lossless_chart(CoordinateSheet::Principal);
+        let chart = lossless_chart(CoordinateSheet::Principal);
 
         for z in [
             c(-0.8, -0.7),
@@ -989,16 +880,9 @@ mod tests {
             c(0.3, -0.4),
             c(0.7, 0.6),
         ] {
-            let expected = chart
-                .raw_map()
-                .coordinate_squared_scalar(z)
-                .sqrt();
+            let expected = chart.raw_map().coordinate_squared_scalar(z).sqrt();
 
-            assert_complex_close_tol(
-                chart.coordinate(z).unwrap(),
-                expected,
-                1.0e-9,
-            );
+            assert_complex_close_tol(chart.coordinate(z).unwrap(), expected, 1.0e-9);
         }
     }
 
@@ -1010,10 +894,7 @@ mod tests {
     fn cut_crossing_fixture_is_branch_point_free() {
         let map = cut_crossing_map();
 
-        assert!(
-            map.validate_region(&cut_crossing_region())
-                .is_ok()
-        );
+        assert!(map.validate_region(&cut_crossing_region()).is_ok());
     }
 
     #[test]
@@ -1022,21 +903,13 @@ mod tests {
 
         let delta = 1.0e-5;
 
-        let left = c(
-            CUT_CROSSING_X - delta,
-            CUT_CROSSING_Y,
-        );
+        let left = c(CUT_CROSSING_X - delta, CUT_CROSSING_Y);
 
-        let right = c(
-            CUT_CROSSING_X + delta,
-            CUT_CROSSING_Y,
-        );
+        let right = c(CUT_CROSSING_X + delta, CUT_CROSSING_Y);
 
-        let q_left =
-            map.coordinate_squared_scalar(left);
+        let q_left = map.coordinate_squared_scalar(left);
 
-        let q_right =
-            map.coordinate_squared_scalar(right);
+        let q_right = map.coordinate_squared_scalar(right);
 
         assert!(q_left.re < 0.0);
         assert!(q_right.re < 0.0);
@@ -1055,27 +928,17 @@ mod tests {
 
         let delta = 1.0e-5;
 
-        let left = c(
-            CUT_CROSSING_X - delta,
-            CUT_CROSSING_Y,
-        );
+        let left = c(CUT_CROSSING_X - delta, CUT_CROSSING_Y);
 
-        let right = c(
-            CUT_CROSSING_X + delta,
-            CUT_CROSSING_Y,
-        );
+        let right = c(CUT_CROSSING_X + delta, CUT_CROSSING_Y);
 
-        let principal_left =
-            map.coordinate_squared_scalar(left).sqrt();
+        let principal_left = map.coordinate_squared_scalar(left).sqrt();
 
-        let principal_right =
-            map.coordinate_squared_scalar(right).sqrt();
+        let principal_right = map.coordinate_squared_scalar(right).sqrt();
 
-        let same_sheet_distance =
-            (principal_left - principal_right).modulus();
+        let same_sheet_distance = (principal_left - principal_right).modulus();
 
-        let opposite_sheet_distance =
-            (principal_left + principal_right).modulus();
+        let opposite_sheet_distance = (principal_left + principal_right).modulus();
 
         assert!(
             opposite_sheet_distance < same_sheet_distance,
@@ -1091,27 +954,17 @@ mod tests {
 
         let delta = 1.0e-5;
 
-        let left = c(
-            CUT_CROSSING_X - delta,
-            CUT_CROSSING_Y,
-        );
+        let left = c(CUT_CROSSING_X - delta, CUT_CROSSING_Y);
 
-        let right = c(
-            CUT_CROSSING_X + delta,
-            CUT_CROSSING_Y,
-        );
+        let right = c(CUT_CROSSING_X + delta, CUT_CROSSING_Y);
 
-        let coordinate_left =
-            chart.coordinate(left).unwrap();
+        let coordinate_left = chart.coordinate(left).unwrap();
 
-        let coordinate_right =
-            chart.coordinate(right).unwrap();
+        let coordinate_right = chart.coordinate(right).unwrap();
 
-        let same_sheet_distance =
-            (coordinate_left - coordinate_right).modulus();
+        let same_sheet_distance = (coordinate_left - coordinate_right).modulus();
 
-        let opposite_sheet_distance =
-            (coordinate_left + coordinate_right).modulus();
+        let opposite_sheet_distance = (coordinate_left + coordinate_right).modulus();
 
         assert!(
             same_sheet_distance < opposite_sheet_distance,
@@ -1133,48 +986,25 @@ mod tests {
 
         let delta = 1.0e-5;
 
-        let left = c(
-            CUT_CROSSING_X - delta,
-            CUT_CROSSING_Y,
-        );
+        let left = c(CUT_CROSSING_X - delta, CUT_CROSSING_Y);
 
-        let right = c(
-            CUT_CROSSING_X + delta,
-            CUT_CROSSING_Y,
-        );
+        let right = c(CUT_CROSSING_X + delta, CUT_CROSSING_Y);
 
-        let analytic_left =
-            chart.coordinate(left).unwrap();
+        let analytic_left = chart.coordinate(left).unwrap();
 
-        let analytic_right =
-            chart.coordinate(right).unwrap();
+        let analytic_right = chart.coordinate(right).unwrap();
 
-        let principal_left = chart
-            .raw_map()
-            .coordinate_squared_scalar(left)
-            .sqrt();
+        let principal_left = chart.raw_map().coordinate_squared_scalar(left).sqrt();
 
-        let principal_right = chart
-            .raw_map()
-            .coordinate_squared_scalar(right)
-            .sqrt();
+        let principal_right = chart.raw_map().coordinate_squared_scalar(right).sqrt();
 
-        let left_matches_plus =
-            (analytic_left - principal_left)
-                .modulus_squared()
-                <= (analytic_left + principal_left)
-                    .modulus_squared();
+        let left_matches_plus = (analytic_left - principal_left).modulus_squared()
+            <= (analytic_left + principal_left).modulus_squared();
 
-        let right_matches_plus =
-            (analytic_right - principal_right)
-                .modulus_squared()
-                <= (analytic_right + principal_right)
-                    .modulus_squared();
+        let right_matches_plus = (analytic_right - principal_right).modulus_squared()
+            <= (analytic_right + principal_right).modulus_squared();
 
-        assert_ne!(
-            left_matches_plus,
-            right_matches_plus,
-        );
+        assert_ne!(left_matches_plus, right_matches_plus,);
     }
 
     // =========================================================================
@@ -1191,23 +1021,13 @@ mod tests {
             c(0.40, -0.20),
             c(0.55, -0.20),
         ] {
-            let point =
-                chart.map(constant(z)).unwrap();
+            let point = chart.map(constant(z)).unwrap();
 
-            let mapped_coordinate = jet_value(
-                point
-                    .coordinates()
-                    .parallel_angular_wavenumber(),
-            );
+            let mapped_coordinate = jet_value(point.coordinates().parallel_angular_wavenumber());
 
-            let expected =
-                chart.coordinate(z).unwrap();
+            let expected = chart.coordinate(z).unwrap();
 
-            assert_complex_close_tol(
-                mapped_coordinate,
-                expected,
-                1.0e-9,
-            );
+            assert_complex_close_tol(mapped_coordinate, expected, 1.0e-9);
         }
     }
 
@@ -1217,33 +1037,17 @@ mod tests {
 
         for z in [
             c(0.20, -0.20),
-            c(
-                CUT_CROSSING_X - 1.0e-4,
-                CUT_CROSSING_Y,
-            ),
-            c(
-                CUT_CROSSING_X + 1.0e-4,
-                CUT_CROSSING_Y,
-            ),
+            c(CUT_CROSSING_X - 1.0e-4, CUT_CROSSING_Y),
+            c(CUT_CROSSING_X + 1.0e-4, CUT_CROSSING_Y),
             c(0.50, -0.20),
         ] {
-            let constant_point =
-                chart.map(constant(z)).unwrap();
+            let constant_point = chart.map(constant(z)).unwrap();
 
-            let variable_point =
-                chart.map(variable(z)).unwrap();
+            let variable_point = chart.map(variable(z)).unwrap();
 
             assert_complex_close(
-                jet_value(
-                    constant_point
-                        .coordinates()
-                        .parallel_angular_wavenumber(),
-                ),
-                jet_value(
-                    variable_point
-                        .coordinates()
-                        .parallel_angular_wavenumber(),
-                ),
+                jet_value(constant_point.coordinates().parallel_angular_wavenumber()),
+                jet_value(variable_point.coordinates().parallel_angular_wavenumber()),
             );
         }
     }
@@ -1262,39 +1066,21 @@ mod tests {
             c(0.36, -0.20),
             c(0.52, -0.20),
         ] {
-            let point =
-                chart.map(variable(z)).unwrap();
+            let point = chart.map(variable(z)).unwrap();
 
-            let coordinate = jet_value(
-                point
-                    .coordinates()
-                    .parallel_angular_wavenumber(),
-            );
+            let coordinate = jet_value(point.coordinates().parallel_angular_wavenumber());
 
-            let derivative = jet_derivative(
-                point
-                    .coordinates()
-                    .parallel_angular_wavenumber(),
-            );
+            let derivative = jet_derivative(point.coordinates().parallel_angular_wavenumber());
 
-            let q = chart
-                .raw_map()
-                .coordinate_squared_scalar(z);
+            let q = chart.raw_map().coordinate_squared_scalar(z);
 
-            let log_derivative = chart
-                .raw_map()
-                .coordinate_squared_log_derivative_scalar(z);
+            let log_derivative = chart.raw_map().coordinate_squared_log_derivative_scalar(z);
 
             let dq_dz = q * log_derivative;
 
-            let expected =
-                dq_dz / (coordinate + coordinate);
+            let expected = dq_dz / (coordinate + coordinate);
 
-            assert_complex_close_tol(
-                derivative,
-                expected,
-                1.0e-9,
-            );
+            assert_complex_close_tol(derivative, expected, 1.0e-9);
         }
     }
 
@@ -1305,35 +1091,19 @@ mod tests {
         let delta = 1.0e-5;
 
         let left = chart
-            .map(variable(c(
-                CUT_CROSSING_X - delta,
-                CUT_CROSSING_Y,
-            )))
+            .map(variable(c(CUT_CROSSING_X - delta, CUT_CROSSING_Y)))
             .unwrap();
 
         let right = chart
-            .map(variable(c(
-                CUT_CROSSING_X + delta,
-                CUT_CROSSING_Y,
-            )))
+            .map(variable(c(CUT_CROSSING_X + delta, CUT_CROSSING_Y)))
             .unwrap();
 
-        let derivative_left = jet_derivative(
-            left
-                .coordinates()
-                .parallel_angular_wavenumber(),
-        );
+        let derivative_left = jet_derivative(left.coordinates().parallel_angular_wavenumber());
 
-        let derivative_right = jet_derivative(
-            right
-                .coordinates()
-                .parallel_angular_wavenumber(),
-        );
+        let derivative_right = jet_derivative(right.coordinates().parallel_angular_wavenumber());
 
         assert!(
-            (derivative_left - derivative_right)
-                .modulus()
-                < 1.0e-2,
+            (derivative_left - derivative_right).modulus() < 1.0e-2,
             "analytic derivative changed discontinuously \
              across principal cut: \
              left={derivative_left:?}, \
@@ -1347,8 +1117,7 @@ mod tests {
 
     #[test]
     fn scalar_coordinate_rejects_point_outside_chart() {
-        let chart =
-            lossless_chart(CoordinateSheet::Principal);
+        let chart = lossless_chart(CoordinateSheet::Principal);
 
         assert_eq!(
             chart.coordinate(c(1.1, 0.0)).unwrap_err(),
@@ -1358,28 +1127,19 @@ mod tests {
 
     #[test]
     fn algebra_map_rejects_point_outside_chart() {
-        let chart =
-            lossless_chart(CoordinateSheet::Principal);
+        let chart = lossless_chart(CoordinateSheet::Principal);
 
         assert_eq!(
-            chart
-                .map(constant(c(0.0, 1.1)))
-                .unwrap_err(),
+            chart.map(constant(c(0.0, 1.1))).unwrap_err(),
             ChartError::CoordinateOutsideRegion,
         );
     }
 
     #[test]
     fn chart_accepts_regular_region_boundary_points() {
-        let chart =
-            lossless_chart(CoordinateSheet::Principal);
+        let chart = lossless_chart(CoordinateSheet::Principal);
 
-        for z in [
-            c(-1.0, 0.0),
-            c(1.0, 0.0),
-            c(0.0, -1.0),
-            c(0.0, 1.0),
-        ] {
+        for z in [c(-1.0, 0.0), c(1.0, 0.0), c(0.0, -1.0), c(0.0, 1.0)] {
             assert!(
                 chart.coordinate(z).is_ok(),
                 "regular chart boundary point rejected: \
@@ -1398,23 +1158,19 @@ mod tests {
 
         let target = c(0.30, -0.45);
 
-        let target_coordinate =
-            first.coordinate(target).unwrap();
+        let target_coordinate = first.coordinate(target).unwrap();
 
-        let reverse =
-            Chart::with_reference_coordinate(
-                lossy_map(),
-                lossy_region(),
-                target,
-                target_coordinate,
-                ConformalChartConfig::default(),
-            )
-            .unwrap();
+        let reverse = Chart::with_reference_coordinate(
+            lossy_map(),
+            lossy_region(),
+            target,
+            target_coordinate,
+            ConformalChartConfig::default(),
+        )
+        .unwrap();
 
         assert_complex_close_tol(
-            reverse
-                .coordinate(first.reference())
-                .unwrap(),
+            reverse.coordinate(first.reference()).unwrap(),
             first.reference_coordinate(),
             1.0e-9,
         );
@@ -1424,23 +1180,18 @@ mod tests {
     fn charts_with_consistent_reference_coordinates_agree_everywhere() {
         let first = lossy_chart();
 
-        let second_reference =
-            c(0.25, -0.30);
+        let second_reference = c(0.25, -0.30);
 
-        let second_reference_coordinate =
-            first
-                .coordinate(second_reference)
-                .unwrap();
+        let second_reference_coordinate = first.coordinate(second_reference).unwrap();
 
-        let second =
-            Chart::with_reference_coordinate(
-                lossy_map(),
-                lossy_region(),
-                second_reference,
-                second_reference_coordinate,
-                ConformalChartConfig::default(),
-            )
-            .unwrap();
+        let second = Chart::with_reference_coordinate(
+            lossy_map(),
+            lossy_region(),
+            second_reference,
+            second_reference_coordinate,
+            ConformalChartConfig::default(),
+        )
+        .unwrap();
 
         for z in [
             c(-0.30, -0.50),
@@ -1462,71 +1213,31 @@ mod tests {
 
     #[test]
     fn adaptive_simpson_integrates_constant_complex_function() {
-        let result = adaptive_simpson(
-            &|_| c(2.0, -3.0),
-            0.0,
-            1.0,
-            1.0e-13,
-            10,
-        )
-        .unwrap();
+        let result = adaptive_simpson(&|_| c(2.0, -3.0), 0.0, 1.0, 1.0e-13, 10).unwrap();
 
-        assert_complex_close(
-            result,
-            c(2.0, -3.0),
-        );
+        assert_complex_close(result, c(2.0, -3.0));
     }
 
     #[test]
     fn adaptive_simpson_integrates_linear_complex_function() {
-        let result = adaptive_simpson(
-            &|x| c(x, 2.0 * x),
-            0.0,
-            1.0,
-            1.0e-13,
-            10,
-        )
-        .unwrap();
+        let result = adaptive_simpson(&|x| c(x, 2.0 * x), 0.0, 1.0, 1.0e-13, 10).unwrap();
 
-        assert_complex_close(
-            result,
-            c(0.5, 1.0),
-        );
+        assert_complex_close(result, c(0.5, 1.0));
     }
 
     #[test]
     fn adaptive_simpson_integrates_complex_exponential() {
         // Integral_0^1 exp(i pi x) dx = 2i/pi.
-        let result = adaptive_simpson(
-            &|x| c(0.0, PI * x).exp(),
-            0.0,
-            1.0,
-            1.0e-12,
-            20,
-        )
-        .unwrap();
+        let result = adaptive_simpson(&|x| c(0.0, PI * x).exp(), 0.0, 1.0, 1.0e-12, 20).unwrap();
 
-        assert_complex_close_tol(
-            result,
-            c(0.0, 2.0 / PI),
-            1.0e-10,
-        );
+        assert_complex_close_tol(result, c(0.0, 2.0 / PI), 1.0e-10);
     }
 
     #[test]
     fn adaptive_simpson_reports_non_convergence() {
-        let result = adaptive_simpson(
-            &|x| c(0.0, 100.0 * x).exp(),
-            0.0,
-            1.0,
-            1.0e-15,
-            0,
-        );
+        let result = adaptive_simpson(&|x| c(0.0, 100.0 * x).exp(), 0.0, 1.0, 1.0e-15, 0);
 
-        assert_eq!(
-            result.unwrap_err(),
-            ContinuationError::DidNotConverge,
-        );
+        assert_eq!(result.unwrap_err(), ContinuationError::DidNotConverge,);
     }
 
     #[test]
@@ -1545,9 +1256,6 @@ mod tests {
             10,
         );
 
-        assert_eq!(
-            result.unwrap_err(),
-            ContinuationError::NonFinite,
-        );
+        assert_eq!(result.unwrap_err(), ContinuationError::NonFinite,);
     }
 }

@@ -1,4 +1,5 @@
-use num_traits::float::FloatCore;
+use argloc::{Rect, ScalerError};
+use num_traits::{Float, float::FloatCore};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ConformalRegionError {
@@ -21,6 +22,16 @@ pub struct ConformalRegion<R> {
     re_max: R,
     im_min: R,
     im_max: R,
+}
+
+impl<R> TryInto<Rect<R>> for ConformalRegion<R>
+where
+    R: Float,
+{
+    type Error = ScalerError<R>;
+    fn try_into(self) -> Result<Rect<R>, Self::Error> {
+        Rect::new(self.re_min, self.re_max, self.im_min, self.im_max)
+    }
 }
 
 impl<R> ConformalRegion<R>

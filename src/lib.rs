@@ -1,4 +1,8 @@
-mod function;
-mod mapping;
+#![allow(dead_code)]
 
-mod conformal;
+mod apm;
+pub(crate) mod conformal;
+mod dispersion;
+mod mapping;
+mod mode;
+mod search;

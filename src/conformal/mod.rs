@@ -10,13 +10,14 @@
 //! wavevectors remain the responsibility of `lamina-core`.
 
 mod branch;
-mod chart;
+pub(crate) mod chart;
+mod landmarks;
 mod region;
 
 pub mod in_plane;
 pub mod wavenumber;
 
-pub use region::{ConformalRegion, ConformalRegionError};
+pub use region::ConformalRegion;
 
 use lamina_core::{CanonicalCoordinates, ExteriorWavevectors};
 
@@ -70,7 +71,7 @@ pub trait RawConformalMap<A> {
 }
 
 pub trait ValidateConformalRegion<R> {
-    type Error;
+    type Error: Send + Sync + std::fmt::Display + 'static + Clone + std::error::Error;
 
     fn validate_region(&self, region: &ConformalRegion<R>) -> Result<(), Self::Error>;
 }
