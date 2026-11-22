@@ -6,7 +6,7 @@
 //! core backends. Analytic declarations and radiation choices remain explicit.
 //! [`Plan::discover`] permits inspection before refinement; [`Plan::solve`]
 //! returns an owned report. Estimates, acceptance, interpretation and coverage
-//! are separate evidence. No operation here computes fields or normalization.
+//! are separate evidence. Accepted points also support owned arbitrary-amplitude field postprocessing; no QNM normalization is computed.
 //!
 //! Analytic declarations cannot be omitted, even through convenience execution.
 //!
@@ -17,6 +17,10 @@
 //! }
 //! ```
 mod diagnostic;
+mod fields;
+mod normalization;
+pub use fields::*;
+pub use normalization::*;
 mod report;
 mod solver;
 pub use diagnostic::*;

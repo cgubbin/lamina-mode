@@ -558,7 +558,50 @@ fn accepted_guided_point_survives_unavailable_interpretation_and_checked_failure
             .classification,
         Classification::Classified(ModeType::Guided)
     );
+    let sampling = lamina_core::FieldSampling::new()
+        .left_exterior(lamina_core::ExteriorSampling::point(Length::zero()));
+    point
+        .recover_fields_with(
+            lamina_core::Scatter2::new(),
+            &sampling,
+            FieldRecoverySettings::default(),
+        )
+        .unwrap();
+    let normalized = point
+        .normalize_with(
+            lamina_core::Transfer2::new(),
+            PoleVariable::BetaAtFixedK0,
+            AnalyticAssumption::CallerAssumedHolomorphicPoleFree,
+            PoleNormalizationSettings::default(),
+            FieldRecoverySettings::default(),
+        )
+        .unwrap();
     flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    let normalization_failure = normalized.fields(&sampling).unwrap_err();
+    assert!(matches!(
+        normalization_failure.cause,
+        FieldRecoveryError::Normalization(_)
+    ));
+    assert_eq!(
+        normalization_failure.point.physical_coordinate(),
+        point.physical_coordinate()
+    );
+
+    let field_failure = point
+        .recover_fields_with(
+            lamina_core::Scatter2::new(),
+            &sampling,
+            FieldRecoverySettings::default(),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        field_failure.cause,
+        FieldRecoveryError::Core(lamina_core::UnscaledFieldError::InvalidInput)
+    ));
+    assert_eq!(
+        field_failure.point.physical_coordinate(),
+        point.physical_coordinate()
+    );
     let error = point.describe(InterpretationConfig::default()).unwrap_err();
     assert_eq!(error.stage(), Stage::Interpretation);
     assert!(matches!(

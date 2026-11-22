@@ -333,3 +333,7 @@ See the [direct-frequency guide](docs/modal-transform.md#direct-frequency-charts
 for equations, private usage and runnable TE/TM regressions.
 
 Physical regression and plots: [plasmon validation](docs/plasmon-validation.md).
+
+Accepted-point [modal fields](docs/modal-fields.md) use core sampling and explicit arbitrary-amplitude gauges.
+
+See [pole normalization](docs/pole-normalization.md) for complete scalar-pole factors, normalized fields and the 1D exterior-cancellation checks.

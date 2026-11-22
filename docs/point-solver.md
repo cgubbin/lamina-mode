@@ -177,3 +177,5 @@ derivatives, then branches, QNM normalization and derived observables,
 features/sensitivities and optimization in lamina-design. Core owns reusable device,
 material and field primitives; mode owns mode search and interpretation; design
 owns objectives and optimization.
+
+See [modal field recovery](modal-fields.md) for separately fallible postprocessing of owned accepted points.
