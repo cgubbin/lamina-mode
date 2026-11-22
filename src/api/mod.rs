@@ -16,9 +16,11 @@
 //!     let _ = problem.domain(input); // an explicit AnalyticAssumption is required
 //! }
 //! ```
+mod derivatives;
 mod diagnostic;
 mod fields;
 mod normalization;
+pub use derivatives::*;
 pub use fields::*;
 pub use normalization::*;
 mod report;
