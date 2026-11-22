@@ -73,6 +73,7 @@ pub enum ReferenceSelection {
 }
 #[derive(Debug)]
 pub struct ProblemContext {
+    pub(crate) constants: Option<[ConstantExterior; 2]>,
     stack: AnalyticalMaterialStack<C>,
     polarisation: Polarisation,
     coordinate: SearchCoordinate,
@@ -137,6 +138,7 @@ where
         let solver = Compiled::compile(&stack, backend, polarisation)?;
         Ok(Self {
             context: Arc::new(ProblemContext {
+                constants: None,
                 stack,
                 polarisation,
                 coordinate: SearchCoordinate::InPlane { fixed_k0 },
@@ -179,6 +181,7 @@ where
         let solver = Compiled::compile(&stack, backend, polarisation)?;
         Ok(Self {
             context: Arc::new(ProblemContext {
+                constants: Some([left, right]),
                 stack,
                 polarisation,
                 coordinate: SearchCoordinate::Spectral { fixed_k_parallel },
@@ -403,3 +406,61 @@ where
 }
 #[cfg(test)]
 mod tests;
+
+impl<M: Clone, S: ModeDeterminantSolver<J> + Clone> ModalProblem<M, S> {
+    pub(crate) fn corrected_point<H: AnalyticChart<J>>(
+        &self,
+        domain: &ProblemDomain<M, S, H>,
+        native: C,
+        config: crate::refinement::ValidatedConfig,
+    ) -> Result<
+        (
+            crate::refinement::AcceptedRoot,
+            orchestration::BranchSignature,
+            argloc::Rect<f64>,
+        ),
+        crate::api::BranchFailure,
+    > {
+        use crate::api::BranchFailure;
+        use lamina_core::ScalarAlgebra;
+        let chart = domain.search.dispersion().chart();
+        let bounds = domain.provenance.requested();
+        let (x_min, x_max) = bounds.real_bounds();
+        let (y_min, y_max) = bounds.imaginary_bounds();
+        let enclosure = argloc::Rect {
+            x_min,
+            x_max,
+            y_min,
+            y_max,
+        };
+        let outcome = crate::refinement::correct_seed(
+            native,
+            enclosure,
+            0,
+            &domain.provenance,
+            config,
+            |z| self.evaluate(domain, z),
+            |z| {
+                chart
+                    .coordinate(z)
+                    .map_err(|e| ExecutionError::Optical(Box::new(ChartDispersionError::Chart(e))))
+            },
+        );
+        let crate::refinement::CandidateStatus::Accepted(root) = outcome.status() else {
+            return Err(BranchFailure::Correction(format!("{:?}", outcome.status())));
+        };
+        let point = chart
+            .map(J::lift_constant(ndarray::arr0(root.evidence().z)))
+            .map_err(|e| BranchFailure::Correction(e.to_string()))?;
+        Ok((
+            (**root).clone(),
+            orchestration::BranchSignature {
+                k0: point.coordinates().vacuum_angular_wavenumber().value()[()],
+                k_parallel: point.coordinates().parallel_angular_wavenumber().value()[()],
+                left: point.exterior_wavevectors().left().value()[()],
+                right: point.exterior_wavevectors().right().value()[()],
+            },
+            enclosure,
+        ))
+    }
+}

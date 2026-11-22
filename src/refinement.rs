@@ -255,6 +255,43 @@ pub(crate) fn refine_candidate<E>(
     index: usize,
     provenance: &DomainProvenance,
     config: ValidatedConfig,
+    evaluate: impl FnMut(C) -> Result<FunctionBundle<C>, E>,
+    project: impl FnMut(C) -> Result<C, E>,
+) -> CandidateOutcome<E> {
+    let ineligible = |status| CandidateOutcome {
+        index,
+        status,
+        last_valid: None,
+        work: RefinementWork::default(),
+    };
+    if estimate.target != SearchTarget::Zeros || estimate.multiplicity == 0 {
+        return ineligible(CandidateStatus::IneligibleEstimate);
+    }
+    match (estimate.kind, estimate.multiplicity) {
+        (SingularPointEstimateKind::ClusterCentroid, n) if n > 1 => {
+            return ineligible(CandidateStatus::UnresolvedCluster);
+        }
+        (SingularPointEstimateKind::SinglePoint, 1) => {}
+        _ => return ineligible(CandidateStatus::IneligibleEstimate),
+    }
+    correct_seed(
+        estimate.location,
+        estimate.enclosure,
+        index,
+        provenance,
+        config,
+        evaluate,
+        project,
+    )
+}
+
+/// Correct a local prediction using the current station's domain and fresh acceptance checks.
+pub(crate) fn correct_seed<E>(
+    mut z: C,
+    enclosure: Rect<f64>,
+    index: usize,
+    provenance: &DomainProvenance,
+    config: ValidatedConfig,
     mut evaluate: impl FnMut(C) -> Result<FunctionBundle<C>, E>,
     mut project: impl FnMut(C) -> Result<C, E>,
 ) -> CandidateOutcome<E> {
@@ -270,18 +307,6 @@ pub(crate) fn refine_candidate<E>(
             return out;
         }};
     }
-    // Precedence: target/inconsistent metadata, cluster, geometry, budgets,
-    // evaluation, derivative/correction, convergence, update/trial termination.
-    if estimate.target != SearchTarget::Zeros || estimate.multiplicity == 0 {
-        return out;
-    }
-    match (estimate.kind, estimate.multiplicity) {
-        (SingularPointEstimateKind::ClusterCentroid, n) if n > 1 => {
-            finish!(CandidateStatus::UnresolvedCluster)
-        }
-        (SingularPointEstimateKind::SinglePoint, 1) => {}
-        _ => return out,
-    }
     let requested = provenance.requested();
     let (xmin, xmax) = requested.real_bounds();
     let (ymin, ymax) = requested.imaginary_bounds();
@@ -291,11 +316,9 @@ pub(crate) fn refine_candidate<E>(
         y_min: ymin,
         y_max: ymax,
     };
-    let enclosure = estimate.enclosure;
     if !valid_enclosure(enclosure, outer) {
         finish!(CandidateStatus::InvalidEnclosure)
     }
-    let mut z = estimate.location;
     if !inside(enclosure, z) || !inside(outer, z) {
         finish!(CandidateStatus::BoundaryLimited)
     }
