@@ -2,7 +2,7 @@
 #[path = "mod.rs"]
 mod existing;
 #[path = "field_modes.rs"]
-mod fields;
+pub mod fields;
 use super::material;
 use super::reference as green;
 use fields::{ASSUME, c};

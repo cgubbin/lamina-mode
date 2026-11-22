@@ -122,6 +122,13 @@ fn external_domain_units_derivatives_and_ownership() {
     let b = f.evaluate(&fd, k).unwrap();
     assert_eq!(d.provenance().units(), "dimensionless");
     assert!((a.derivative / k - b.derivative).norm() < 1e-8);
+    // The same chart relation must hold away from a root, where no refinement
+    // evidence is involved and the two public evaluators independently run.
+    let off_root = k + Complex::new(0.017, 0.013);
+    let off_z = (-Complex::i() * off_root).ln();
+    let off_a = p.evaluate(&d, off_z).unwrap();
+    let off_b = f.evaluate(&fd, off_root).unwrap();
+    assert!((off_a.derivative / off_root - off_b.derivative).norm() < 1e-7);
     assert!(d.provenance().same_domain(&d.clone().provenance()));
     assert!(
         conformal()

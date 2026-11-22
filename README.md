@@ -328,4 +328,6 @@ Physical regression and plots: [plasmon validation](docs/plasmon-validation.md).
 
 Accepted-point [modal fields](docs/modal-fields.md) use core sampling and explicit arbitrary-amplitude gauges.
 
+[Physical local modal derivatives](docs/modal-local-derivatives.md) expose `F_k0`, `F_beta`, stored-unit thickness partials, and guarded conditional simple-root slopes. Run `cargo run --example local_derivatives` for a report.
+
 See [pole normalization](docs/pole-normalization.md) for complete scalar-pole factors, normalized fields and the 1D exterior-cancellation checks.
