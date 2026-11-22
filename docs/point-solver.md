@@ -173,3 +173,5 @@ result and prints acceptance, radiation/classification and finite-coverage evide
 
 The [mathematical guide](modal-transform.md) documents the transform correspondence,
 sheets and physical support matrix.
+
+See [modal field recovery](modal-fields.md) for separately fallible postprocessing of owned accepted points.
