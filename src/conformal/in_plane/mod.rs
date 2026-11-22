@@ -52,25 +52,17 @@
 //! Unlike pointwise square roots of the exterior dispersion relations, these
 //! expressions define the desired exterior sheets analytically in `z`.
 //!
-//! # Fundamental period
+//! # Squared-coordinate and exterior-sheet periods
 //!
-//! The squared coordinate is periodic under
+//! The squared physical coordinate repeats under `z -> z + i*pi`, but both
+//! exterior wavevectors reverse sign. The ordered exterior data repeat under
+//! `z -> z + 2*i*pi`; the width-pi canonical strip is only a selection of sheets.
+//! Its boundaries at `Im(z) = +/-pi/2` are not equivalent exterior sheets.
+//! Canonical contours retain margins from these selected-strip boundaries.
+//! A signed-coordinate square root has separate branch continuation data.
 //!
-//! ```text
-//! z -> z + i*pi.
-//! ```
-//!
-//! The exterior wavevectors change sign under the same translation. One
-//! convenient representative of the conformal surface is therefore
-//!
-//! ```text
-//! -pi/2 <= Im(z) <= pi/2,
-//! ```
-//!
-//! with the upper and lower boundaries periodically identified.
-//!
-//! A numerical search contour normally retains a finite margin from these
-//! boundaries.
+//! For the correspondence to Bakhtazad et al. (1997), material restrictions,
+//! classification assumptions and roadmap, see the crate-level mathematical guide.
 //!
 //! # Physical real-kx geometry
 //!
@@ -136,7 +128,8 @@
 //! Re(z) = 1/2 ln|r|.
 //! ```
 //!
-//! This is the singly-leaky physical sector.
+//! This is the one-propagating-channel real-coordinate locus; radiation
+//! direction still depends on the selected exterior signs.
 //!
 //! ## Below both light lines
 //!
@@ -147,7 +140,7 @@
 //! ```
 //!
 //! both exterior channels are propagating. The two roots are negative real and
-//! their conformal representatives lie on the periodically identified
+//! their conformal representatives lie on the selected-strip
 //! boundaries
 //!
 //! ```text
@@ -160,8 +153,8 @@
 //!
 //! The outer light line appears as a coincident point on the real axis. The
 //! inner light line may appear as two representatives on the upper and lower
-//! boundaries; these differ by exactly `i*pi` and therefore represent the same
-//! point on the periodic conformal surface.
+//! boundaries; these differ by exactly `i*pi` and have the same squared
+//! coordinate, but opposite nonzero exterior wavevectors.
 //!
 //! # Linear-coordinate branch points
 //!
@@ -181,7 +174,7 @@
 //! Im(z) = +/- pi/2.
 //! ```
 //!
-//! Consequently a trimmed fundamental strip
+//! Consequently a trimmed selected strip
 //!
 //! ```text
 //! -pi/2 + delta < Im(z) < pi/2 - delta
@@ -1559,7 +1552,7 @@ mod tests {
     }
 
     #[test]
-    fn inner_light_line_maps_to_periodically_equivalent_branch_points() {
+    fn inner_light_line_maps_to_equal_squared_coordinate_boundary_points() {
         let map = lossless_map();
 
         // chi_R = 1 and k0 = 2 -> inner light line kx = 2.
@@ -1577,7 +1570,7 @@ mod tests {
         );
 
         // The repeated negative t-root appears on the two boundaries of the
-        // chosen fundamental strip.
+        // selected width-pi strip.
         assert_relative_eq!(
             first.im.abs(),
             std::f64::consts::FRAC_PI_2,
@@ -1592,7 +1585,7 @@ mod tests {
             max_relative = REL_TOL,
         );
 
-        // They differ by one period of the conformal map.
+        // One squared-coordinate period; nonzero exterior signs reverse.
         assert_relative_eq!(
             (first.im - second.im).abs(),
             std::f64::consts::PI,
@@ -1865,7 +1858,7 @@ mod tests {
     }
 
     #[test]
-    fn full_trimmed_fundamental_strip_is_branch_point_free() {
+    fn trimmed_selected_strip_is_branch_point_free() {
         let map = lossless_map();
 
         let [left, right] = map.physical_preimages(6.0).unwrap();
@@ -1897,5 +1890,64 @@ mod tests {
             .into_inner();
 
         assert!(map.validate_region(&region).is_ok());
+    }
+    #[test]
+    fn sheet_period_and_inverse_multiplicity() {
+        let map = lossless_map();
+        let [a, b] = map.physical_preimages(5.0).unwrap().map(Option::unwrap);
+        let zs = [a, b, a + c(0.0, PI), b + c(0.0, PI)];
+        let signatures = zs.map(|z| {
+            assert_complex_close(map.kx_squared_scalar(z), c(5.0 * 5.0, 0.0));
+            let point = map.map_raw(constant(z));
+            (
+                jet_value(point.exterior_wavevectors().left()),
+                jet_value(point.exterior_wavevectors().right()),
+            )
+        });
+        // Each of the four sign pairs occurs once, away from exterior cutoffs.
+        for i in 0..4 {
+            assert!(signatures[i].0.norm() > 1e-6 && signatures[i].1.norm() > 1e-6);
+            for j in 0..i {
+                assert!(
+                    (signatures[i].0 - signatures[j].0).norm() > 1e-6
+                        || (signatures[i].1 - signatures[j].1).norm() > 1e-6
+                );
+            }
+            let repeated = map.map_raw(constant(zs[i] + c(0.0, 2.0 * PI)));
+            assert_complex_close(
+                jet_value(repeated.exterior_wavevectors().left()),
+                signatures[i].0,
+            );
+            assert_complex_close(
+                jet_value(repeated.exterior_wavevectors().right()),
+                signatures[i].1,
+            );
+        }
+        assert_complex_close(signatures[2].0, -signatures[0].0);
+        assert_complex_close(signatures[2].1, -signatures[0].1);
+        // At this positive-t light line two inverse roots coalesce.
+        let [a, b] = map.physical_preimages(4.0).unwrap().map(Option::unwrap);
+        assert_complex_close(a, b);
+        let point = map.map_raw(constant(a));
+        assert!(jet_value(point.exterior_wavevectors().left()).norm() < 1e-6);
+        // r=0 has one finite inverse t-root, with two exterior signs per 2*pi.
+        let symmetric = symmetric_map();
+        let finite: Vec<_> = symmetric
+            .physical_preimages(5.0)
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(finite.len(), 1);
+        let first = symmetric.map_raw(constant(finite[0]));
+        let opposite = symmetric.map_raw(constant(finite[0] + c(0.0, PI)));
+        assert_complex_close(
+            jet_value(first.exterior_wavevectors().left()),
+            jet_value(first.exterior_wavevectors().right()),
+        );
+        assert_complex_close(
+            jet_value(opposite.exterior_wavevectors().left()),
+            -jet_value(first.exterior_wavevectors().left()),
+        );
     }
 }

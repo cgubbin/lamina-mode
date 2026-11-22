@@ -179,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn upper_light_line_landmarks_are_periodically_equivalent() {
+    fn upper_light_line_landmarks_have_equal_squared_coordinates() {
         let map = lossless_map();
 
         let landmarks = map.landmarks().unwrap();

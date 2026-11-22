@@ -57,11 +57,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::convert::Infallible;
 
-    use lamina_core::{CanonicalCoordinates, ExteriorWavevectors, ModeJet1, ScalarAlgebra};
+    use lamina_core::{CanonicalCoordinates, ExteriorWavevectors, ModeJet1};
     use ndarray::Ix0;
     use num_complex::Complex64;
 
@@ -170,7 +168,9 @@ mod tests {
         // CoordinateSolver returns F = kx, so the determinant residual should
         // equal the branch-consistent physical coordinate selected by the
         // chart.
-        assert_eq!(mode.residual(), mode.coordinate(),);
+        let tolerance = 2.0e-12 * (1.0 + mode.coordinate().norm());
+        assert!((mode.residual() - mode.coordinate()).norm() < tolerance);
+        assert!((mode.residual() + mode.coordinate()).norm() > tolerance);
     }
 
     #[test]

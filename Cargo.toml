@@ -3,7 +3,7 @@ name = "lamina-mode"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Rust project template with library and binary"
+description = "Planar mode searches with explicit branch provenance and numerical evidence"
 license = "MIT"
 
 [lib]

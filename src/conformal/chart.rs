@@ -122,7 +122,7 @@ where
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 pub enum ConformalChartError<E> {
     #[error("invalid conformal search region: {0}")]
-    InvalidRegion(E),
+    InvalidRegion(#[source] E),
 
     #[error("chart reference point lies outside the conformal search region")]
     ReferenceOutsideRegion,
@@ -132,6 +132,9 @@ pub enum ConformalChartError<E> {
 
     #[error("requested conformal coordinate lies outside the chart region")]
     CoordinateOutsideRegion,
+
+    #[error("cannot construct a finite surrounding evaluation margin")]
+    InvalidEvaluationMargin,
 
     #[error("analytic continuation integral failed to converge")]
     IntegrationDidNotConverge,
@@ -271,6 +274,46 @@ where
         })
     }
 
+    /// Extend only the evaluation chart for boundary roundoff. Search callers
+    /// must retain their original rectangle; the reference coordinate fixes the
+    /// analytic sheet and the enlarged region is validated before use.
+    pub(crate) fn with_evaluation_margin(
+        &self,
+    ) -> Result<Self, ConformalChartError<<M as ValidateConformalRegion<R>>::Error>>
+    where
+        M: Clone,
+        R: num_traits::float::FloatCore,
+    {
+        let expand = |lo: R, hi: R| {
+            let width = hi - lo;
+            let scale = Float::max(
+                R::one(),
+                Float::max(Float::abs(lo), Float::max(Float::abs(hi), width)),
+            );
+            let margin = R::from_u32(64).unwrap() * <R as Float>::epsilon() * scale;
+            let lower = lo - margin;
+            let upper = hi + margin;
+            if !(Float::is_finite(lower) && Float::is_finite(upper) && lower < lo && upper > hi) {
+                return Err(ConformalChartError::InvalidEvaluationMargin);
+            }
+            Ok((lower, upper))
+        };
+        let (re_min, re_max) = expand(self.region.real_bounds().0, self.region.real_bounds().1)?;
+        let (im_min, im_max) = expand(
+            self.region.imaginary_bounds().0,
+            self.region.imaginary_bounds().1,
+        )?;
+        let region = ConformalRegion::new(re_min, re_max, im_min, im_max)
+            .map_err(|_| ConformalChartError::InvalidEvaluationMargin)?;
+        Self::with_reference_coordinate(
+            self.map.clone(),
+            region,
+            self.reference,
+            self.reference_coordinate,
+            self.config,
+        )
+    }
+
     pub fn raw_map(&self) -> &M {
         &self.map
     }
@@ -380,6 +423,11 @@ where
 // Geometry
 // =============================================================================
 
+#[cfg(test)]
+thread_local! {
+    static REGION_MISSES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 fn contains<C>(region: &ConformalRegion<C::RealField>, z: C) -> bool
 where
     C: ComplexField + Copy,
@@ -391,7 +439,12 @@ where
     let re = z.real();
     let im = z.imaginary();
 
-    re >= re_min && re <= re_max && im >= im_min && im <= im_max
+    let inside = re >= re_min && re <= re_max && im >= im_min && im <= im_max;
+    #[cfg(test)]
+    if !inside {
+        REGION_MISSES.with(|points| points.borrow_mut().push(format!("{z:?}")));
+    }
+    inside
 }
 
 // =============================================================================
@@ -1257,5 +1310,83 @@ mod tests {
         );
 
         assert_eq!(result.unwrap_err(), ContinuationError::NonFinite,);
+    }
+    #[test]
+    fn evaluation_margin_preserves_sheet_and_accepts_boundary_roundtrips() {
+        for sheet in [CoordinateSheet::Principal, CoordinateSheet::Opposite] {
+            let chart = lossless_chart(sheet);
+            let evaluation = chart.with_evaluation_margin().unwrap();
+            assert_eq!(chart.reference(), evaluation.reference());
+            assert_eq!(
+                chart.reference_coordinate(),
+                evaluation.reference_coordinate()
+            );
+            let region = *chart.region();
+            let (xmin, xmax) = region.real_bounds();
+            let (ymin, ymax) = region.imaginary_bounds();
+            // Simulate affine normalization and reverse mapping, including corners.
+            for x in [xmin, 0.0, xmax] {
+                for y in [ymin, 0.0, ymax] {
+                    let rx = xmin + ((x - xmin) / (xmax - xmin)) * (xmax - xmin);
+                    let ry = ymin + ((y - ymin) / (ymax - ymin)) * (ymax - ymin);
+                    let point = c(rx, ry);
+                    assert_complex_close(
+                        evaluation.coordinate(point).unwrap(),
+                        chart.coordinate(c(x, y)).unwrap(),
+                    );
+                }
+            }
+            let rounded = c(xmax + f64::EPSILON, 0.0);
+            REGION_MISSES.with(|points| points.borrow_mut().clear());
+            assert!(matches!(
+                chart.coordinate(rounded),
+                Err(ChartError::CoordinateOutsideRegion)
+            ));
+            REGION_MISSES.with(|points| assert_eq!(points.borrow().len(), 1));
+            assert!(evaluation.coordinate(rounded).is_ok());
+            assert!(matches!(
+                evaluation.coordinate(c(xmax + 1e-6, 0.0)),
+                Err(ChartError::CoordinateOutsideRegion)
+            ));
+            assert_eq!(*chart.region(), region);
+        }
+    }
+
+    #[test]
+    fn evaluation_margin_rejects_branchpoint_extension() {
+        let map = lossless_map();
+        let branch = map.landmarks().unwrap().coordinate_branch_points()[0];
+        let region = ConformalRegion::new(
+            branch.re - 0.1,
+            branch.re + 0.1,
+            branch.im - 0.2,
+            branch.im - 1e-15,
+        )
+        .unwrap();
+        let chart = Chart::new(
+            map,
+            region,
+            CoordinateSheet::Principal,
+            ConformalChartConfig::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            chart.with_evaluation_margin(),
+            Err(ChartError::InvalidRegion(_))
+        ));
+    }
+
+    #[test]
+    fn evaluation_margin_rejects_nonfinite_expansion() {
+        let map = lossless_map();
+        // Build an internal chart fixture so the margin check is isolated from
+        // constitutive exponent evaluation at extreme coordinates.
+        let mut chart = lossless_chart(CoordinateSheet::Principal);
+        chart.map = map;
+        chart.region = ConformalRegion::new(-f64::MAX, f64::MAX, -1.0, 1.0).unwrap();
+        assert!(matches!(
+            chart.with_evaluation_margin(),
+            Err(ChartError::InvalidEvaluationMargin)
+        ));
     }
 }
