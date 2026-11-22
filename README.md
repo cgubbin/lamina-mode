@@ -323,3 +323,5 @@ are searched; there is no inferred periodic or global sheet coverage.
 
 See the [direct-frequency guide](docs/modal-transform.md#direct-frequency-charts-with-dispersive-exteriors)
 for equations, private usage and runnable TE/TM regressions.
+
+Physical regression and plots: [plasmon validation](docs/plasmon-validation.md).
