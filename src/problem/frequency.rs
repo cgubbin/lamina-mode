@@ -509,6 +509,7 @@ impl<B: Backend<J, ComplexPlane>> FrequencyProblem<B> {
         let solver = Compiled::compile(&stack, backend, pol)?;
         Ok(Self {
             context: Arc::new(ProblemContext {
+                constants: None,
                 stack,
                 polarisation: pol,
                 coordinate: SearchCoordinate::Spectral {
