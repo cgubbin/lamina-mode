@@ -17,7 +17,7 @@ mod region;
 pub mod in_plane;
 pub mod wavenumber;
 
-pub use region::ConformalRegion;
+pub use region::{ConformalRegion, ConformalRegionError};
 
 use lamina_core::{CanonicalCoordinates, ExteriorWavevectors};
 

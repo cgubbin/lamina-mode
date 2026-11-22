@@ -59,7 +59,7 @@ pub struct WavenumberSearchExtent<R> {
     pub max_vacuum_wavenumber: R,
 
     /// Clearance from both the real-z coordinate-branch-point line and the
-    /// periodically identified +/-pi/2 boundaries.
+    /// selected +/-pi/2 boundaries (not equivalent exterior sheets).
     pub imaginary_margin: R,
 }
 
@@ -160,7 +160,9 @@ where
     }
 
     /// Return the two conformal preimages of a non-negative real vacuum
-    /// wavenumber within one closed representative of the fundamental period.
+    /// wavenumber within a closed width-pi selection of the squared-coordinate period.
+    /// This is not an enumeration of all exterior sheets: translating by `i*pi`
+    /// reverses both exterior signs; only `2*i*pi` repeats the exterior data.
     ///
     /// This convenience inverse is available for real positive constant
     /// exterior constitutive products.

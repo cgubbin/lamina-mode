@@ -27,15 +27,14 @@
 //! into multiple adapters. In particular, the canonical complex-wavenumber
 //! search uses separate upper and lower conformal charts.
 
+use crate::analytic::AnalyticChart;
+use crate::dispersion::ChartDispersionError;
 use lamina_core::{ComplexScalar, ModeJet1};
 use nalgebra::ComplexField;
 use ndarray::Ix0;
 use num_traits::{Float, FromPrimitive};
 
-use crate::{
-    conformal::{ValidateConformalRegion, chart::LinearCoordinateMap},
-    dispersion::{ConformalDispersion, DispersionError, ModeDeterminantSolver},
-};
+use crate::dispersion::{ConformalDispersion, DispersionError, ModeDeterminantSolver};
 
 use argloc::{ComplexFunction, FunctionBundle};
 
@@ -80,16 +79,16 @@ where
     }
 }
 
-impl<S, M, C, R> ComplexFunction for ConformalDispersion<S, M, C>
+impl<S, M, C, R, H> ComplexFunction for ConformalDispersion<S, M, C, H>
 where
     C: ComplexScalar<RealField = R> + Copy,
     R: Float + FromPrimitive + Copy,
-    M: LinearCoordinateMap<ModeJet1<C, Ix0>> + ValidateConformalRegion<R>,
+    H: AnalyticChart<ModeJet1<C, Ix0>>,
     S: ModeDeterminantSolver<ModeJet1<C, Ix0>>,
 {
     type Complex = C;
 
-    type Error = DispersionError<<M as ValidateConformalRegion<R>>::Error, S::Error>;
+    type Error = ChartDispersionError<H::Error, S::Error>;
 
     fn bundle(&self, z: C) -> Result<FunctionBundle<C>, Self::Error> {
         ConformalDispersion::evaluate(self, z)
