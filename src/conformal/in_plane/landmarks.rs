@@ -16,13 +16,13 @@ use num_traits::{Float, FloatConst};
 /// are real and strictly positive.
 ///
 /// `inner_light_line` and `outer_light_line` each contain the two conformal
-/// preimages returned within one closed representative of the fundamental
-/// period. Depending on the light line these may either coincide or lie on
-/// periodically identified boundaries.
+/// preimages returned within the closed selected width-pi strip. Depending on
+/// the light line these may coincide or lie on opposite boundaries with equal
+/// squared coordinates but opposite nonzero exterior signs.
 ///
 /// The `coordinate_branch_points` are the finite zeros of the linear
 /// coordinate `kx(z)`. Each entry is represented on one of the boundaries of
-/// the chosen fundamental period; periodic copies differ by integer multiples
+/// the chosen squared-coordinate period; branch-point copies differ by multiples
 /// of `i*pi`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct InPlaneLandmarks<C> {
@@ -217,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn inner_light_line_landmarks_are_periodically_equivalent() {
+    fn inner_light_line_landmarks_have_equal_squared_coordinates() {
         let map = lossless_map();
 
         let landmarks = map.landmarks().unwrap();
@@ -255,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn coordinate_branch_points_lie_on_fundamental_boundaries() {
+    fn coordinate_branch_points_lie_on_squared_coordinate_period_boundaries() {
         let map = lossless_map();
 
         let landmarks = map.landmarks().unwrap();

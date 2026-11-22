@@ -58,7 +58,7 @@ pub struct InPlaneSearchExtent<R> {
     /// light lines.
     pub max_parallel_wavenumber: R,
 
-    /// Distance retained from the periodic boundaries
+    /// Distance retained from the selected-strip boundaries
     /// ```text
     ///     Im(z) = +/- pi/2.
     ///
@@ -102,16 +102,15 @@ where
     A: ScalarAlgebra<Dimension = Ix0>,
     A::Scalar: ComplexField + Copy,
 {
-    /// Construct the canonical one-period in-plane modal search region.
+    /// Construct the canonical width-pi in-plane modal search selection.
     ///
-    /// The region spans essentially one full fundamental conformal strip,
+    /// The region spans a selected strip of half the full exterior-sheet period,
     ///
     /// ```text
     /// -pi/2 < Im(z) < pi/2,
     /// ```
     ///
-    /// and therefore contains the conformal continuation of guided, singly
-    /// leaky, and doubly leaky sectors. The two real bounds are obtained from
+    /// and does not cover all exterior sheets or certify physical mode labels. The two real bounds are obtained from
     /// the two high-|kx| preimages of `max_parallel_wavenumber`.
     ///
     /// `max_parallel_wavenumber` must lie above both exterior light lines so
@@ -192,7 +191,9 @@ where
     }
 
     /// Return the two conformal preimages of a real physical in-plane
-    /// wavenumber within one fundamental `i*pi` period.
+    /// wavenumber within a closed width-pi selection (one squared-coordinate period).
+    /// These are not all exterior-sheet preimages: shifts by `i*pi` reverse
+    /// both exterior wavevectors, and the full exterior period is `2*i*pi`.
     ///
     /// This inverse is defined for lossless exterior media with real positive
     /// constitutive products
@@ -202,8 +203,8 @@ where
     /// No restriction is placed on the position of `kx` relative to the two
     /// exterior light lines. Consequently the returned points cover:
     ///
-    /// - the guided / doubly-evanescent sector;
-    /// - the singly-leaky sector between unequal light lines;
+    /// - the doubly-evanescent real-coordinate locus;
+    /// - the one-propagating-channel locus between unequal light lines;
     /// - the doubly-propagating sector below both light lines;
     /// - the light-line branch points themselves.
     ///

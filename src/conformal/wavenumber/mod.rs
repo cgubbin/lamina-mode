@@ -69,22 +69,17 @@
 //! once when the map is constructed. Their signs therefore form part of the
 //! selected exterior radiation sheet.
 //!
-//! # Fundamental period
+//! # Squared-coordinate and exterior-sheet periods
 //!
-//! `k0²(z)` is periodic under
+//! The squared physical coordinate repeats under `z -> z + i*pi`, but both
+//! exterior wavevectors reverse sign. The ordered exterior data repeat under
+//! `z -> z + 2*i*pi`; the width-pi canonical strip is only a selection of sheets.
+//! Its boundaries at `Im(z) = +/-pi/2` are not equivalent exterior sheets.
+//! Canonical contours retain margins from these selected-strip boundaries.
+//! A signed-coordinate square root has separate branch continuation data.
 //!
-//! ```text
-//! z -> z + i*pi.
-//! ```
-//!
-//! The exterior wavevectors reverse sign under the same translation.
-//! A convenient representative is therefore
-//!
-//! ```text
-//! -pi/2 <= Im(z) <= pi/2,
-//! ```
-//!
-//! with the upper and lower boundaries periodically identified.
+//! For the correspondence to Bakhtazad et al. (1997), material restrictions,
+//! classification assumptions and roadmap, see the crate-level mathematical guide.
 //!
 //! # Physical real-k0 geometry
 //!
@@ -149,7 +144,7 @@
 //! ```
 //!
 //! both exterior channels are propagating. The inverse roots are negative real
-//! and the physical real-k0 locus lies on the periodically identified
+//! and the physical real-k0 locus lies on the selected-strip
 //! boundaries
 //!
 //! ```text
@@ -174,7 +169,7 @@
 //! Im(z) = 0.
 //! ```
 //!
-//! A single chart spanning the whole fundamental strip would therefore contain
+//! A single chart spanning the whole selected width-pi strip would therefore contain
 //! linear-coordinate branch points. The canonical lossless search is instead
 //! divided into two branch-point-free charts:
 //!
@@ -1391,7 +1386,7 @@ mod tests {
     }
 
     #[test]
-    fn above_both_light_lines_preimages_lie_on_periodic_boundaries() {
+    fn above_both_light_lines_preimages_lie_on_selected_strip_boundaries() {
         let map = lossless_map();
 
         let [first, second] = map.physical_preimages(2.0).unwrap();
@@ -1452,7 +1447,7 @@ mod tests {
     }
 
     #[test]
-    fn upper_light_line_maps_to_periodically_equivalent_preimages() {
+    fn upper_light_line_maps_to_equal_squared_coordinate_boundary_preimages() {
         let map = lossless_map();
 
         let [first, second] = map.physical_preimages(1.5).unwrap();
@@ -1648,7 +1643,7 @@ mod tests {
     }
 
     #[test]
-    fn search_regions_exclude_periodic_boundaries() {
+    fn search_regions_exclude_selected_strip_boundaries() {
         let map = lossless_map();
 
         let regions = map
@@ -1796,5 +1791,64 @@ mod tests {
             assert!(branch.im > lower_max);
             assert!(branch.im < upper_min);
         }
+    }
+    #[test]
+    fn sheet_period_and_inverse_multiplicity() {
+        let map = lossless_map();
+        let [a, b] = map.physical_preimages(0.5).unwrap().map(Option::unwrap);
+        let zs = [a, b, a + c(0.0, PI), b + c(0.0, PI)];
+        let signatures = zs.map(|z| {
+            assert_complex_close(map.k0_squared_scalar(z), c(0.5 * 0.5, 0.0));
+            let point = map.map_raw(constant(z));
+            (
+                jet_value(point.exterior_wavevectors().left()),
+                jet_value(point.exterior_wavevectors().right()),
+            )
+        });
+        // Each of the four sign pairs occurs once, away from exterior cutoffs.
+        for i in 0..4 {
+            assert!(signatures[i].0.norm() > 1e-6 && signatures[i].1.norm() > 1e-6);
+            for j in 0..i {
+                assert!(
+                    (signatures[i].0 - signatures[j].0).norm() > 1e-6
+                        || (signatures[i].1 - signatures[j].1).norm() > 1e-6
+                );
+            }
+            let repeated = map.map_raw(constant(zs[i] + c(0.0, 2.0 * PI)));
+            assert_complex_close(
+                jet_value(repeated.exterior_wavevectors().left()),
+                signatures[i].0,
+            );
+            assert_complex_close(
+                jet_value(repeated.exterior_wavevectors().right()),
+                signatures[i].1,
+            );
+        }
+        assert_complex_close(signatures[2].0, -signatures[0].0);
+        assert_complex_close(signatures[2].1, -signatures[0].1);
+        // At this positive-t light line two inverse roots coalesce.
+        let [a, b] = map.physical_preimages(0.75).unwrap().map(Option::unwrap);
+        assert_complex_close(a, b);
+        let point = map.map_raw(constant(a));
+        assert!(jet_value(point.exterior_wavevectors().left()).norm() < 1e-6);
+        // r=0 has one finite inverse t-root, with two exterior signs per 2*pi.
+        let symmetric = symmetric_map();
+        let finite: Vec<_> = symmetric
+            .physical_preimages(0.5)
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(finite.len(), 1);
+        let first = symmetric.map_raw(constant(finite[0]));
+        let opposite = symmetric.map_raw(constant(finite[0] + c(0.0, PI)));
+        assert_complex_close(
+            jet_value(first.exterior_wavevectors().left()),
+            jet_value(first.exterior_wavevectors().right()),
+        );
+        assert_complex_close(
+            jet_value(opposite.exterior_wavevectors().left()),
+            -jet_value(first.exterior_wavevectors().left()),
+        );
     }
 }

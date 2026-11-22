@@ -1,4 +1,5 @@
-//! Modal searches over a single analytic conformal chart.
+//! Modal searches over one fallible analytic chart (conformal or direct frequency).
+//! Native coordinate bounds and tolerances follow the bound domain provenance.
 //!
 //! This module is the first layer that combines:
 //!
@@ -12,6 +13,12 @@
 //! chart. It does not know whether that chart arose from an in-plane or
 //! wavenumber search.
 //!
+//! Checked optical failures retain their error sources. Successful results
+//! preserve estimates, multiplicities, unresolved leaves, summary, and termination.
+//! A cluster centroid is not an individual mode, and budget termination is not
+//! a completeness claim. Material-domain analyticity remains the caller's duty.
+//! Errors do not manufacture partial successes absent from argloc's result.
+//!
 //! Higher-level search orchestration is built above this layer:
 //!
 //! ```text
@@ -23,22 +30,25 @@
 //!     upper chart -> one SingleChartModalSearch
 //! ```
 
+use crate::analytic::AnalyticChart;
+use crate::conformal::chart::ConformalChart;
+use crate::dispersion::ChartDispersionError;
 use argloc::{
     ArgumentConfig, ArgumentLeaf, ArgumentResult, ComplexFunction, FindSingularitiesError,
-    LocatableComplex, LocatableFloat, Rect, RunSummary, ScalerError, SingularPointEstimate,
-    Termination, find_zeros,
+    FunctionBundle, LocatableComplex, LocatableFloat, Rect, RunSummary, ScalerError,
+    SingularPointEstimate, Termination, find_zeros,
 };
 
-use lamina_core::{ComplexScalar, ModeJet1, ScalarAlgebra, SeedJet};
+use lamina_core::{ComplexScalar, ModeJet1};
 
 use nalgebra::ComplexField;
 use ndarray::Ix0;
 use num_traits::{Float, FromPrimitive, float::FloatCore};
-use std::fmt::{Debug, Display};
+use std::sync::{Arc, Mutex};
 
 use crate::{
-    conformal::{ConformalRegion, ValidateConformalRegion, chart::LinearCoordinateMap},
-    dispersion::{ConformalDispersion, DispersionError, ModeDeterminantSolver},
+    conformal::ConformalRegion,
+    dispersion::{ConformalDispersion, ModeDeterminantSolver},
     mode::ConformalMode,
 };
 
@@ -48,14 +58,42 @@ where
     C: ComplexField,
     C::RealField: LocatableFloat<C>,
 {
-    #[error("failed to convert conformal search region into APM domain: {0}")]
+    #[error("failed to convert native search region into APM domain: {0}")]
     Domain(#[source] ScalerError<C::RealField>),
 
-    #[error("argument-principle modal search failed: {0}")]
-    Search(#[source] FindSingularitiesError<C, E>),
+    #[error("argument-principle modal search failed: {engine}")]
+    Search {
+        engine: FindSingularitiesError<C, E>,
+        #[source]
+        source: Option<E>,
+    },
 
     #[error("failed to construct a physical mode from an APM root: {0}")]
     Mode(#[source] E),
+}
+
+/// The upstream oracle error retains evaluation failures structurally, but some
+/// engine variants do not expose them through Error::source. Preserve both the
+/// full engine error and the last failing optical evaluation as a typed cause.
+#[derive(Clone)]
+struct TrackedFunction<F: ComplexFunction> {
+    inner: F,
+    failure: Arc<Mutex<Option<F::Error>>>,
+}
+impl<F: ComplexFunction> ComplexFunction for TrackedFunction<F>
+where
+    F::Error: Clone,
+{
+    type Complex = F::Complex;
+    type Error = F::Error;
+    fn bundle(&self, z: Self::Complex) -> Result<FunctionBundle<Self::Complex>, Self::Error> {
+        let result = self.inner.bundle(z);
+        *self
+            .failure
+            .lock()
+            .expect("evaluation error observer poisoned") = result.as_ref().err().cloned();
+        result
+    }
 }
 
 /// An APM singular-point estimate together with its physical modal
@@ -82,7 +120,7 @@ where
         &self.estimate
     }
 
-    /// Branch-consistent physical mode obtained from that estimate.
+    /// Branch-consistent interpretation of an estimate; not a validated root.
     pub fn mode(&self) -> &ConformalMode<C> {
         &self.mode
     }
@@ -126,7 +164,7 @@ where
         &self.estimates
     }
 
-    /// Iterate over the physical modes returned by this search.
+    /// Iterate over physical interpretations of estimates, including clusters.
     pub fn modes(&self) -> impl ExactSizeIterator<Item = &ConformalMode<C>> {
         self.estimates.iter().map(ModalEstimate::mode)
     }
@@ -157,58 +195,83 @@ where
 }
 
 #[derive(Clone, Debug)]
-pub struct SingleChartModalSearch<S, M, C>
+pub struct SingleChartModalSearch<S, M, C, H = ConformalChart<M, ModeJet1<C, Ix0>>>
 where
     C: ComplexField + Copy,
 {
-    dispersion: ConformalDispersion<S, M, C>,
+    dispersion: ConformalDispersion<S, M, C, H>,
+    search_region: ConformalRegion<C::RealField>,
 }
 
-impl<S, M, C> SingleChartModalSearch<S, M, C>
+impl<S, M, C, H> SingleChartModalSearch<S, M, C, H>
 where
     C: ComplexField + Copy,
 {
-    pub fn new(dispersion: ConformalDispersion<S, M, C>) -> Self {
-        Self { dispersion }
+    pub fn search_region(&self) -> &ConformalRegion<C::RealField> {
+        &self.search_region
     }
 
-    pub fn dispersion(&self) -> &ConformalDispersion<S, M, C> {
+    pub fn dispersion(&self) -> &ConformalDispersion<S, M, C, H> {
         &self.dispersion
     }
 
-    pub fn into_dispersion(self) -> ConformalDispersion<S, M, C> {
+    pub fn into_dispersion(self) -> ConformalDispersion<S, M, C, H> {
         self.dispersion
     }
 }
 
-impl<S, M, C, R> SingleChartModalSearch<S, M, C>
+impl<S, M, C, R, H> SingleChartModalSearch<S, M, C, H>
+where
+    C: ComplexScalar<RealField = R>,
+    R: Float + FromPrimitive + FloatCore,
+    M: Clone,
+    H: AnalyticChart<ModeJet1<C, Ix0>>,
+{
+    /// Keep the exact requested contour separately from the validated numerical
+    /// evaluation margin. This does not certify a pole-free material domain.
+    pub fn new(dispersion: ConformalDispersion<S, M, C, H>) -> Result<Self, H::Error> {
+        let search_region = *dispersion.chart().region();
+        let (solver, chart) = dispersion.into_parts();
+        let evaluation = chart.with_evaluation_margin()?;
+        Ok(Self {
+            dispersion: ConformalDispersion::with_chart(solver, evaluation),
+            search_region,
+        })
+    }
+}
+
+impl<S, M, C, R, H> SingleChartModalSearch<S, M, C, H>
 where
     C: LocatableComplex<R> + ComplexScalar<RealField = R>,
     R: LocatableFloat<C>,
-    M: LinearCoordinateMap<ModeJet1<C, Ix0>> + ValidateConformalRegion<R> + Clone,
+    M: Clone,
+    H: AnalyticChart<ModeJet1<C, Ix0>>,
     S: ModeDeterminantSolver<ModeJet1<C, Ix0>> + Clone,
     ConformalRegion<R>: TryInto<Rect<R>, Error = ScalerError<R>>,
 {
     pub fn search(
         &self,
         config: ArgumentConfig<R>,
-    ) -> Result<
-        ModalSearchResult<C>,
-        ModalSearchError<C, DispersionError<<M as ValidateConformalRegion<R>>::Error, S::Error>>,
-    > {
+    ) -> Result<ModalSearchResult<C>, ModalSearchError<C, ChartDispersionError<H::Error, S::Error>>>
+    {
         let domain = self
-            .dispersion
-            .chart()
-            .region()
-            .clone()
+            .search_region
             .try_into()
             .map_err(ModalSearchError::Domain)?;
 
-        dbg!(self.dispersion.chart().region());
-        dbg!(&domain);
-
-        let result = find_zeros(self.dispersion.clone(), domain, config)
-            .map_err(ModalSearchError::Search)?;
+        let failure = Arc::new(Mutex::new(None));
+        let function = TrackedFunction {
+            inner: self.dispersion.clone(),
+            failure: failure.clone(),
+        };
+        let result =
+            find_zeros(function, domain, config).map_err(|engine| ModalSearchError::Search {
+                engine,
+                source: failure
+                    .lock()
+                    .expect("evaluation error observer poisoned")
+                    .take(),
+            })?;
 
         let ArgumentResult {
             points,
@@ -336,7 +399,9 @@ mod tests {
         // Run the single-chart modal search.
         // -----------------------------------------------------------------
 
-        let search = SingleChartModalSearch::new(dispersion);
+        let requested = *dispersion.chart().region();
+        let search = SingleChartModalSearch::new(dispersion).unwrap();
+        assert_eq!(*search.search_region(), requested);
 
         let result = search.search(ArgumentConfig::new(1.0e-6)).unwrap();
 
