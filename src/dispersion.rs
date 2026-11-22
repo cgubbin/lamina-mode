@@ -1,4 +1,7 @@
-//! Analytic modal dispersion functions over a conformal chart.
+//! Analytic modal dispersion over one fallible conformal or frequency chart.
+//! The legacy type names remain private. Native derivatives are dF/dz for
+//! conformal charts and dF/dk0 for direct frequency charts; the latter use core
+//! constitutive jets and independently continued exterior branch values.
 //!
 //! This module joins the conformal-coordinate layer to a precompiled
 //! `lamina-core` mode solver.
@@ -50,7 +53,9 @@
 //!
 //! This restriction is important for argument-principle methods: the
 //! determinant supplied to the APM must be analytic on and inside its contour,
-//! except for the zeros and poles being counted.
+//! with zeros allowed but no poles anywhere in the closed search domain or its
+//! surrounding analytic neighborhood. Finite samples and a valid coordinate
+//! chart do not establish that material-domain obligation.
 //!
 //! A physical search may compile into more than one dispersion function. For
 //! example, the canonical lossless complex-wavenumber search uses separate
@@ -64,14 +69,20 @@
 //! determinant from canonical coordinates and explicitly supplied exterior
 //! wavevectors.
 //!
-//! The implementation for the concrete core solver should simply forward to
-//! the corresponding precompiled solve operation and return its determinant.
+//! The concrete adapter forwards to checked_determinant and carries its input,
+//! backend, or output failure through DispersionError::Solver. This is a
+//! pointwise numerical check, not a pole-free material-domain certificate.
+//! Exterior wavevector jets are passed through unchanged; one conformal seed
+//! produces both F and F_prime without recomputing exterior principal roots.
 
+use crate::analytic::AnalyticChart;
+#[cfg(test)]
+use crate::conformal::{ValidateConformalRegion, chart::LinearCoordinateMap};
 use lamina_core::{
     Backend, CanonicalCoordinates, ComplexPlane, ComplexPlaneEvaluator, ComplexScalar,
-    ConstitutiveEvaluator, ConstitutiveLift, ExteriorWavevectors, Jet, ModeJet1,
-    PlaneWaveDeterminant, Polarisation, ProjectPlaneWaveModeDeterminant, ScalarAlgebra, SeedJet,
-    Stack, StackCompileError, StackThicknessJet,
+    ConstitutiveEvaluator, ConstitutiveLift, DeterminantEvaluationError, ExteriorWavevectors, Jet,
+    ModeJet1, PlaneWaveDeterminant, Polarisation, ProjectPlaneWaveModeDeterminant, ScalarAlgebra,
+    SeedJet, Stack, StackCompileError, StackThicknessJet,
 };
 
 use argloc::FunctionBundle;
@@ -81,10 +92,7 @@ use num_traits::{Float, FromPrimitive};
 use std::fmt::Debug;
 
 use crate::{
-    conformal::{
-        ValidateConformalRegion,
-        chart::{ConformalChart, ConformalChartError, LinearCoordinateMap},
-    },
+    conformal::chart::{ConformalChart, ConformalChartError},
     mode::ConformalMode,
 };
 
@@ -113,34 +121,38 @@ where
     ) -> Result<A, Self::Error>;
 }
 
-/// Failure while evaluating a conformal modal dispersion function.
+/// Failure while evaluating a charted modal dispersion function.
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
-pub enum DispersionError<RegionError, SolverError> {
-    /// The conformal chart could not evaluate the requested point.
-    #[error("conformal chart evaluation failed: {0}")]
-    Chart(ConformalChartError<RegionError>),
+pub enum ChartDispersionError<ChartError, SolverError> {
+    /// The analytic chart could not evaluate the requested point.
+    #[error("analytic chart evaluation failed: {0}")]
+    Chart(#[source] ChartError),
 
     /// The precompiled optical solver failed.
     #[error("modal determinant evaluation failed: {0}")]
-    Solver(SolverError),
+    Solver(#[source] SolverError),
 }
 
-/// An analytic modal dispersion function over one conformal chart.
+pub type DispersionError<R, E> = ChartDispersionError<ConformalChartError<R>, E>;
+
+/// An analytic modal dispersion function over one fallible chart.
 ///
 /// `S` is a precompiled optical mode solver.
 ///
-/// `M` is the raw conformal map contained by the chart.
+/// `M` is the raw conformal map for the default chart; direct frequency uses ().
+/// `H` supplies the fallible native-coordinate chart contract.
 ///
 /// `C` is the complex scalar type. Internally the dispersion function uses
 /// [`ModeJet1`] with scalar dimension [`Ix0`], because the first modal
 /// implementation requires only `F(z)` and `dF/dz`.
 #[derive(Clone, Debug)]
-pub struct ConformalDispersion<S, M, C>
+pub struct ConformalDispersion<S, M, C, H = ConformalChart<M, ModeJet1<C, Ix0>>>
 where
     C: ComplexField + Copy,
 {
     solver: S,
-    chart: ConformalChart<M, ModeJet1<C, Ix0>>,
+    chart: H,
+    marker: std::marker::PhantomData<(M, C)>,
 }
 
 impl<S, M, C> ConformalDispersion<S, M, C>
@@ -148,30 +160,43 @@ where
     C: ComplexField + Copy,
 {
     pub fn new(solver: S, chart: ConformalChart<M, ModeJet1<C, Ix0>>) -> Self {
-        Self { solver, chart }
+        Self {
+            solver,
+            chart,
+            marker: std::marker::PhantomData,
+        }
     }
-
+}
+impl<S, M, C, H> ConformalDispersion<S, M, C, H>
+where
+    C: ComplexField + Copy,
+{
+    pub fn with_chart(solver: S, chart: H) -> Self {
+        Self {
+            solver,
+            chart,
+            marker: std::marker::PhantomData,
+        }
+    }
     pub fn solver(&self) -> &S {
         &self.solver
     }
-
-    pub fn chart(&self) -> &ConformalChart<M, ModeJet1<C, Ix0>> {
+    pub fn chart(&self) -> &H {
         &self.chart
     }
-
-    pub fn into_parts(self) -> (S, ConformalChart<M, ModeJet1<C, Ix0>>) {
+    pub fn into_parts(self) -> (S, H) {
         (self.solver, self.chart)
     }
 }
 
-impl<S, M, C, R> ConformalDispersion<S, M, C>
+impl<S, M, C, R, H> ConformalDispersion<S, M, C, H>
 where
     C: ComplexScalar<RealField = R> + Copy,
     R: Float + FromPrimitive + Copy,
-    M: LinearCoordinateMap<ModeJet1<C, Ix0>> + ValidateConformalRegion<R>,
+    H: AnalyticChart<ModeJet1<C, Ix0>>,
     S: ModeDeterminantSolver<ModeJet1<C, Ix0>>,
 {
-    /// Evaluate both `F(z)` and `dF/dz`.
+    /// Evaluate the characteristic and its native derivative (dF/dz or dF/dk0).
     ///
     /// `z` is seeded as the sole independent variable of a first-order mode
     /// jet. The chart then maps that jet into canonical optical coordinates
@@ -180,21 +205,18 @@ where
     pub fn evaluate(
         &self,
         z: C,
-    ) -> Result<
-        FunctionBundle<C>,
-        DispersionError<<M as ValidateConformalRegion<R>>::Error, S::Error>,
-    > {
+    ) -> Result<FunctionBundle<C>, ChartDispersionError<H::Error, S::Error>> {
         // ModeJet1 has exactly one independent variable, so seed index zero
         // is structurally valid.
         let z = ModeJet1::variable(arr0(z), 0)
             .expect("ModeJet1 must accept its sole variable at index zero");
 
-        let point = self.chart.map(z).map_err(DispersionError::Chart)?;
+        let point = self.chart.map(z).map_err(ChartDispersionError::Chart)?;
 
         let determinant = self
             .solver
             .determinant(point.coordinates(), point.exterior_wavevectors())
-            .map_err(DispersionError::Solver)?;
+            .map_err(ChartDispersionError::Solver)?;
 
         Ok(FunctionBundle::new(
             determinant.value()[()],
@@ -208,20 +230,14 @@ where
     /// Keeping this method nevertheless gives the APM-facing API the shape it
     /// requires today without committing the implementation to separate value
     /// and derivative execution paths.
-    pub fn value(
-        &self,
-        z: C,
-    ) -> Result<C, DispersionError<<M as ValidateConformalRegion<R>>::Error, S::Error>> {
+    pub fn value(&self, z: C) -> Result<C, ChartDispersionError<H::Error, S::Error>> {
         Ok(*self.evaluate(z)?.value())
     }
 
     /// Evaluate only the conformal derivative `dF/dz`.
     ///
     /// This currently performs the same first-order solve as [`Self::evaluate`].
-    pub fn derivative(
-        &self,
-        z: C,
-    ) -> Result<C, DispersionError<<M as ValidateConformalRegion<R>>::Error, S::Error>> {
+    pub fn derivative(&self, z: C) -> Result<C, ChartDispersionError<H::Error, S::Error>> {
         Ok(*self.evaluate(z)?.derivative())
     }
 
@@ -229,9 +245,11 @@ where
     pub fn mode_at(
         &self,
         z: C,
-    ) -> Result<ConformalMode<C>, DispersionError<<M as ValidateConformalRegion<R>>::Error, S::Error>>
-    {
-        let coordinate = self.chart().coordinate(z).map_err(DispersionError::Chart)?;
+    ) -> Result<ConformalMode<C>, ChartDispersionError<H::Error, S::Error>> {
+        let coordinate = self
+            .chart()
+            .coordinate(z)
+            .map_err(ChartDispersionError::Chart)?;
 
         let residual = self.value(z)?;
 
@@ -295,7 +313,7 @@ where
     <B as Backend<J, ComplexPlane>>::Entries:
         ProjectPlaneWaveModeDeterminant<Determinant = PlaneWaveDeterminant<J>>,
 {
-    type Error = <B as Backend<J, ComplexPlane>>::Error;
+    type Error = DeterminantEvaluationError<<B as Backend<J, ComplexPlane>>::Error>;
 
     fn determinant(
         &self,
@@ -303,7 +321,7 @@ where
         exterior: &ExteriorWavevectors<J>,
     ) -> Result<J, Self::Error> {
         self.evaluator()
-            .determinant(coordinates, exterior, self.polarisation())
+            .checked_determinant(coordinates, exterior, self.polarisation())
             .map(|determinant| determinant.into_inner())
     }
 }
@@ -865,7 +883,7 @@ mod integration_tests {
         h: f64,
     ) -> Result<C, DispersionError<<M as ValidateConformalRegion<f64>>::Error, S::Error>>
     where
-        M: LinearCoordinateMap<ModeJet1<C, Ix0>> + ValidateConformalRegion<f64>,
+        M: LinearCoordinateMap<ModeJet1<C, Ix0>> + ValidateConformalRegion<f64> + Clone,
         S: ModeDeterminantSolver<ModeJet1<C, Ix0>>,
     {
         let delta = c(h, 0.0);
@@ -886,7 +904,7 @@ mod integration_tests {
         z: C,
     ) -> Result<(), DispersionError<<M as ValidateConformalRegion<f64>>::Error, S::Error>>
     where
-        M: LinearCoordinateMap<J> + ValidateConformalRegion<f64>,
+        M: LinearCoordinateMap<J> + ValidateConformalRegion<f64> + Clone,
         S: ModeDeterminantSolver<J>,
         C: ComplexField<RealField = f64> + Copy,
         J: ScalarAlgebra<Scalar = C, Dimension = Ix0> + SeedJet + Clone,
@@ -1012,7 +1030,7 @@ mod integration_tests {
         let dispersion = wavenumber_dispersion(Polarisation::TransverseElectric);
 
         for z in [c(-0.45, 0.30), c(0.00, 0.55), c(0.40, 0.80)] {
-            assert_derivative_matches_finite_difference(&dispersion, z);
+            assert_derivative_matches_finite_difference(&dispersion, z).unwrap();
         }
     }
 
@@ -1021,7 +1039,7 @@ mod integration_tests {
         let dispersion = wavenumber_dispersion(Polarisation::TransverseMagnetic);
 
         for z in [c(-0.35, 0.35), c(0.10, 0.60), c(0.35, 0.90)] {
-            assert_derivative_matches_finite_difference(&dispersion, z);
+            assert_derivative_matches_finite_difference(&dispersion, z).unwrap();
         }
     }
 
@@ -1065,7 +1083,7 @@ mod integration_tests {
         let dispersion = lossy_interior_in_plane_dispersion();
 
         for z in [c(-0.35, 0.20), c(0.05, -0.30), c(0.40, 0.25)] {
-            assert_derivative_matches_finite_difference(&dispersion, z);
+            assert_derivative_matches_finite_difference(&dispersion, z).unwrap();
         }
     }
 
