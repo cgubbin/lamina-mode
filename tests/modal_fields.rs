@@ -285,3 +285,47 @@ fn leaky_cavity_finite_growth_and_overflow_are_separate() {
     assert!(matches!(failure.cause, FieldRecoveryError::Core(_)));
     assert_eq!(failure.point.native_coordinate(), point.native_coordinate());
 }
+
+#[test]
+fn physical_profile_keeps_depths_sides_and_normalization() {
+    let point = fixtures::film(true).unwrap();
+    let sampling = FieldSampling::new()
+        .left_exterior(ExteriorSampling::point(Length::nanometres(10.)))
+        .layer(0, LayerSampling::uniform_with_boundaries(3, true, true))
+        .right_exterior(ExteriorSampling::point(Length::centimetres(0.)));
+    let raw = point
+        .sample_profile_with(Scatter2::new(), &sampling, settings())
+        .unwrap();
+    let width = fixtures::D / KP;
+    for (value, want) in raw
+        .depths_cm
+        .iter()
+        .zip([-1e-6, 0., width / 2., width, width])
+    {
+        assert!((value - want).abs() < 1e-15);
+    }
+    assert_eq!(raw.depths_cm.len(), 5);
+    assert_ne!(
+        raw.fields.sampling().positions()[3],
+        raw.fields.sampling().positions()[4]
+    );
+    assert!(matches!(
+        raw.normalization,
+        ProfileNormalization::BackendSeed { .. }
+    ));
+    let pole = point
+        .normalize_with(
+            Scatter2::new(),
+            PoleVariable::BetaAtFixedK0,
+            fixtures::ASSUME,
+            Default::default(),
+            settings(),
+        )
+        .unwrap();
+    let profile = pole.sample_profile(&sampling).unwrap();
+    assert_eq!(profile.depths_cm, raw.depths_cm);
+    assert!(
+        matches!(profile.normalization,ProfileNormalization::ScalarPole(ref factor) if factor.scale==pole.normalization.scale)
+    );
+    assert_eq!(profile.wavevectors, *point.signature().unwrap());
+}

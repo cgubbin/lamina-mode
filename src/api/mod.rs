@@ -19,10 +19,18 @@
 mod derivatives;
 mod diagnostic;
 mod fields;
+mod guided;
 mod normalization;
+mod power;
+mod sensitivity;
+mod profile;
 pub use derivatives::*;
 pub use fields::*;
+pub use guided::*;
 pub use normalization::*;
+pub use power::*;
+pub use sensitivity::*;
+pub use profile::*;
 mod branch;
 mod report;
 mod solver;

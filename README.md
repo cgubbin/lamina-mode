@@ -341,3 +341,7 @@ Accepted-point [modal fields](docs/modal-fields.md) use core sampling and explic
 See [pole normalization](docs/pole-normalization.md) for complete scalar-pole factors, normalized fields and the 1D exterior-cancellation checks.
 
 [Dispersion branches and physical report](docs/modal-branches.md)
+
+[Integrated photonics ROM roadmap](docs/integrated-photonics-roadmap.md)
+
+[Enumerating a guided basis](docs/guided-basis.md)
