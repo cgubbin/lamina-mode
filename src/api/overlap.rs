@@ -40,7 +40,10 @@ pub enum GuidedOverlapError {
     Quadrature,
 }
 
-fn interface_positions(point: &ModePoint, origin: f64) -> Result<Vec<f64>, GuidedOverlapError> {
+pub(super) fn interface_positions(
+    point: &ModePoint,
+    origin: f64,
+) -> Result<Vec<f64>, GuidedOverlapError> {
     if !origin.is_finite() {
         return Err(GuidedOverlapError::Registration);
     }
@@ -62,10 +65,21 @@ fn sample_grid(
     partition: &[f64],
     panels: usize,
 ) -> FieldSampling<f64> {
+    sample_grid_with_exterior(interfaces, widths, partition, panels, false)
+}
+
+pub(super) fn sample_grid_with_exterior(
+    interfaces: &[f64],
+    widths: &[f64],
+    partition: &[f64],
+    panels: usize,
+    exterior_at_interface: bool,
+) -> FieldSampling<f64> {
+    let distance = |d| Length::centimetres(if exterior_at_interface { 0.0 } else { d });
     let last = interfaces.len() - 1;
-    let mut sampling = FieldSampling::new().left_exterior(ExteriorSampling::point(
-        Length::centimetres(interfaces[0] - partition[0]),
-    ));
+    let mut sampling = FieldSampling::new().left_exterior(ExteriorSampling::point(distance(
+        interfaces[0] - partition[0],
+    )));
     for interval in partition.windows(2) {
         let left = interval[0];
         let right = interval[1];
@@ -80,11 +94,11 @@ fn sample_grid(
         });
         sampling = if region == 0 {
             sampling.left_exterior(ExteriorSampling::distances(
-                coordinates.map(|z| Length::centimetres(interfaces[0] - z)),
+                coordinates.map(|z| distance(interfaces[0] - z)),
             ))
         } else if region > last {
             sampling.right_exterior(ExteriorSampling::distances(
-                coordinates.map(|z| Length::centimetres(z - interfaces[last])),
+                coordinates.map(|z| distance(z - interfaces[last])),
             ))
         } else {
             let width = widths[region - 1];
@@ -101,7 +115,7 @@ fn sample_grid(
             )
         };
     }
-    sampling.right_exterior(ExteriorSampling::point(Length::centimetres(
+    sampling.right_exterior(ExteriorSampling::point(distance(
         partition[partition.len() - 1] - interfaces[last],
     )))
 }
@@ -416,7 +430,7 @@ fn differentiate_overlap<B: lamina_core::ModalDerivativeBackend>(
     }
 }
 
-fn pairing(a: [Complex; 6], b: [Complex; 6]) -> Complex {
+pub(super) fn pairing(a: [Complex; 6], b: [Complex; 6]) -> Complex {
     (a[1] * b[5].conj() - a[2] * b[4].conj() + b[1].conj() * a[5] - b[2].conj() * a[4])
         * (0.25 * super::power::CM_TO_M_OVER_Z0)
 }

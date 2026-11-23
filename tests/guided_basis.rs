@@ -711,3 +711,162 @@ fn guided_overlap_tangent_tracks_registration_and_moving_limits() {
     let together = evaluate([&a, &a], [&change, &change], aligned);
     assert!(together.tangent.unwrap().power_rate_w_per_m.norm() < 1e-8);
 }
+
+#[test]
+fn tracked_coupled_slabs_match_independent_enumeration() {
+    let stack = |gap| {
+        Stack::from_analytical_materials(Constant::vacuum(), Constant::vacuum())
+            .analytical_layer(Constant::dielectric(4.0), Length::centimetres(0.20))
+            .analytical_layer(Constant::dielectric(1.21), Length::centimetres(gap))
+            .analytical_layer(Constant::dielectric(4.0), Length::centimetres(0.20))
+            .finalise()
+    };
+    let mut window = request(Polarisation::TransverseElectric);
+    window.abs_beta = [TAU * 1.1, 13.0];
+    let previous = enumerate_guided_modes(stack(0.55), window).unwrap();
+    let step = GuidedTrackingStep {
+        stack: stack(0.551),
+        window,
+        perturbation: GuidedPerturbation::thickness(3, 1).unwrap(),
+        increment: 0.001,
+        registration: GuidedOverlapRegistration {
+            origins_cm: [0.0; 2],
+        },
+        minimum_overlap: 0.2,
+        ambiguity_margin: 0.01,
+    };
+    let tracked = track_guided_basis(&previous, step).unwrap();
+    let reference = enumerate_guided_modes(stack(0.551), window).unwrap();
+    assert!(tracked.used_local_correction, "{:?}", tracked.predictions);
+    assert!(tracked.basis.is_complete());
+    assert_eq!(tracked.matches.len(), 2);
+    for (predicted, independent) in tracked.basis.modes.iter().zip(reference.modes) {
+        assert!(
+            (predicted.physical_coordinate() - independent.physical_coordinate()).norm() < 1e-8
+        );
+    }
+}
+
+#[test]
+fn guided_tracking_refreshes_when_an_upper_mode_reaches_cutoff() {
+    let window = request(Polarisation::TransverseElectric);
+    let previous = enumerate_guided_modes(slab(0.35, 1.0), window).unwrap();
+    let tracked = track_guided_basis(
+        &previous,
+        GuidedTrackingStep {
+            stack: slab(0.25, 1.0),
+            window,
+            perturbation: GuidedPerturbation::thickness(1, 0).unwrap(),
+            increment: -0.1,
+            registration: GuidedOverlapRegistration {
+                origins_cm: [0.0; 2],
+            },
+            minimum_overlap: 0.2,
+            ambiguity_margin: 0.01,
+        },
+    )
+    .unwrap();
+    assert!(!tracked.used_local_correction);
+    assert!(tracked.basis.is_complete());
+    assert_eq!(tracked.basis.modes.len(), 1);
+    assert_eq!(tracked.unmatched_source, [1]);
+}
+
+#[test]
+fn guided_projection_recovers_complex_coefficients_and_reports_rank() {
+    use lamina_core::{ExteriorSampling, FieldSampling, Scatter2};
+    let width = 0.4;
+    let mut basis =
+        enumerate_guided_modes(slab(width, 1.0), request(Polarisation::TransverseElectric))
+            .unwrap();
+    assert_eq!(basis.modes.len(), 2);
+    let expected = [Complex::new(0.8, 0.2), Complex::new(-0.3, 0.4)];
+    let modes: Vec<_> = basis
+        .modes
+        .iter()
+        .map(|mode| {
+            let profile = mode
+                .guided_power_profile_with(
+                    Scatter2::new(),
+                    &FieldSampling::new().left_exterior(ExteriorSampling::point(Length::zero())),
+                    Default::default(),
+                )
+                .unwrap();
+            let beta = mode.physical_coordinate().re;
+            let amplitude = profile.fields.quantity().electric().y()[0];
+            (beta, amplitude)
+        })
+        .collect();
+    let sample = |z: f64, _side| {
+        let mut result = [Complex::ZERO; 6];
+        for ((beta, amplitude), coefficient) in modes.iter().copied().zip(expected) {
+            let alpha = (beta * beta - TAU * TAU).sqrt();
+            let q = (4.0 * TAU * TAU - beta * beta).sqrt();
+            let core = |z: f64| (q * z).cos() + alpha / q * (q * z).sin();
+            let (ey, derivative) = if z <= 0.0 {
+                let ey = (alpha * z).exp();
+                (ey, alpha * ey)
+            } else if z >= width {
+                let ey = core(width) * (-alpha * (z - width)).exp();
+                (ey, -alpha * ey)
+            } else {
+                (core(z), -q * (q * z).sin() + alpha * (q * z).cos())
+            };
+            let scale = coefficient * amplitude;
+            result[1] += scale * ey;
+            result[3] += scale * Complex::I * derivative / TAU;
+            result[5] += scale * beta * ey / TAU;
+        }
+        result
+    };
+    let input = || GuidedProjectionInput {
+        wavelength_cm: 1.0,
+        support_cm: [-12.0, 12.0],
+        interfaces_cm: &[0.0, 0.4],
+        sample: &sample,
+    };
+    let projection = project_guided_field(&basis, 0.0, input(), 1e-8).unwrap();
+    assert_eq!(projection.rank, 2);
+    let solution = projection.solution.unwrap();
+    assert!(solution.condition_number < 1.000001);
+    assert!(
+        solution.residual_w_per_m < 1e-9,
+        "{solution:?} · gram {:?} · rhs {:?}",
+        projection.gram,
+        projection.right_hand_side
+    );
+    for (actual, expected) in solution.coefficients.iter().zip(expected) {
+        assert!((*actual - expected).norm() < 1e-7, "{actual} != {expected}");
+    }
+    basis.modes[1] = basis.modes[0].clone();
+    let rank_deficient = project_guided_field(&basis, 0.0, input(), 1e-8).unwrap();
+    assert_eq!(rank_deficient.rank, 1);
+    assert!(rank_deficient.solution.is_none());
+}
+
+#[test]
+fn tracking_keeps_indistinguishable_sources_in_an_ambiguous_cluster() {
+    let window = request(Polarisation::TransverseElectric);
+    let mut previous = enumerate_guided_modes(slab(0.4, 1.0), window).unwrap();
+    previous.modes[1] = previous.modes[0].clone();
+    let result = track_guided_basis(
+        &previous,
+        GuidedTrackingStep {
+            stack: slab(0.4, 1.0),
+            window,
+            perturbation: GuidedPerturbation::thickness(1, 0).unwrap(),
+            increment: 0.0,
+            registration: GuidedOverlapRegistration {
+                origins_cm: [0.0; 2],
+            },
+            minimum_overlap: 0.2,
+            ambiguity_margin: 0.01,
+        },
+    )
+    .unwrap();
+    assert!(!result.used_local_correction);
+    assert!(result.matches.is_empty());
+    assert_eq!(result.ambiguous.len(), 1);
+    assert_eq!(result.ambiguous[0].source, [0, 1]);
+    assert_eq!(result.ambiguous[0].destination, [0]);
+}
