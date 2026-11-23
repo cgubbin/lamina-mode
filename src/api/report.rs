@@ -182,12 +182,12 @@ pub struct CandidateOutcome {
 /// Can be cloned independently of the report; source context stays shared.
 #[derive(Clone, Debug)]
 pub struct ModePoint {
-    root: r::AcceptedRoot,
-    backend: &'static str,
+    pub(super) root: r::AcceptedRoot,
+    pub(super) backend: &'static str,
     pub(super) chart: usize,
     pub(super) candidate: usize,
-    enclosure: Rect<f64>,
-    signature: Result<BranchSignature, Diagnostic>,
+    pub(super) enclosure: Rect<f64>,
+    pub(super) signature: Result<BranchSignature, Diagnostic>,
 }
 impl ModePoint {
     /// Selected core backend type name, for diagnostics rather than serialization.
