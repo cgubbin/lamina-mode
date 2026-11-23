@@ -511,6 +511,17 @@ impl GuidedBetaSensitivity {
         frame: GuidedObservationFrame,
         amplitude: Complex,
     ) -> Result<Vec<GuidedFieldSample>, GuidedBetaError> {
+        self.field_tangent_on_mesh(backend, sampling, frame, amplitude, None)
+    }
+
+    fn field_tangent_on_mesh<B: lamina_core::ModalDerivativeBackend>(
+        &self,
+        backend: &B,
+        sampling: &lamina_core::FieldSampling<f64>,
+        frame: GuidedObservationFrame,
+        amplitude: Complex,
+        mesh_velocities: Option<&[f64]>,
+    ) -> Result<Vec<GuidedFieldSample>, GuidedBetaError> {
         use lamina_core::{
             EvaluateMeromorphicMaterial, OwnedModeFields, Polarisation, ResolvedLayerPosition,
         };
@@ -565,7 +576,7 @@ impl GuidedBetaSensitivity {
                 let field = components(&recovered.fields, sample);
                 let mut tangent = components(&recovered.tangent, sample);
                 let result = (|| {
-                    if !fixed_lab {
+                    if !fixed_lab && mesh_velocities.is_none() {
                         return Ok(tangent);
                     }
                     let (region, velocity, interface) = match position {
@@ -606,8 +617,9 @@ impl GuidedBetaSensitivity {
                             (i + 1, velocity, interface)
                         }
                     };
+                    let target_velocity = mesh_velocities.map_or(0.0, |rates| rates[sample]);
                     if let Some(interface) = interface
-                        && velocities[interface] != 0.0
+                        && velocities[interface] != target_velocity
                         && (materials[interface] != materials[interface + 1]
                             || self.material_rates[interface] != self.material_rates[interface + 1])
                     {
@@ -642,7 +654,7 @@ impl GuidedBetaSensitivity {
                         }
                     };
                     for (value, gradient) in tangent.iter_mut().zip(gradient) {
-                        *value -= velocity * gradient;
+                        *value += (target_velocity - velocity) * gradient;
                     }
                     if tangent
                         .iter()
@@ -723,6 +735,24 @@ impl GuidedBetaSensitivity {
         sampling: &lamina_core::FieldSampling<f64>,
         frame: GuidedObservationFrame,
         amplitude: Complex,
+    ) -> Result<GuidedPowerSensitivity, GuidedPowerSensitivityError> {
+        self.power_field_tangent_on_mesh(backend, sampling, frame, amplitude, None)
+    }
+
+    pub(super) fn exterior_decay_rates(&self) -> [f64; 2] {
+        [
+            self.exterior.left().first()[()].im,
+            self.exterior.right().first()[()].im,
+        ]
+    }
+
+    pub(super) fn power_field_tangent_on_mesh<B: lamina_core::ModalDerivativeBackend>(
+        &self,
+        backend: &B,
+        sampling: &lamina_core::FieldSampling<f64>,
+        frame: GuidedObservationFrame,
+        amplitude: Complex,
+        mesh_velocities: Option<&[f64]>,
     ) -> Result<GuidedPowerSensitivity, GuidedPowerSensitivityError> {
         use super::power::CM_TO_M_OVER_Z0;
         use GuidedPowerSensitivityError::*;
@@ -844,7 +874,7 @@ impl GuidedBetaSensitivity {
                 return Err(IllConditionedPower);
             }
             let mut samples = self
-                .field_tangent_with(backend, sampling, frame, amplitude)
+                .field_tangent_on_mesh(backend, sampling, frame, amplitude, mesh_velocities)
                 .map_err(Fields)?;
             for sample in &mut samples {
                 if let Ok(tangent) = &mut sample.tangent {

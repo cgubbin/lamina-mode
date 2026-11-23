@@ -562,3 +562,152 @@ fn slab_sensitivities_converge_for_wavelength_index_and_interface_motion() {
         }
     }
 }
+
+#[test]
+fn guided_power_overlaps_check_signed_norm_orthogonality_and_exchange() {
+    let backend = lamina_core::Scatter2::new();
+    let te = request(Polarisation::TransverseElectric);
+    let modes = enumerate_guided_modes(slab(0.7, 1.44), te).unwrap().modes;
+    let mut backward = te;
+    backward.direction = GuidedDirection::Backward;
+    let reverse = enumerate_guided_modes(slab(0.7, 1.44), backward)
+        .unwrap()
+        .modes;
+    let tm = enumerate_guided_modes(slab(0.7, 1.44), request(Polarisation::TransverseMagnetic))
+        .unwrap()
+        .modes;
+    let other = enumerate_guided_modes(slab(0.55, 1.21), te).unwrap().modes;
+    let overlap = |a, b, origins_cm| {
+        guided_power_overlap_with(
+            &backend,
+            [a, b],
+            GuidedOverlapRegistration { origins_cm },
+            Default::default(),
+        )
+        .unwrap()
+        .power_w_per_m
+    };
+    assert!((overlap(&modes[0], &modes[0], [0.0; 2]) - 1.0).norm() < 1e-8);
+    assert!((overlap(&reverse[0], &reverse[0], [0.0; 2]) + 1.0).norm() < 1e-8);
+    assert!(overlap(&modes[0], &modes[1], [0.0; 2]).norm() < 1e-8);
+    assert!(overlap(&modes[0], &tm[0], [0.0; 2]).norm() < 1e-12);
+    let ab = overlap(&modes[0], &other[0], [0.0, 0.13]);
+    let ba = overlap(&other[0], &modes[0], [0.13, 0.0]);
+    let translated = overlap(&modes[0], &other[0], [2.0, 2.13]);
+    assert!(ab.norm() > 0.1);
+    assert!((ab - ba.conj()).norm() < 1e-10);
+    assert!((ab - translated).norm() < 1e-10);
+}
+
+#[test]
+fn guided_overlap_tangent_tracks_registration_and_moving_limits() {
+    let backend = lamina_core::Scatter2::new();
+    let solve = |d: f64| {
+        enumerate_guided_modes(slab(d, 1.44), request(Polarisation::TransverseElectric))
+            .unwrap()
+            .modes
+            .remove(0)
+    };
+    let a = solve(0.25);
+    let b = solve(0.30);
+    let shift = |rate| {
+        GuidedPerturbation::new(
+            "translation",
+            "cm",
+            vec![rate; 2],
+            0.0,
+            vec![ConstitutiveRate::default(); 3],
+        )
+        .unwrap()
+    };
+    let registration = GuidedOverlapRegistration {
+        origins_cm: [0.0, 0.07],
+    };
+    let evaluate = |modes, dirs, registration| {
+        guided_power_overlap_sensitivity_with(
+            &backend,
+            modes,
+            dirs,
+            registration,
+            Default::default(),
+        )
+        .unwrap()
+    };
+    let translating = shift(1.0);
+    let stationary = shift(0.0);
+    let common = evaluate([&a, &b], [&translating, &translating], registration);
+    assert!(common.tangent.unwrap().power_rate_w_per_m.norm() < 1e-10);
+    let change = GuidedPerturbation::thickness(1, 0).unwrap();
+    let result = evaluate([&a, &b], [&stationary, &change], registration);
+    let rate = result.tangent.unwrap().power_rate_w_per_m;
+    let overlap = |width| {
+        guided_power_overlap_with(
+            &backend,
+            [&a, &solve(width)],
+            registration,
+            Default::default(),
+        )
+        .unwrap()
+        .power_w_per_m
+    };
+    let h = 1e-4;
+    let fd = (overlap(0.30 + h) - overlap(0.30 - h)) / (2.0 * h);
+    assert!((rate - fd).norm() < 2e-6, "jet={rate}, difference={fd}");
+    let displacement = evaluate([&a, &b], [&stationary, &translating], registration)
+        .tangent
+        .unwrap()
+        .power_rate_w_per_m;
+    let shifted = |delta| {
+        guided_power_overlap_with(
+            &backend,
+            [&a, &b],
+            GuidedOverlapRegistration {
+                origins_cm: [0.0, 0.07 + delta],
+            },
+            Default::default(),
+        )
+        .unwrap()
+        .power_w_per_m
+    };
+    assert!((displacement - (shifted(h) - shifted(-h)) / (2.0 * h)).norm() < 2e-6);
+    let wavelength = GuidedPerturbation::new(
+        "wavelength",
+        "cm",
+        vec![0.0; 2],
+        1.0,
+        vec![ConstitutiveRate::default(); 3],
+    )
+    .unwrap();
+    let spectral = evaluate([&a, &b], [&wavelength, &wavelength], registration)
+        .tangent
+        .unwrap()
+        .power_rate_w_per_m;
+    let at_wavelength = |delta| {
+        let mut req = request(Polarisation::TransverseElectric);
+        req.wavelength = Length::centimetres(1.0 + delta);
+        let a = enumerate_guided_modes(slab(0.25, 1.44), req)
+            .unwrap()
+            .modes
+            .remove(0);
+        let b = enumerate_guided_modes(slab(0.30, 1.44), req)
+            .unwrap()
+            .modes
+            .remove(0);
+        guided_power_overlap_with(&backend, [&a, &b], registration, Default::default())
+            .unwrap()
+            .power_w_per_m
+    };
+    let fd = (at_wavelength(h) - at_wavelength(-h)) / (2.0 * h);
+    assert!((spectral - fd).norm() < 2e-6);
+    let aligned = GuidedOverlapRegistration {
+        origins_cm: [0.0; 2],
+    };
+    let split = evaluate([&a, &a], [&stationary, &translating], aligned);
+    assert!(matches!(
+        split.tangent,
+        Err(GuidedOverlapDerivativeError::SeparatingInterfaces { .. })
+    ));
+    assert!((split.base.power_w_per_m - 1.0).norm() < 1e-8);
+    let together = evaluate([&a, &a], [&change, &change], aligned);
+    assert!(together.tangent.unwrap().power_rate_w_per_m.norm() < 1e-8);
+}
