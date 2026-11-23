@@ -870,3 +870,147 @@ fn tracking_keeps_indistinguishable_sources_in_an_ambiguous_cluster() {
     assert_eq!(result.ambiguous[0].source, [0, 1]);
     assert_eq!(result.ambiguous[0].destination, [0]);
 }
+
+#[test]
+fn guided_reciprocity_is_antisymmetric_and_pairs_counterpropagating_modes() {
+    let backend = lamina_core::Scatter2::new();
+    let mut window = request(Polarisation::TransverseElectric);
+    let a = enumerate_guided_modes(slab(0.25, 1.44), window)
+        .unwrap()
+        .modes
+        .remove(0);
+    window.direction = GuidedDirection::Backward;
+    let b = enumerate_guided_modes(slab(0.25, 1.44), window)
+        .unwrap()
+        .modes
+        .remove(0);
+    let flux = |a, b| {
+        guided_reciprocity_with(
+            &backend,
+            [a, b],
+            GuidedOverlapRegistration {
+                origins_cm: [0.0; 2],
+            },
+            Default::default(),
+        )
+        .unwrap()
+        .flux_w_per_m
+    };
+    assert!(flux(&a, &a).norm() < 1e-12);
+    assert!((flux(&a, &b) + flux(&b, &a)).norm() < 1e-12);
+    assert!((flux(&a, &b) + 4.0).norm() < 1e-8);
+}
+
+#[test]
+fn local_coupling_matches_neighbouring_overlaps_and_groups_small_gaps() {
+    let backend = lamina_core::Scatter2::new();
+    let stack = |interface: f64, epsilon_shift: f64| {
+        Stack::from_analytical_materials(Constant::vacuum(), Constant::dielectric(1.44))
+            .analytical_layer(
+                Constant::dielectric(4.0 + epsilon_shift),
+                Length::centimetres(0.42 + interface),
+            )
+            .analytical_layer(
+                Constant::dielectric(2.25),
+                Length::centimetres(0.10 - interface),
+            )
+            .finalise()
+    };
+    for pol in [
+        Polarisation::TransverseElectric,
+        Polarisation::TransverseMagnetic,
+    ] {
+        let window = request(pol);
+        let base = enumerate_guided_modes(stack(0.0, 0.0), window).unwrap();
+        assert!(base.modes.len() >= 2);
+        for (motion, material) in [(1.0, 0.0), (0.0, 1.0)] {
+            let mut rates = vec![ConstitutiveRate::default(); 4];
+            rates[1].relative_permittivity = material;
+            let direction =
+                GuidedPerturbation::new("slab direction", "1", vec![0.0, motion, 0.0], 0.0, rates)
+                    .unwrap();
+            let coupling =
+                guided_local_coupling_with(&backend, &base, &direction, 1e-7, Default::default())
+                    .unwrap();
+            let beta_rate = base.modes[0]
+                .guided_beta_sensitivity_with(
+                    &backend,
+                    &direction,
+                    Default::default(),
+                    Default::default(),
+                )
+                .unwrap()
+                .beta_rate;
+            assert!((coupling.perturbation_matrix[(0, 0)] - beta_rate).norm() < 1e-6);
+            let evaluate = |step| {
+                let displaced =
+                    enumerate_guided_modes(stack(step * motion, step * material), window).unwrap();
+                guided_power_overlap_with(
+                    &backend,
+                    [&displaced.modes[1], &base.modes[0]],
+                    GuidedOverlapRegistration {
+                        origins_cm: [0.0; 2],
+                    },
+                    Default::default(),
+                )
+                .unwrap()
+                .power_w_per_m
+            };
+            let step = 1e-5;
+            let fd = (evaluate(step) - evaluate(-step)) / (2.0 * step);
+            let coefficient = coupling.coefficients[(0, 1)].unwrap();
+            println!(
+                "{pol:?} interface={motion}, coefficient={coefficient}, finite difference={fd}, error={:e}",
+                (fd - coefficient).norm()
+            );
+            assert!(
+                (fd - coefficient).norm() < 1e-5,
+                "{pol:?} motion={motion}, fd={fd}, coefficient={coefficient}"
+            );
+            assert!((coefficient + coupling.coefficients[(1, 0)].unwrap().conj()).norm() < 1e-10);
+            let unresolved =
+                guided_local_coupling_with(&backend, &base, &direction, 100.0, Default::default())
+                    .unwrap();
+            assert_eq!(unresolved.unresolved_groups.len(), 1);
+            assert!(unresolved.coefficients[(0, 1)].is_none());
+            assert_eq!(unresolved.perturbation_matrix, coupling.perturbation_matrix);
+        }
+    }
+}
+
+#[test]
+fn coupled_slab_gap_has_the_predicted_local_mode_coupling() {
+    let backend = lamina_core::Scatter2::new();
+    let window = request(Polarisation::TransverseElectric);
+    let solve = |gap| {
+        let stack = Stack::from_analytical_materials(Constant::vacuum(), Constant::vacuum())
+            .analytical_layer(Constant::dielectric(4.0), Length::centimetres(0.2))
+            .analytical_layer(Constant::dielectric(1.21), Length::centimetres(gap))
+            .analytical_layer(Constant::dielectric(4.0), Length::centimetres(0.2))
+            .finalise();
+        enumerate_guided_modes(stack, window).unwrap()
+    };
+    let gap = 0.55;
+    let base = solve(gap);
+    let direction = GuidedPerturbation::thickness(3, 1).unwrap();
+    let local =
+        guided_local_coupling_with(&backend, &base, &direction, 1e-7, Default::default()).unwrap();
+    let overlap = |offset| {
+        let displaced = solve(gap + offset);
+        guided_power_overlap_with(
+            &backend,
+            [&displaced.modes[1], &base.modes[0]],
+            GuidedOverlapRegistration {
+                origins_cm: [0.0; 2],
+            },
+            Default::default(),
+        )
+        .unwrap()
+        .power_w_per_m
+    };
+    let step = 1e-5;
+    let fd = (overlap(step) - overlap(-step)) / (2.0 * step);
+    let local = local.coefficients[(0, 1)].unwrap();
+    println!("coupled slab gap: local={local}, finite difference={fd}");
+    assert!((local - fd).norm() < 1e-5);
+}

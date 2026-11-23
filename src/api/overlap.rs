@@ -120,13 +120,20 @@ pub(super) fn sample_grid_with_exterior(
     )))
 }
 
-fn integrand(a: &OwnedModeFields, b: &OwnedModeFields, i: usize) -> Complex {
+fn integrand(a: &OwnedModeFields, b: &OwnedModeFields, i: usize, flux: FluxPairing) -> Complex {
     let components = |fields: &OwnedModeFields| {
         let e = fields.quantity().electric();
         let h = fields.quantity().magnetic();
         [e.x()[i], e.y()[i], e.z()[i], h.x()[i], h.y()[i], h.z()[i]]
     };
-    pairing(components(a), components(b))
+    let a = components(a);
+    let b = components(b);
+    match flux {
+        FluxPairing::Power => pairing(a, b),
+        FluxPairing::Reciprocity => {
+            (a[1] * b[5] - a[2] * b[4] - b[1] * a[5] + b[2] * a[4]) * super::power::CM_TO_M_OVER_Z0
+        }
+    }
 }
 
 /// Evaluate the power pairing on the union of both structures' interfaces.
@@ -135,6 +142,58 @@ pub fn guided_power_overlap_with<B: ModalFieldBackend + Clone>(
     modes: [&ModePoint; 2],
     registration: GuidedOverlapRegistration,
     settings: FieldRecoverySettings,
+) -> Result<GuidedOverlap, GuidedOverlapError> {
+    integrate_guided_flux(backend, modes, registration, settings, FluxPairing::Power)
+}
+
+/// Bilinear longitudinal Lorentz flux of two normalized guided modes.
+#[derive(Clone, Debug)]
+pub struct GuidedReciprocity {
+    pub registration: GuidedOverlapRegistration,
+    /// Integral of (E₁ × H₂ − E₂ × H₁) along the common propagation axis.
+    pub flux_w_per_m: Complex,
+    pub exterior_flux_w_per_m: [Complex; 2],
+    pub partition_cm: Vec<f64>,
+    pub sample_count: usize,
+    pub quadrature_change_w_per_m: f64,
+}
+
+/// Evaluate the unconjugated, antisymmetric flux using signed unit-power modes.
+pub fn guided_reciprocity_with<B: ModalFieldBackend + Clone>(
+    backend: &B,
+    modes: [&ModePoint; 2],
+    registration: GuidedOverlapRegistration,
+    settings: FieldRecoverySettings,
+) -> Result<GuidedReciprocity, GuidedOverlapError> {
+    let result = integrate_guided_flux(
+        backend,
+        modes,
+        registration,
+        settings,
+        FluxPairing::Reciprocity,
+    )?;
+    Ok(GuidedReciprocity {
+        registration,
+        flux_w_per_m: result.power_w_per_m,
+        exterior_flux_w_per_m: result.exterior_power_w_per_m,
+        partition_cm: result.partition_cm,
+        sample_count: result.sample_count,
+        quadrature_change_w_per_m: result.quadrature_change_w_per_m,
+    })
+}
+
+#[derive(Clone, Copy)]
+enum FluxPairing {
+    Power,
+    Reciprocity,
+}
+
+fn integrate_guided_flux<B: ModalFieldBackend + Clone>(
+    backend: &B,
+    modes: [&ModePoint; 2],
+    registration: GuidedOverlapRegistration,
+    settings: FieldRecoverySettings,
+    flux: FluxPairing,
 ) -> Result<GuidedOverlap, GuidedOverlapError> {
     use GuidedOverlapError::*;
     let [a, b] = modes;
@@ -187,7 +246,7 @@ pub fn guided_power_overlap_with<B: ModalFieldBackend + Clone>(
         };
         let a = recover(0)?;
         let b = recover(1)?;
-        let value = |i| integrand(&a.fields, &b.fields, i);
+        let value = |i| integrand(&a.fields, &b.fields, i, flux);
         let tails = [
             value(0) / (roots[0][0] + roots[1][0]),
             value(sample_count - 1) / (roots[0][1] + roots[1][1]),
