@@ -139,6 +139,14 @@ pub fn enumerate_guided_modes(
     stack: AnalyticalMaterialStack<Complex>,
     req: GuidedWindow,
 ) -> Result<GuidedBasis, EnumerationError> {
+    search_guided_modes(stack, req, None).map(|(basis, _)| basis)
+}
+
+pub(super) fn search_guided_modes(
+    stack: AnalyticalMaterialStack<Complex>,
+    req: GuidedWindow,
+    predictions: Option<&[f64]>,
+) -> Result<(GuidedBasis, bool), EnumerationError> {
     let k = TAU / req.wavelength.as_centimetres();
     let [lo, hi] = req.abs_beta;
     if !(k.is_finite()
@@ -199,7 +207,7 @@ pub fn enumerate_guided_modes(
         unresolved: vec![],
     };
     if lo >= hi {
-        return Ok(report);
+        return Ok((report, false));
     }
     let counter = Counter {
         k,
@@ -216,7 +224,7 @@ pub fn enumerate_guided_modes(
             expected: None,
             cause: GuidedLimit::EndpointPhase,
         });
-        return Ok(report);
+        return Ok((report, false));
     };
     if low < high {
         report.expected = None;
@@ -225,14 +233,109 @@ pub fn enumerate_guided_modes(
             expected: None,
             cause: GuidedLimit::PhaseResolution,
         });
-        return Ok(report);
+        return Ok((report, false));
     }
     report.expected = Some((low - high) as usize);
     if low == high {
-        return Ok(report);
+        return Ok((report, false));
     }
     let problem = p::InPlaneProblem::in_plane(stack, k, req.polarisation, Scatter2::new())
         .map_err(|e| EnumerationError::Problem(e.to_string()))?;
+    let correct = |l: f64, h: f64| {
+        let mid = l + 0.5 * (h - l);
+        let sign = if req.direction == GuidedDirection::Forward {
+            1.
+        } else {
+            -1.
+        };
+        let z = counter.native(mid);
+        let zl = counter.native(l);
+        let zh = counter.native(h);
+        let rad = (zh - zl) * 0.5;
+        let accepted = (|| {
+            let bounds = ConformalRegion::new(zl, zh, -rad, rad)
+                .map_err(|e| BranchFailure::Domain(e.to_string()))?;
+            let d = problem
+                .domain(
+                    bounds,
+                    ReferenceSelection::Coordinate {
+                        reference: z.into(),
+                        coordinate: (mid * sign).into(),
+                    },
+                    Default::default(),
+                    req.assumption,
+                )
+                .map_err(|e| BranchFailure::Domain(e.to_string()))?;
+            problem.corrected_point(&d, z.into(), cfg)
+        })();
+        match accepted {
+            Ok((root, sig, enclosure))
+                if sig.k_parallel.re * sign > l
+                    && sig.k_parallel.re * sign < h
+                    && sig.k_parallel.im.abs() <= 1e-9 * mid
+                    && [sig.left, sig.right]
+                        .iter()
+                        .all(|r| r.im > 0. && r.re.abs() <= 1e-8 * r.im) =>
+            {
+                Ok(ModePoint {
+                    root,
+                    signature: Ok(sig),
+                    enclosure,
+                    chart: 0,
+                    candidate: 0,
+                    backend: std::any::type_name::<Scatter2>(),
+                })
+            }
+            Ok(_) => Err(GuidedLimit::OutsideBracket),
+            Err(e) => Err(GuidedLimit::Correction(e)),
+        }
+    };
+    if let Some(predictions) = predictions
+        && predictions.len() == (low - high) as usize
+    {
+        let local = (|| {
+            let mut roots = Vec::with_capacity(predictions.len());
+            let mut ordinals = std::collections::BTreeSet::new();
+            for &prediction in predictions {
+                let b = prediction.abs();
+                if !(lo < b && b < hi) {
+                    return None;
+                }
+                let mut radius = 1e-7 * b;
+                let mut bracket = None;
+                for _ in 0..18 {
+                    let l = (b - radius).max(lo);
+                    let h = (b + radius).min(hi);
+                    if let (Some(a), Some(c)) = (counter.index(l), counter.index(h)) {
+                        if a - c > 1 {
+                            break;
+                        }
+                        if a - c == 1 {
+                            bracket = Some((l, h, a));
+                            break;
+                        }
+                    }
+                    radius *= 2.0;
+                }
+                let (l, h, ordinal) = bracket?;
+                if !ordinals.insert(ordinal) {
+                    return None;
+                }
+                roots.push(correct(l, h).ok()?);
+            }
+            roots.sort_by(|a, b| {
+                b.physical_coordinate()
+                    .re
+                    .abs()
+                    .total_cmp(&a.physical_coordinate().re.abs())
+            });
+            Some(roots)
+        })();
+        if let Some(roots) = local {
+            report.modes = roots;
+            return Ok((report, true));
+        }
+    }
     let mut pending = vec![(lo, hi, low, high)];
     while let Some((l, h, a, b)) = pending.pop() {
         let count = (a - b) as usize;
@@ -246,51 +349,9 @@ pub fn enumerate_guided_modes(
         };
         let mid = l + 0.5 * (h - l);
         if count == 1 && h - l <= 1e-6 * mid {
-            let sign = if req.direction == GuidedDirection::Forward {
-                1.
-            } else {
-                -1.
-            };
-            let z = counter.native(mid);
-            let zl = counter.native(l);
-            let zh = counter.native(h);
-            let rad = (zh - zl) * 0.5;
-            let accepted = (|| {
-                let bounds = ConformalRegion::new(zl, zh, -rad, rad)
-                    .map_err(|e| BranchFailure::Domain(e.to_string()))?;
-                let d = problem
-                    .domain(
-                        bounds,
-                        ReferenceSelection::Coordinate {
-                            reference: z.into(),
-                            coordinate: (mid * sign).into(),
-                        },
-                        Default::default(),
-                        req.assumption,
-                    )
-                    .map_err(|e| BranchFailure::Domain(e.to_string()))?;
-                problem.corrected_point(&d, z.into(), cfg)
-            })();
-            match accepted {
-                Ok((root, sig, enclosure))
-                    if sig.k_parallel.re * sign > l
-                        && sig.k_parallel.re * sign < h
-                        && sig.k_parallel.im.abs() <= 1e-9 * mid
-                        && [sig.left, sig.right]
-                            .iter()
-                            .all(|r| r.im > 0. && r.re.abs() <= 1e-8 * r.im) =>
-                {
-                    report.modes.push(ModePoint {
-                        root,
-                        signature: Ok(sig),
-                        enclosure,
-                        chart: 0,
-                        candidate: 0,
-                        backend: std::any::type_name::<Scatter2>(),
-                    });
-                }
-                Ok(_) => report.unresolved.push(gap(GuidedLimit::OutsideBracket)),
-                Err(e) => report.unresolved.push(gap(GuidedLimit::Correction(e))),
+            match correct(l, h) {
+                Ok(point) => report.modes.push(point),
+                Err(cause) => report.unresolved.push(gap(cause)),
             }
             continue;
         }
@@ -315,5 +376,5 @@ pub fn enumerate_guided_modes(
             report.unresolved.push(gap(GuidedLimit::PhaseResolution));
         }
     }
-    Ok(report)
+    Ok((report, false))
 }
