@@ -1,0 +1,11 @@
+# Enumerating a guided basis
+
+Run the downstream example with `cargo run --locked --example guided_basis`. It builds an asymmetric dielectric slab at a fixed vacuum wavelength, enumerates six forward TE modes and samples each with unit longitudinal power per metre of invariant width.
+
+Pass an analytical core stack and a `GuidedWindow` to `enumerate_guided_modes`. Set the wavelength with a typed length and specify the open interval of |β| and cutoff margin in cm⁻¹. Select TE or TM and forward or backward propagation. Materials may be dispersive; all relative permittivities and permeabilities must be finite, positive and real at the stated wavelength. The caller's analytic declaration covers each local characteristic correction. Results use Scatter2.
+
+The eligible window starts above both exterior light lines by the requested positive margin and ends at or below the highest material light line. The report retains the request, exterior threshold, physical upper bound and eligible interval. `eligible == None` indicates an empty intersection. A light-line state with a nondecaying exterior tail falls outside the bound basis.
+
+Read `expected`, `modes` and `unresolved` together. A complete result has one checked, decaying physical point per counted state in the eligible open interval. A complete zero count means the interval contains no states. An undecidable endpoint phase gives an unknown count. A work limit or failed optical correction yields partial coverage, with an interval and cause for each gap. Accepted points are ordered by decreasing |β| in either direction. Each owns its physical source and supports field sampling, unit-power normalization and local sensitivities.
+
+The numerical count uses the unwrapped angle of the primary field and its continuous weighted derivative across all layers, including the two decaying half-space boundary conditions. The endpoint floor difference counts interior crossings. `phase_tolerance` is in cycles of π; an endpoint close to an integer within the tolerance and roundoff allowance is unresolved. Narrowing the tolerance alone does not establish accuracy for poorly conditioned stacks. The completeness status applies to the recorded eligible window, polarization, numerical precision and material class. Cutoff guard bands and other propagation channels require separate treatment.
