@@ -12,6 +12,8 @@ use lamina_core::{
 pub struct LinearDispersion {
     pub epsilon0: f64,
     pub epsilon_slope: f64,
+    pub epsilon_loss_slope: f64,
+    pub lossless_at: f64,
     pub mu0: f64,
     pub mu_slope: f64,
 }
@@ -21,6 +23,8 @@ impl LinearDispersion {
         Self {
             epsilon0,
             epsilon_slope,
+            epsilon_loss_slope: 0.0,
+            lossless_at: 0.0,
             mu0,
             mu_slope,
         }
@@ -48,7 +52,9 @@ impl Material for LinearDispersion {
         C: ComplexScalar<RealField = f64>,
     {
         wavenumber.map(|x| {
-            C::from_real(self.epsilon0) + C::from_real(x) * C::from_real(self.epsilon_slope)
+            C::from_real(self.epsilon0)
+                + C::from_real(x) * C::from_real(self.epsilon_slope)
+                + C::i() * C::from_real((x - self.lossless_at) * self.epsilon_loss_slope)
         })
     }
 
@@ -72,7 +78,9 @@ impl DifferentiableMaterial for LinearDispersion {
         C: ComplexScalar<RealField = f64>,
     {
         match order {
-            DerivativeOrder::First => wavenumber.map(|_| C::from_real(self.epsilon_slope)),
+            DerivativeOrder::First => wavenumber.map(|_| {
+                C::from_real(self.epsilon_slope) + C::i() * C::from_real(self.epsilon_loss_slope)
+            }),
             DerivativeOrder::Second => wavenumber.map(|_| C::zero()),
             DerivativeOrder::Third => wavenumber.map(|_| C::zero()),
         }
@@ -101,8 +109,13 @@ impl MeromorphicMaterial for LinearDispersion {
         C: ComplexScalar<RealField = Self::Real> + Copy,
         I: Sampled<Elem = C>,
     {
-        vacuum_wavenumber
-            .map(|x| C::from_real(self.epsilon0) + x * C::from_real(self.epsilon_slope))
+        vacuum_wavenumber.map(|x| {
+            C::from_real(self.epsilon0)
+                + x * C::from_real(self.epsilon_slope)
+                + C::i()
+                    * (x - C::from_real(self.lossless_at))
+                    * C::from_real(self.epsilon_loss_slope)
+        })
     }
 
     fn relative_permeability_complex<I, C>(&self, vacuum_wavenumber: I) -> I::Mapped<C>
@@ -125,7 +138,9 @@ impl DifferentiableMeromorphicMaterial for LinearDispersion {
         I: Sampled<Elem = C>,
     {
         match order {
-            DerivativeOrder::First => vacuum_wavenumber.map(|_| C::from_real(self.epsilon_slope)),
+            DerivativeOrder::First => vacuum_wavenumber.map(|_| {
+                C::from_real(self.epsilon_slope) + C::i() * C::from_real(self.epsilon_loss_slope)
+            }),
             DerivativeOrder::Second => vacuum_wavenumber.map(|_| C::zero()),
             DerivativeOrder::Third => vacuum_wavenumber.map(|_| C::zero()),
         }

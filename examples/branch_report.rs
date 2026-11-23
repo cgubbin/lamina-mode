@@ -71,18 +71,13 @@ fn profile(
     let length = |v: f64| Length::centimetres(v / UM);
     let mut sampling =
         FieldSampling::new().left_exterior(ExteriorSampling::uniform(81, length(0.5)));
-    let mut positions: Vec<_> = (0..81).map(|i| -0.5 + i as f64 / 160.).collect();
-    let mut start = 0.;
-    for (layer, &width) in widths.iter().enumerate() {
+    for layer in 0..widths.len() {
         sampling = sampling.layer(
             layer,
             LayerSampling::uniform_with_boundaries(81, true, true),
         );
-        positions.extend((0..81).map(|i| start + width * i as f64 / 80.));
-        start += width;
     }
     sampling = sampling.right_exterior(ExteriorSampling::uniform(81, length(0.5)));
-    positions.extend((0..81).map(|i| start + i as f64 / 160.));
     let settings = FieldRecoverySettings {
         characteristic_limit: 1e-5,
         ..Default::default()
@@ -94,25 +89,24 @@ fn profile(
         Default::default(),
         settings,
     ) {
-        Ok(mode) => (mode.fields(&sampling)?, "unit-delta pole".to_owned()),
+        Ok(mode) => (
+            mode.sample_profile(&sampling)?,
+            "unit-delta pole".to_owned(),
+        ),
         Err(e) => (
-            point.recover_fields_with(Scatter2::new(), &sampling, settings)?,
+            point.sample_profile_with(Scatter2::new(), &sampling, settings)?,
             format!("unit amplitude, normalization unavailable: {:?}", e.cause),
         ),
     };
     let mut f = File::create(out.join(format!("{name}-{id}-fields.csv")))?;
-    writeln!(
-        f,
-        "# {gauge}; {:?}",
-        point.signature().map_err(Clone::clone)?
-    )?;
+    writeln!(f, "# {gauge}; {:?}", fields.wavevectors)?;
     writeln!(
         f,
         "depth_um,Ex_re,Ex_im,Ey_re,Ey_im,Ez_re,Ez_im,Hx_re,Hx_im,Hy_re,Hy_im,Hz_re,Hz_im"
     )?;
     let a = fields.fields.quantity();
-    for (i, z) in positions.iter().enumerate() {
-        write!(f, "{z}")?;
+    for (i, z) in fields.depths_cm.iter().enumerate() {
+        write!(f, "{}", z * UM)?;
         for v in [
             a.electric().x(),
             a.electric().y(),

@@ -675,3 +675,144 @@ fn request_and_selector_failures_are_separate_and_preserve_the_point() {
     assert_eq!(report.source_backend, point.backend());
     assert_eq!(report.evaluation_backend, std::any::type_name::<Scatter2>());
 }
+
+#[test]
+fn guided_power_is_phase_fixed_and_independent_of_seed_scale() {
+    use lamina_core::{ExteriorSampling, FieldSampling};
+    for pol in [
+        Polarisation::TransverseElectric,
+        Polarisation::TransverseMagnetic,
+    ] {
+        let p = fixtures::guided(pol).unwrap();
+        let sampling =
+            FieldSampling::new().left_exterior(ExteriorSampling::point(Length::centimetres(0.)));
+        let profile = |amplitude| {
+            p.guided_power_profile_with(
+                Scatter2::new(),
+                &sampling,
+                FieldRecoverySettings {
+                    amplitude,
+                    characteristic_limit: 1e-5,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let a = profile(Complex::new(1., 0.));
+        let b = profile(Complex::new(-2., 3.));
+        let primary = |p: &ModalProfile| match pol {
+            Polarisation::TransverseElectric => p.fields.quantity().electric().y()[0],
+            Polarisation::TransverseMagnetic => p.fields.quantity().magnetic().y()[0],
+        };
+        let x = primary(&a);
+        assert!(x.re > 0. && x.im.abs() < 1e-10 * x.re);
+        assert!((x - primary(&b)).norm() < 1e-9 * x.norm());
+        let ProfileNormalization::GuidedPower(info) = a.normalization else {
+            panic!()
+        };
+        assert_eq!(info.signed_power_w_per_m, 1.);
+        assert!(info.seed_exterior_power_w_per_m.iter().all(|v| *v > 0.));
+        // Independent slab integral with primary field equal to one at the left interface.
+        let sig = p.signature().unwrap();
+        let q = (4. * sig.k0.re.powi(2) - sig.k_parallel.re.powi(2)).sqrt();
+        let tm = pol == Polarisation::TransverseMagnetic;
+        let weight = |epsilon| if tm { epsilon } else { 1. };
+        let a = sig.left.im * weight(4.) / q;
+        let d = p.provenance().stack().layers_left_to_right()[0]
+            .thickness()
+            .as_centimetres();
+        let v = q * d;
+        let core = (1. + a * a) * d / 2.
+            + (1. - a * a) * (2. * v).sin() / (4. * q)
+            + a * v.sin().powi(2) / q;
+        let right = v.cos() + a * v.sin();
+        let integral = 1. / (2. * sig.left.im)
+            + core / weight(4.)
+            + right * right / (2. * sig.right.im * weight(2.25));
+        let watts =
+            x.norm_sqr() * 0.01 / 376.730313412 * sig.k_parallel.re / (2. * sig.k0.re) * integral;
+        assert!((watts - 1.).abs() < 1e-7, "{pol:?} power {watts}");
+    }
+}
+
+#[test]
+fn guided_power_preserves_backward_flux_and_rejects_leaky_modes() {
+    use fixtures::fields::{KP, propagation};
+    use lamina_core::{ExteriorSampling, FieldSampling};
+    let sampling =
+        FieldSampling::new().right_exterior(ExteriorSampling::point(Length::centimetres(0.)));
+    let settings = FieldRecoverySettings {
+        characteristic_limit: 1e-5,
+        ..Default::default()
+    };
+    for pol in [
+        Polarisation::TransverseElectric,
+        Polarisation::TransverseMagnetic,
+    ] {
+        let q = (1.0_f64 - 0.8 * 0.8).sqrt();
+        let alpha = (0.8_f64 * 0.8 - 0.25).sqrt();
+        let weight = if pol == Polarisation::TransverseElectric {
+            1.
+        } else {
+            4.
+        };
+        let d = 2. * (weight * alpha / q).atan() / q;
+        let stack = Stack::from_analytical_materials(Constant::vacuum(), Constant::vacuum())
+            .analytical_layer(Constant::dielectric(4.), Length::centimetres(d / KP))
+            .finalise();
+        let p = propagation(stack, 0.5, (-0.8).into(), [1.0.into(); 2], pol).unwrap();
+        let profile = p
+            .guided_power_profile_with(Scatter2::new(), &sampling, settings)
+            .unwrap();
+        let ProfileNormalization::GuidedPower(info) = profile.normalization else {
+            panic!()
+        };
+        assert_eq!(info.signed_power_w_per_m, -1.);
+        let [l, r] = info.seed_exterior_power_w_per_m;
+        assert!((l - r).abs() < 1e-7 * l.abs() && l < 0.);
+    }
+    let cavity = fixtures::cavity(Polarisation::TransverseElectric, true).unwrap();
+    assert!(matches!(
+        cavity.guided_power_profile_with(Scatter2::new(), &sampling, settings),
+        Err(GuidedPowerError::Ineligible)
+    ));
+}
+
+#[test]
+fn guided_rates_combine_dispersion_and_explicit_index_variation() {
+    use std::f64::consts::TAU;
+
+    let stack = Stack::from_analytical_materials(
+        material::linear(1.0, 0.1, 1.0, -0.02),
+        material::linear(2.0, -0.03, 1.0, 0.04),
+    )
+    .finalise();
+    let wavelength_rate = 0.25;
+    let explicit = ConstitutiveRate::nonmagnetic_index(1.5, 0.2).unwrap();
+    let direction = GuidedPerturbation::new(
+        "combined variation",
+        "dimensionless",
+        vec![0.0],
+        wavelength_rate,
+        vec![explicit, ConstitutiveRate::default()],
+    )
+    .unwrap();
+    let rates = direction.total_regional_rates(&stack, TAU).unwrap();
+    assert!((explicit.relative_permittivity - 0.6).abs() < 1e-14);
+    assert!((direction.k0_rate(TAU).unwrap() + TAU * wavelength_rate).abs() < 1e-14);
+    let h = 1e-5;
+    for (region, handle) in [stack.left_exterior(), stack.right_exterior()].into_iter().enumerate() {
+        let evaluate = |step| {
+            let k0 = Scalar(Complex::new(TAU / (1.0 + step * wavelength_rate), 0.0));
+            let epsilon_rate = direction.regional_rates()[region].relative_permittivity;
+            (
+                handle.evaluate_relative_permittivity_complex(k0).re + epsilon_rate * step,
+                handle.evaluate_relative_permeability_complex(k0).re,
+            )
+        };
+        let plus = evaluate(h);
+        let minus = evaluate(-h);
+        assert!((rates[region].relative_permittivity - (plus.0 - minus.0) / (2.0 * h)).abs() < 1e-10);
+        assert!((rates[region].relative_permeability - (plus.1 - minus.1) / (2.0 * h)).abs() < 1e-10);
+    }
+}
