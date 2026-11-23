@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Differentiable multimode slab benchmark</title>
+<style>
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { margin: 0; line-height: 1.6; }
+main { max-width: 55rem; margin: 0 auto; padding: clamp(1rem, 5vw, 4rem); }
+h1 { font-size: clamp(2rem, 5vw, 3.4rem); line-height: 1.1; margin: 0 0 1.5rem; }
+h2 { margin: 2rem 0 .5rem; line-height: 1.25; }
+.table, pre { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { padding: .55rem .65rem; border-bottom: 1px solid GrayText; text-align: right; }
+th:first-child, td:first-child { text-align: left; }
+thead, pre { background: color-mix(in srgb, CanvasText 7%, Canvas); }
+pre { padding: 1rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>Differentiable multimode slab benchmark</h1>
+<p>Two forward TE modes propagate coherently in a symmetric slab with core index 2, cladding index 1, thickness 0.5 cm, and vacuum wavelength 1 cm. The supplied complex amplitudes are 1 and 0.3 + 0.6i in the signed unit-power, left-interface phase convention. The output is sampled at a quarter of the core thickness and at a propagation distance of 0.37 cm. The sample follows the core fraction as thickness changes. The propagation distance and modal coefficients stay fixed.</p>
+<h2>Beating and output</h2>
+<p>The even and odd slab phase equations independently predict a beat length of <strong>2.292837552 cm</strong>. The two enumerated propagation constants agree with the phase-equation roots within 1e−8 cm⁻¹. The squared magnitude of the coherent electric field repeats after one beat length to relative tolerance 1e−8 and changes by more than 1% at the half beat. Here intensity means squared electric-field magnitude at the sample.</p>
+<p>The complex output field is −166.519817 − 472.183015i.</p>
+<div class="table"><table><thead><tr><th scope="col">Perturbation</th><th scope="col">Complex field derivative per cm</th><th scope="col">Intensity derivative per cm</th></tr></thead><tbody><tr><td>Core thickness</td><td>1184.879252 − 7.597998i</td><td>−387436.462</td></tr><tr><td>Vacuum wavelength</td><td>−2345.661675 + 899.850114i</td><td>−68589.573</td></tr></tbody></table></div>
+<h2>Independent derivative checks</h2>
+<p>Each central difference enumerates and normalizes new modes on both sides of the perturbation before propagating them. Errors are absolute differences divided by the larger of one and the jet derivative magnitude.</p>
+<div class="table"><table><thead><tr><th scope="col">Perturbation</th><th scope="col">Step (cm)</th><th scope="col">Complex field error</th><th scope="col">Intensity error</th></tr></thead><tbody><tr><td>Thickness</td><td>1e−3</td><td>8.63e−6</td><td>1.27e−5</td></tr><tr><td>Thickness</td><td>1e−4</td><td>8.79e−8</td><td>1.32e−7</td></tr><tr><td>Thickness</td><td>1e−5</td><td>5.61e−9</td><td>4.36e−9</td></tr><tr><td>Wavelength</td><td>1e−3</td><td>6.30e−6</td><td>4.71e−7</td></tr><tr><td>Wavelength</td><td>1e−4</td><td>6.31e−8</td><td>4.09e−9</td></tr><tr><td>Wavelength</td><td>1e−5</td><td>4.45e−9</td><td>1.18e−7</td></tr></tbody></table></div>
+<p>The regression requires both scaled errors below 2e−5 at the smallest step. The wavelength intensity comparison reaches its lowest error at the middle step.</p>
+<pre><code>cargo run --locked --offline --example multimode_slab
+cargo test --locked --offline --example multimode_slab -- --nocapture</code></pre>
+</main>
+</body>
+</html>
