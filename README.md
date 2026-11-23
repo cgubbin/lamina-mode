@@ -344,4 +344,6 @@ See [pole normalization](docs/pole-normalization.md) for complete scalar-pole fa
 
 [Integrated photonics ROM roadmap](docs/integrated-photonics-roadmap.md)
 
+[Target development guide: boundary, result contract and milestones](docs/target-development-guide.md)
+
 [Enumerating a guided basis](docs/guided-basis.md)
