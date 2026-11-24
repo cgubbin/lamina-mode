@@ -16,6 +16,7 @@
 //!     let _ = problem.domain(input); // an explicit AnalyticAssumption is required
 //! }
 //! ```
+mod coupling;
 mod derivatives;
 mod diagnostic;
 mod fields;
@@ -26,12 +27,12 @@ mod overlap;
 mod power;
 mod profile;
 mod projection;
-mod sensitivity;
-mod coupling;
-mod qnm_scattering;
-mod qnm_poles;
 mod qnm_design;
+mod qnm_poles;
+mod qnm_scattering;
+mod sensitivity;
 mod tracking;
+pub use coupling::*;
 pub use derivatives::*;
 pub use fields::*;
 pub use group::*;
@@ -41,11 +42,10 @@ pub use overlap::*;
 pub use power::*;
 pub use profile::*;
 pub use projection::*;
-pub use sensitivity::*;
-pub use coupling::*;
-pub use qnm_scattering::*;
-pub use qnm_poles::*;
 pub use qnm_design::*;
+pub use qnm_poles::*;
+pub use qnm_scattering::*;
+pub use sensitivity::*;
 pub use tracking::*;
 mod branch;
 mod report;

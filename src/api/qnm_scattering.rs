@@ -443,7 +443,7 @@ enum ScatteringChannels {
         materials: ExteriorMaterials,
     },
     Continued {
-        chart: FrequencyChart,
+        chart: Box<FrequencyChart>,
         region: FrequencyRegion,
         assumption: AnalyticAssumption,
         materials: ExteriorMaterials,
@@ -631,7 +631,7 @@ fn reconstruct(
             let chart = domain.frequency_chart().clone();
             let reference = chart.evidence().reference.frequency;
             let continued = ScatteringChannels::Continued {
-                chart,
+                chart: Box::new(chart),
                 region,
                 assumption,
                 materials,
