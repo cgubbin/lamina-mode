@@ -19,7 +19,7 @@ expressed in polygons, devices, ports or fabrication processes belongs to a cons
 | Derivatives of modal quantities with respect to stack parameters | FDTD, full-vector 2D or 3D solvers |
 | Continuation of modes and modal sets along a parameter | Objectives, optimisation drivers, device synthesis rules |
 
-Two further families of models are wanted (milestones 4 and 5): approximate 2D confinement from 1D solves, and
+Two further families of models are wanted (milestones 5 and 6): approximate 2D confinement from 1D solves, and
 local-mode propagation for tapers, MMIs and couplers. Both are built only from lamina-mode's public results, so
 they belong one level up:
 
@@ -41,7 +41,7 @@ Rules that keep the boundary:
    private. lamina-mode imports none of them.
 3. **Physics, not policy.** lamina-mode returns quantities and their evidence. Choosing a mode, a taper profile or
    an MMI length is a decision for a consumer.
-4. **No silent approximation.** Every approximate result (milestone 4) states the approximation and an error
+4. **No silent approximation.** Every approximate result (milestone 5) states the approximation and an error
    indicator, so a consumer can decide whether to trust it or verify it with a full solver.
 
 ## The result contract
@@ -52,11 +52,14 @@ are part of the API. They are the most expensive to change later, so fix them be
 - **Units at the boundary.** Bindings take and return SI with the unit named in every field (lengths in metres or
   micrometres, chosen once; β and k0 in rad/m). Internal cm⁻¹ stays internal.
 - **Frame and polarisation.** The stack normal and propagation axis are named in every result. TE and TM are
-  relative to the stack normal. A consumer composing two stages (milestone 4) maps them to its own frame; the
+  relative to the stack normal. A consumer composing two stages (milestone 5) maps them to its own frame; the
   reduction states which stage polarisation produced which result.
 - **Phasor sign, phase and normalisation.** One documented time convention, one phase-fixing rule and unit
   longitudinal power per unit invariant width for guided modes, as the roadmap specifies. Quasi-normal modes carry
   their own normalisation, named in the result.
+- **Fields far from the stack.** The exterior fields of an accepted mode keep only its outgoing wave, so a guided
+  field decays, and a leaky field grows at its stated rate, however far into an exterior it is sampled. The round-off
+  incoming wave that an accepted root leaves behind never appears in a sampled field.
 - **Evidence travels with the answer.** Every mode set carries its window, expected and found counts, unresolved
   intervals and the completeness status. Every root carries its residual and acceptance thresholds. An answer
   without its evidence is not a result.
@@ -65,6 +68,27 @@ are part of the API. They are the most expensive to change later, so fix them be
 - **Determinism and identity.** The same inputs give the same outputs, bit for bit, on one platform. Inputs have a
   canonical serialisation, so consumers can key caches on a hash of them.
 - **Versioned results.** Serialised results carry a schema version; a change to any convention above bumps it.
+
+### How anisotropy enters the results
+
+Milestone 4 adds anisotropic layers. So that the first release's types don't need to break, the contract fixes now
+how anisotropy will appear:
+
+- **Polarisation becomes a property of the mode, not of the request.** TE and TM remain labels for stacks whose
+  tensors are diagonal in the stack frame, where the two families separate. A mode of a stack with a full tensor is
+  labelled *hybrid* and carries all six field components. A request may then omit the polarisation.
+- **The frame names the tensor axes.** Results already name the stack normal (z), the propagation axis (x) and the
+  invariant axis (y). With anisotropy they also state that every tensor is expressed in that frame, so a consumer
+  knows which tensor axes lie along the normal and along the propagation direction. Crystal orientation is the
+  consumer's input, rotated into this frame before the solve, and is recorded with the input.
+- **Materials become a tagged choice:** isotropic (a scalar ε and μ, as now), diagonal, or full tensor.
+
+The first release's Python results survive this. Field profiles already return all three components of E and H per
+sample, mode records carry β, n_eff and evidence with no polarisation-specific fields, and evidence and failures
+don't depend on polarisation. What changes is the serialised input and the conventions: the request's polarisation
+gains a *hybrid* value (or becomes optional), materials gain the tensor variants, and the conventions gain the
+tensor-frame statement. Under the rule above these are a schema version bump. Readers of version 1 reject a
+version 2 record rather than misread it, and a version 1 record, being isotropic, maps into version 2 without loss.
 
 ## Milestones
 
@@ -130,11 +154,94 @@ Roadmap steps 5 and 6, plus the quantity local-mode theory needs:
 *Accept when:* self-power and orthogonality hold to tolerance; coupling coefficients agree with finite
 differences of overlaps between neighbouring stacks; near-degenerate pairs are reported as subspaces.
 
-### 4. Approximate 2D confinement (lamina-reduce)
+#### Slice bases for film mode matching
+
+A 2D cross-section solver by film mode matching cuts the cross-section into vertical slices, finds the modes of
+each slice's stack with lamina, and solves a mode-matching determinant across the slice boundaries. The matching
+itself belongs to the consumer. It needs from lamina:
+
+- **Terminations as part of the stack input.** lamina owns how a slice's stack is closed. lamina-core's stack
+  input gains a termination on each side, chosen by the consumer:
+  - a perfect electric or perfect magnetic wall at a stated position;
+  - a perfectly matched layer by complex coordinate stretching, with its thickness and stretching profile stated;
+  - open exteriors, as today.
+
+  The result records the termination, and it is part of the canonical input, so it enters the input hash.
+- **A basis per slice that is complete within a stated window.** The window is a region of the complex β plane.
+  Each basis carries the same completeness evidence as milestone 1 (expected and found counts from an independent
+  count over the window, unresolved regions with their causes, and a completeness status), stated relative to the
+  termination:
+  - a closed stack (walls, or a PML backed by a wall) has a discrete spectrum, so its basis holds every mode in
+    the window, the radiation-like ones included, and the count covers them all;
+  - an open stack has guided and leaky modes as discrete roots and a radiation continuum besides. Its basis holds
+    the guided and leaky modes in the window, and the result says that the radiation continuum isn't included.
+- **Overlaps between neighbouring slices' modes**, at one frequency and in one registered frame: the unconjugated
+  reciprocity pairing listed above, which the matching equations use, plus the conjugated power product for power
+  bookkeeping. Both integrate over the union of both stacks' interfaces and exteriors, up to any wall or through
+  any PML.
+- **Deterministic ordering and normalisation**, so that the matching determinant, as a function of the consumer's
+  unknown, is stable across calls and small parameter changes. Modes are ordered by a documented key (for example
+  decreasing Re β, with ties broken by Im β). Each is normalised to unit unconjugated self-pairing with a
+  documented phase rule. Near-degenerate pairs are returned as subspaces with a fixed basis rule.
+
+*Accept when:*
+
+- **walls:** the modes of a slab terminated by perfect electric (and, separately, perfect magnetic) walls match
+  the analytic ladder of the layered box waveguide, guided and radiation-like alike;
+- **PML:** as the PML moves out from the stack (and thickens, at a fixed profile), the PML-terminated guided and
+  leaky modes converge to the open stack's, while its remaining modes stay off them;
+- **counts:** in every window, the number of modes found matches an independent argument-principle count of the
+  characteristic's zeros, for walls, PML and open exteriors; on an open slab, guided and leaky counts also agree
+  with the analytic ladder; a window edge placed on a mode is reported as unresolved, not guessed;
+- **identity:** changing a wall's position or type, or the PML's thickness or profile, changes the input hash;
+- **overlaps:** the unconjugated pairing is symmetric under exchange of the two slices, bi-orthogonal within one
+  slice to tolerance, and agrees with direct quadrature of the sampled fields; between identical slices it is the
+  identity;
+- **ordering and normalisation:** repeated solves and solves of permuted or rescaled inputs give the same order,
+  phases and normalisation bit for bit; the overlap matrix between neighbouring slices changes continuously under a
+  small change in either slice's thickness, with no reordering or sign flips;
+- **in use:** a symmetric step between two slabs, matched with increasing numbers of modes, converges to a
+  reference result, and the reported overlap conditioning predicts where it stops improving.
+
+### 4. Anisotropic stacks
+
+Layers whose permittivity (and permeability) are tensors, as in lithium niobate and other electro-optic or
+birefringent films. lamina-core's stack backend is pluggable, so this adds an anisotropic backend there and teaches
+lamina-mode to search with it. Milestone 5 needs it to reduce anisotropic cross-sections.
+
+1. **Diagonal tensors in the stack frame first.** With principal axes along x, y and z, TE and TM stay separable:
+   TE sees ε_yy, and TM sees ε_xx and ε_zz. The existing 2×2 backends extend to this case, and every existing
+   capability (enumeration, completeness, fields, normalisation, derivatives) carries over.
+2. **Then full tensors.** An optic axis off the stack's principal axes couples TE and TM into hybrid modes. This
+   needs a 4×4 formulation of the stack, a characteristic whose roots are the hybrid modes, a count of hybrid modes
+   for completeness, six-component fields, and the power normalisation and phase rule restated for hybrid fields.
+3. **Orientation is the consumer's.** The consumer supplies each layer's tensor in its crystal frame and the
+   rotation into the stack frame (for example the optic axis as angles to the normal and the propagation
+   direction). lamina-materials provides tensor material models, whose parameters come from the consumer;
+   lamina owns no crystal data. Results record the tensors and rotation used.
+
+Results follow the anisotropy note under the result contract: hybrid modes are labelled as such, and the frame
+states that tensors are expressed in it.
+
+*Accept when:*
+
+- **analytic uniaxial slabs:** with the optic axis along each of x, y and z in turn, the TE and TM ladders match
+  closed-form uniaxial slab conditions to the same tolerance as milestone 1;
+- **isotropic recovery:** a tensor εI gives the isotropic result, through both the diagonal and the full-tensor
+  paths, to round-off, with matching completeness evidence;
+- **reciprocity:** for symmetric tensors, the modes at +β and −β pair up, and the unconjugated reciprocity pairing
+  between them is bi-orthogonal; a stack and its mirror image give the same β ladder;
+- **hybridisation:** rotating the optic axis away from a principal axis takes modes continuously out of the
+  diagonal limit, with avoided crossings reported as near-degenerate subspaces rather than as swapped labels;
+- **fields:** hybrid fields satisfy tangential continuity at every interface, carry unit power, and decay into
+  both exteriors as the contract requires.
+
+### 5. Approximate 2D confinement (lamina-reduce)
 
 Separable reduction of a cross-section given as **lateral regions, each a vertical stack with a width**:
 
-1. solve each region's vertical stack (milestones 1 and 2), giving complex effective indices and vertical profiles;
+1. solve each region's vertical stack (milestones 1 and 2, and 4 for anisotropic stacks), giving complex effective
+   indices and vertical profiles;
 2. form the lateral stack of those indices and solve it, giving 2D-like modes, their effective indices and
    separable field approximations;
 3. return an error indicator for each mode. Start with the first-order correction from the coupling the
@@ -147,9 +254,9 @@ stages (substrate leakage) carry their complex indices into the lateral stage.
 within stated error bands of a full-vector 2D solver; the error indicator ranks the cases correctly (larger
 indicated error where the true error is larger); completeness from both stages is carried into the result.
 
-### 5. Local-mode propagation (lamina-reduce)
+### 6. Local-mode propagation (lamina-reduce)
 
-Propagation through structures that vary slowly or step along the propagation axis, from milestones 3 and 4:
+Propagation through structures that vary slowly or step along the propagation axis, from milestones 3 and 5:
 
 - **multimode sections** (generalising the existing slab propagator): modal amplitudes advanced by their β along a
   section, with excitation from a supplied input field by projection;
@@ -162,9 +269,9 @@ Propagation through structures that vary slowly or step along the propagation ax
 taper's conversion efficiency converges in retained modes and in section count; power balance holds across
 junctions to the reported residual.
 
-### 6. Device physics models (lamina-design)
+### 7. Device physics models (lamina-design)
 
-Models that turn milestones 2–5 into design quantities, each with its sensitivity:
+Models that turn milestones 2–6 into design quantities, each with its sensitivity:
 
 - **tapers:** minimum adiabatic length for a target loss, and profiles that equalise the adiabaticity parameter;
 - **MMIs:** imaging lengths and their tolerance to width, imaging quality from the deviation of the β ladder from
@@ -173,7 +280,7 @@ Models that turn milestones 2–5 into design quantities, each with its sensitiv
 
 These are fast first estimates and design rules. A consumer verifies a final design with a full solver.
 
-*Accept when:* each model's predictions agree with milestone 5 propagation on its validity range, and its stated
+*Accept when:* each model's predictions agree with milestone 6 propagation on its validity range, and its stated
 range is checked by a case just outside it.
 
 ## What a consumer gets
@@ -183,12 +290,12 @@ range is checked by a case just outside it.
 | Exact slab effective indices, with completeness, for effective-index rules in 2.5D simulation | 1 |
 | Substrate leakage, absorption, metal layers and dispersion, which plane-wave mode solvers can't model | 1, existing QNM work |
 | Process sensitivity: dn_eff and dΓ per nanometre of layer thickness; analytic derivatives for tolerance analysis | 2 |
-| Fast approximate 2D confinement with an error indicator, as a first stage before a full solver | 4 |
-| Taper, MMI and coupler first designs with sensitivities: physics-informed starting points for optimisation | 5, 6 |
+| Fast approximate 2D confinement with an error indicator, as a first stage before a full solver | 5 |
+| Taper, MMI and coupler first designs with sensitivities: physics-informed starting points for optimisation | 6, 7 |
 
 ## Out of scope, permanently
 
-- Full-vector 2D or 3D mode solving. Milestone 4 approximates it and says so; it doesn't replace it.
+- Full-vector 2D or 3D mode solving. Milestone 5 approximates it and says so; it doesn't replace it.
 - Geometry, layout and process descriptions, in any form.
-- Optimisation drivers and objectives beyond the device models of milestone 6.
+- Optimisation drivers and objectives beyond the device models of milestone 7.
 - Material property data. lamina-materials owns material models; their parameters come from the consumer.
