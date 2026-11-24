@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "lamina-py"
+version = "0.1.0"
+description = "Python bindings over the lamina-mode guided basis"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Christopher R. Gubbin" }]
+dependencies = ["numpy>=1.24"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.urls]
+Repository = "https://github.com/cgubbin/lamina-mode"
+
+[tool.maturin]
+python-source = "python"
+module-name = "lamina._native"
+manifest-path = "Cargo.toml"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
