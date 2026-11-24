@@ -241,3 +241,40 @@ def test_forward_and_backward_bases_are_bi_orthogonal(polarisation, paired):
             assert abs(flux(forward, i, backward, j) - expected) < 1e-8, (i, j)
             if i != j:
                 assert abs(flux(forward, i, forward, j)) < 1e-8
+
+
+# The unconjugated flux counts a recovered field's residual phase twice, so on a
+# stack whose most confined mode is recovered with a boundary defect well above
+# round-off the bound scales with the defects each mode records:
+#   |flux - expected| <= QUADRATURE_FLOOR + C * 4 W/m * (defect_m + defect_n).
+# On the four-region multilayer the defect-dominated pairs (those of the most
+# confined mode) have |flux - expected| / (4 W/m * (defect_m + defect_n)) of at
+# most 0.07, so C = 1 leaves a margin of about 14.
+QUADRATURE_FLOOR = 1e-8
+C = 1.0
+
+
+def defects(basis):
+    return [basis.sample_fields(m.index, [0.0]).relative_boundary_defect for m in basis.modes]
+
+
+@pytest.mark.parametrize("polarisation, paired", [("TE", -4.0), ("TM", 4.0)])
+def test_multilayer_bi_orthogonality_within_the_recorded_field_error(polarisation, paired):
+    forward = solve(multilayer(), polarisation)
+    backward = solve(multilayer(), polarisation, "backward")
+    assert forward.found == backward.found >= 2
+    df, db = defects(forward), defects(backward)
+
+    def bound(a, b):
+        return QUADRATURE_FLOOR + C * 4.0 * (a + b)
+
+    for i in range(forward.found):
+        for j in range(backward.found):
+            expected = paired if i == j else 0.0
+            value = flux(forward, i, backward, j)
+            tolerance = bound(df[i], db[j])
+            assert abs(value.real - expected) < tolerance, (i, j, value, tolerance)
+            assert abs(value - expected) < tolerance, (i, j, value, tolerance)
+        for j in range(forward.found):
+            if i != j:
+                assert abs(flux(forward, i, forward, j)) < bound(df[i], df[j]), (i, j)

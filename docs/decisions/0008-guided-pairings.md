@@ -101,13 +101,19 @@ primary field equals the forward one and only the β-odd component flips:
 - TE: Z0 Hz = β Ey / k0, so Hz flips and flux(forward, backward) = −2 ∫ Ey Hz dz = −4 P_f = −4 W/m.
 - TM: Ez = −β Z0 Hy / (k0 ε), so Ez flips and flux(forward, backward) = −2 ∫ Ez Hy dz = +4 P_f = +4 W/m.
 
-Both bases are ordered by decreasing |β|, so index n of one is the partner of index n of the other. The bindings
-reproduce both values, and zero for every other pair, within 1e-8 W/m on a three-layer slab.
+Both bases are ordered by decreasing |β|, so index n of one is the partner of index n of the other.
 
-The flux is unconjugated, so a residual phase in a recovered field enters it twice. On the four-region multilayer
-of the sensitivity tests (ε up to 6), the most confined TE and TM modes are recovered with relative boundary defects
-of 2e-7 and 4e-8; their forward–backward fluxes then carry imaginary parts of 1.8e-8 and 2.5e-8 W/m, while the real
-parts match ∓4 to 3e-11.
+The flux is unconjugated, so a residual phase in a recovered field enters it twice rather than cancelling as in
+the power overlap. The bound on the pairing is therefore stated from the evidence each profile records:
+
+    |flux − expected| ≤ 1e-8 W/m + C · 4 W/m · (d_m + d_n),   C = 1,
+
+with d_m and d_n the two modes' relative boundary defects and `expected` ∓4 W/m for partners and zero otherwise
+(forward–forward pairs included). On a three-layer slab every pair is within the 1e-8 W/m term alone. On the
+four-region multilayer of the sensitivity tests (ε up to 6) the most confined TE and TM modes have defects of 2e-7
+and 4e-8; their forward–backward fluxes carry imaginary parts of 1.8e-8 and 2.5e-8 W/m, while the real parts match
+∓4 to 3e-11. Well-recovered pairs stay below 1.6e-10 W/m, the quadrature floor that the 1e-8 term covers; the
+defect-dominated pairs reach at most 0.07 of 4 W/m · (d_m + d_n), so C = 1 leaves a margin of about 14.
 
 ## Defaults checked
 
