@@ -15,11 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # The family crates depend on their siblings by version and by path, so
-      # check them out side by side. lamina-units, lamina-materials and this
-      # repository are private: LAMINA_REPOS_TOKEN must be a token with read
-      # access to them. The siblings are checked out at their default
-      # branches, so they must carry the versions this branch depends on
-      # (argloc 0.3.1, lamina-* 0.1.0); pin `ref:` here until they do.
+      # check them out side by side. The siblings are public, so the default
+      # token reads them. They're checked out at their default branches, which
+      # must carry the versions this branch depends on (argloc 0.3.1,
+      # lamina-* 0.1.0).
       - uses: actions/checkout@v4
         with:
           path: lamina-mode
@@ -35,12 +34,10 @@ jobs:
         with:
           repository: cgubbin/lamina-units
           path: lamina-units
-          token: ${{ secrets.LAMINA_REPOS_TOKEN }}
       - uses: actions/checkout@v4
         with:
           repository: cgubbin/lamina-materials
           path: lamina-materials
-          token: ${{ secrets.LAMINA_REPOS_TOKEN }}
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
