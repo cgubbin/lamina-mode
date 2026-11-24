@@ -216,10 +216,13 @@ pub(crate) mod region;
 
 pub use region::InPlaneSearchError;
 
-use lamina_core::{CanonicalCoordinates, ComplexScalar, ExteriorWavevectors, ScalarAlgebra};
+use lamina_core::{CanonicalCoordinates, ComplexScalar, ExteriorWavevectors, Jet, ScalarAlgebra};
 use nalgebra::ComplexField;
 use ndarray::{Ix0, arr0};
 use num_traits::{One, Zero};
+
+/// The real field of an algebra's scalar.
+type RealOf<A> = <<A as Jet>::Scalar as ComplexField>::RealField;
 
 use super::{
     ConformalPoint, RawConformalMap,
@@ -332,15 +335,7 @@ where
 
     /// Return the exterior constitutive products when both are real and
     /// strictly positive.
-    fn real_positive_exterior_chi(
-        &self,
-    ) -> Result<
-        (
-            <A::Scalar as ComplexField>::RealField,
-            <A::Scalar as ComplexField>::RealField,
-        ),
-        InPlaneSearchError,
-    > {
+    fn real_positive_exterior_chi(&self) -> Result<(RealOf<A>, RealOf<A>), InPlaneSearchError> {
         let (left, right) = self.exterior_chi();
 
         let left_im = left.imaginary();
