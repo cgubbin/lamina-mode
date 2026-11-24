@@ -17,6 +17,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 lamina-core = { version = "0.1.0", path = "../../lamina-core" }
+lamina-materials = { version = "0.1.0", path = "../../lamina-materials" }
 lamina-mode = { version = "0.1.0", path = ".." }
 lamina-units = { version = "0.1.0", path = "../../lamina-units" }
 ndarray = "0.17.2"
