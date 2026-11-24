@@ -20,7 +20,7 @@ material parameters, a certified group index, and continuation of modes and
 modal sets along a parameter. It builds on `lamina-units`, `lamina-core` and
 `argloc`.
 
-Read the [modal transform guide and roadmap](docs/modal-transform.md) for the
+Read the [modal transform guide](docs/modal-transform.md) for the
 correspondence to Bakhtazad et al. (1997), field conventions and physical scope.
 The squared coordinate repeats after `i*pi`; the exterior sheets repeat after
 `2*i*pi`. Canonical width-pi charts select only part of that surface, with the
@@ -126,8 +126,7 @@ causes and are distinct from later candidate acceptance.
 A bound result wraps the complete existing estimates and diagnostics together
 with polarization, direction, fixed coordinate, domain/reference information, and
 the caller assumption. Cluster centroids remain unresolved estimates and budget
-termination remains visible. These modules are private: this change establishes
-the internal contract before the public API milestone.
+termination remains visible. These modules are private.
 
 Run the bound regressions from this repository:
 
@@ -283,13 +282,6 @@ cargo test --locked problem::orchestration::tests::independent_chart_failures_st
 Physical point descriptions, supported dielectric classification and verified
 radiation references are implemented internally. Direct frequency charts with actual dispersive exteriors are also implemented.
 The public point API and executable examples expose these capabilities.
-The next milestone is fields and local derivatives. The [roadmap](docs/modal-transform.md#roadmap) then proceeds through
-fields and derivatives, branch continuation, QNM normalisation and derived
-observables, feature sensitivities, and optimisation in lamina-design.
-Automatic seam recovery, cluster splitting, repeated-root treatment, broader
-singularity handling and periodic duplicate reconciliation remain explicit
-numerical follow-ups. This roadmap supersedes earlier next-step handoffs.
-
 
 ## Physical point interpretation (internal)
 
@@ -352,8 +344,6 @@ Accepted-point [modal fields](docs/modal-fields.md) use core sampling and explic
 See [pole normalization](docs/pole-normalization.md) for complete scalar-pole factors, normalized fields and the 1D exterior-cancellation checks.
 
 [Dispersion branches and physical report](docs/modal-branches.md)
-
-[Integrated photonics ROM roadmap](docs/integrated-photonics-roadmap.md)
 
 [Enumerating a guided basis](docs/guided-basis.md)
 

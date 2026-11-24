@@ -1,4 +1,4 @@
-# Modal transforms, exterior sheets and development roadmap
+# Modal transforms and exterior sheets
 
 The exponential map formulas agree with the fixed-frequency transform of
 Bakhtazad et al. after translating notation. Earlier Lamina documentation
@@ -333,51 +333,6 @@ Run `cargo test --locked` with these test-name filters:
   incompatible exterior signs remain distinct, including simultaneous reversal.
 - `validator_detects_periodic`: squared-coordinate branch-point copies remain
   excluded even though the exterior period is twice as large.
-
-## Roadmap
-
-This order supersedes earlier public-API handoffs. The transform contract,
-internal physical interpretation and local dispersive frequency charts are
-implemented. Public point-solver exports and executable examples are now available;
-fields and local derivatives come next.
-
-1. **Transform, interpretation and dispersive spectral charts:** retain the
-   constant-exterior conformal strategy, plus stack-bound local frequency charts,
-   explicit exterior continuation, native units, assumptions and coverage.
-2. **Public point results and API:** implemented through the public facade and
-   executable examples for all three strategies. Owned reports retain numerical
-   evidence, classification assumptions, radiation selection and continuation
-   errors. See the public quickstart; private names in historical illustrations
-   below remain implementation details. Broader chart planning makes no global
-   completeness claim.
-3. **Fields and local derivatives:** arbitrary-amplitude homogeneous mode fields
-   and coordinate/material/parameter derivatives. Field recovery can fail without
-   invalidating the root. Core owns reusable reconstruction, differentiation and
-   integration primitives; mode owns their interpretation for a mode.
-4. **Branches:** adaptive predictor-corrector continuation, field overlap and
-   exterior evidence for identity, crossings and unresolved branches, rediscovery,
-   and arclength continuation when a parameterisation fails. Profile before
-   performance work.
-5. **QNM normalisation and derived observables:** specify outgoing frequency-QNM
-   conventions, dispersive material derivatives, exterior regularisation and
-   left/right fields where needed. Normalisation is a separate fallible step.
-   Diverging exterior fields cannot be normalised by a naive L2 integral.
-   Planar effective mode volumes need an explicit per-unit-length/area convention;
-   they are not unspecified finite 3D volumes.
-6. **Features and sensitivities:** for D(omega,k,p)=0, a regular zero-group-velocity
-   point obeys D_k=0 and D_omega != 0. Fixed-frequency root multiplicity alone
-   does not establish an exceptional point. Distinguish zero complex slope,
-   stationary real frequency and zero energy velocity. Feature continuation and
-   design sensitivity require second derivatives and an invertible feature
-   Jacobian.
-7. **Optimisation:** mode supplies points, branches, features, sensitivities and
-   quality evidence. lamina-design owns objectives, constraints and optimisation
-   algorithms, including moving a specified ZGV point. Dependencies run
-   design -> mode -> core; mode does not depend on design.
-
-Seam recovery, cluster splitting, repeated roots, periodic equivalence, material
-poles/thresholds, broader spectral chart planning and numerical dynamic range remain explicit
-follow-ups to prioritise against the intended device.
 
 ## Direct frequency charts with dispersive exteriors
 

@@ -172,10 +172,6 @@ and differs from freezing the exterior at the anchor. Each example checks its
 result and prints acceptance, radiation/classification and finite-coverage evidence.
 
 The [mathematical guide](modal-transform.md) documents the transform correspondence,
-sheets, physical support matrix and longer-term roadmap. Next come fields/local
-derivatives, then branches, QNM normalization and derived observables,
-features/sensitivities and optimization in lamina-design. Core owns reusable device,
-material and field primitives; mode owns mode search and interpretation; design
-owns objectives and optimization.
+sheets and physical support matrix.
 
 See [modal field recovery](modal-fields.md) for separately fallible postprocessing of owned accepted points.

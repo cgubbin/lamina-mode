@@ -62,7 +62,7 @@
 //! A signed-coordinate square root has separate branch continuation data.
 //!
 //! For the correspondence to Bakhtazad et al. (1997), material restrictions,
-//! classification assumptions and roadmap, see the crate-level mathematical guide.
+//! classification assumptions, see the crate-level mathematical guide.
 //!
 //! # Physical real-kx geometry
 //!
