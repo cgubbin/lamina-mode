@@ -1014,3 +1014,72 @@ fn coupled_slab_gap_has_the_predicted_local_mode_coupling() {
     println!("coupled slab gap: local={local}, finite difference={fd}");
     assert!((local - fd).norm() < 1e-5);
 }
+
+#[test]
+fn power_tangent_converges_for_interface_motion_in_a_micron_multilayer() {
+    use lamina_core::{FieldSampling, LayerSampling, Scatter2};
+    // λ = 1 µm: vacuum | ε 4, 0.42 µm | ε 2.25, 0.10 µm | ε 1.44, with the
+    // interface between the two layers moving and its neighbours fixed.
+    let scale = 1e-4;
+    let k0 = TAU / scale;
+    let stack = Stack::from_analytical_materials(Constant::vacuum(), Constant::dielectric(1.44))
+        .analytical_layer(Constant::dielectric(4.0), Length::centimetres(0.42 * scale))
+        .analytical_layer(
+            Constant::dielectric(2.25),
+            Length::centimetres(0.10 * scale),
+        )
+        .finalise();
+    let mut window = request(Polarisation::TransverseElectric);
+    window.wavelength = Length::centimetres(scale);
+    window.abs_beta = [0.0, 2.02 * k0];
+    window.cutoff_margin = 1e-7;
+    window.phase_tolerance = 1e-10;
+    window.refinement.residual_atol = 0.0;
+    window.refinement.residual_rtol = 1e-9;
+    window.refinement.residual_scale = k0;
+    let basis = enumerate_guided_modes(stack, window).unwrap();
+    assert!(basis.is_complete());
+    assert_eq!(basis.modes.len(), 2);
+    let direction = GuidedPerturbation::new(
+        "interface position",
+        "cm",
+        vec![0.0, 1.0, 0.0],
+        0.0,
+        vec![ConstitutiveRate::default(); 4],
+    )
+    .unwrap();
+    let backend = Scatter2::new();
+    for (index, mode) in basis.modes.iter().enumerate() {
+        let power = mode
+            .guided_beta_sensitivity_with(
+                &backend,
+                &direction,
+                Default::default(),
+                Default::default(),
+            )
+            .unwrap()
+            .power_field_tangent_with(
+                &backend,
+                &FieldSampling::new().layer(0, LayerSampling::offsets([Length::zero()])),
+                GuidedObservationFrame::MaterialAttached,
+                Complex::ONE,
+            )
+            .unwrap_or_else(|e| panic!("mode {index}: {e:?}"));
+        let total: f64 = power.regional_power.iter().map(|r| r.power_w_per_m).sum();
+        let rate: f64 = power
+            .regional_power
+            .iter()
+            .map(|r| r.power_rate_w_per_m)
+            .sum();
+        assert!((total - 1.0).abs() < 1e-9);
+        let largest = power
+            .regional_power
+            .iter()
+            .map(|r| r.power_rate_w_per_m.abs())
+            .fold(0.0, f64::max);
+        assert!(
+            rate.abs() <= 1e-7 * largest,
+            "mode {index}: {rate} vs {largest}"
+        );
+    }
+}

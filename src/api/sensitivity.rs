@@ -844,10 +844,20 @@ impl GuidedBetaSensitivity {
             if !total.is_finite() || !total_rate.is_finite() || total == 0.0 {
                 return Err(IllConditionedPower);
             }
+            // Every region is converged against a common scale: powers against
+            // the total power, rates against the largest regional rate. A region
+            // whose rate nearly cancels needs no more relative accuracy than the
+            // fractions' rates carry.
+            let largest_rate =
+                |regions: &[[f64; 2]]| regions.iter().map(|p| p[1].abs()).fold(0.0, f64::max);
             let converged = previous.as_ref().is_some_and(|prev| {
+                let rate_scale = total
+                    .abs()
+                    .max(largest_rate(prev))
+                    .max(largest_rate(&regional));
                 prev.iter().zip(&regional).all(|(a, b)| {
                     (a[0] - b[0]).abs() <= 1e-9 * total.abs()
-                        && (a[1] - b[1]).abs() <= 1e-9 * total.abs().max(a[1].abs()).max(b[1].abs())
+                        && (a[1] - b[1]).abs() <= 1e-9 * rate_scale
                 })
             });
             if !converged {
