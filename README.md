@@ -9,6 +9,17 @@ The public facade reuses core device primitives and returns owned reports with
 numerical evidence, radiation provenance and finite coverage. Existing internals
 are described below for mathematical and implementation context.
 
+## Scope
+
+lamina-mode finds the modes of planar multilayers (guided, leaky, lossy, gain,
+plasmonic and quasi-normal) and reports each answer with its numerical evidence:
+accepted roots, residuals, coverage and the completeness of a stated window. It
+provides their fields, normalisation, regional power and overlaps between
+stacks, derivatives of modal quantities with respect to stack, wavelength and
+material parameters, a certified group index, and continuation of modes and
+modal sets along a parameter. It builds on `lamina-units`, `lamina-core` and
+`argloc`.
+
 Read the [modal transform guide](docs/modal-transform.md) for the
 correspondence to Bakhtazad et al. (1997), field conventions and physical scope.
 The squared coordinate repeats after `i*pi`; the exterior sheets repeat after
@@ -335,3 +346,19 @@ See [pole normalization](docs/pole-normalization.md) for complete scalar-pole fa
 [Dispersion branches and physical report](docs/modal-branches.md)
 
 [Enumerating a guided basis](docs/guided-basis.md)
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  <https://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
+
+at your option.
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.
