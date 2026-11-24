@@ -28,8 +28,8 @@ photonics (k0 ≈ 6·10⁴ cm⁻¹); there, 4 of 6 modes of a multimode slab sto
 with `NoProgress` although the native corrections had converged.
 
 The bindings therefore set `residual_scale = k0` (in lamina-mode's cm⁻¹ gauge)
-and expose `residual_atol` (default 0) and `residual_rtol` (default 1e-11,
-about lamina-mode's default ratio at its 1 cm reference wavelength). The field
+and expose `residual_atol` (default 0) and `residual_rtol` (default 1e-9; see
+the revision below). The field
 recovery characteristic limit is scaled the same way: lamina-mode's default
 1e-6 at 1 cm, proportional to k0. Root accuracy is still set by the native
 correction tolerances, which keep lamina-mode's defaults; with them the
@@ -42,3 +42,20 @@ analytic slab ladders match to better than 1e-10 in n_eff at both scales.
   against.
 - A k0-relative default could move into lamina-mode itself; until then the
   bindings own it.
+
+## Revision (sensitivities)
+
+The first default, `residual_rtol = 1e-11`, matched lamina-mode's ratio at its 1 cm reference wavelength and
+passed the slab benchmarks. On a four-region multilayer (ε up to 6, λ = 1 µm) one TE mode stopped with
+`NoProgress`. The residual floor at accepted roots depends on the stack and on the search path that reaches the
+root: measured values run up to 2e-10 k0, so neither 1e-11 nor 1e-10 is safe.
+
+The default is now `1e-9`, five times the largest floor measured. Field recovery's check on the seed's relative
+boundary defect needed the same treatment: on the multilayer, accepted roots leave defects up to 1.2e-6
+whatever the residual limit, against lamina-mode's default limit of 1e-8. The bindings set that limit to 1e-5.
+Every profile records its actual defect in `relative_boundary_defect`.
+
+Accuracy is unchanged. A root is accepted only when its Newton correction in the native coordinate is also
+within the native tolerances, which keep lamina-mode's defaults; the slab ladders still match to 1e-10 in n_eff.
+An input that states `residual_rtol = 1e-11` explicitly keeps its canonical form and hash; only the default
+changed. A residual test relative to |∂F/∂z| in lamina-mode would remove this coupling.

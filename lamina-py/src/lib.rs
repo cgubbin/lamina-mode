@@ -9,6 +9,7 @@ use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
 
 mod records;
+mod sens;
 mod solve;
 
 use records as rec;
@@ -85,6 +86,35 @@ impl NativeBasis {
         json(&record)
     }
 
+    /// Total sensitivity of one mode to a serialised parameter: dβ/dp, unit-power
+    /// fields and their derivatives at z (m), and regional power fractions.
+    #[pyo3(signature = (mode_index, parameter_json, z_m, frame))]
+    fn sensitivity(
+        &self,
+        py: Python<'_>,
+        mode_index: usize,
+        parameter_json: &str,
+        z_m: Vec<f64>,
+        frame: &str,
+    ) -> PyResult<String> {
+        let parameter: rec::Parameter = serde_json::from_str(parameter_json)
+            .map_err(|e| InvalidInput::new_err(format!("parameter: {e}")))?;
+        let frame: rec::Frame = serde_json::from_value(serde_json::Value::String(frame.to_owned()))
+            .map_err(|e| InvalidInput::new_err(format!("frame: {e}")))?;
+        let record = py
+            .detach(|| sens::sensitivity(&self.solved, mode_index, parameter, &z_m, frame))
+            .map_err(raise)?;
+        json(&record)
+    }
+
+    /// The certified group index of one mode, serialised.
+    fn group_index(&self, py: Python<'_>, mode_index: usize, tolerance: f64) -> PyResult<String> {
+        let record = py
+            .detach(|| sens::group_index(&self.solved, mode_index, tolerance))
+            .map_err(raise)?;
+        json(&record)
+    }
+
     /// Local characteristic partials and implicit slopes of one mode, serialised.
     fn local_derivatives(
         &self,
@@ -119,6 +149,8 @@ fn canonical(kind: &str, json: &str) -> PyResult<(String, String)> {
         "guided_basis" => go::<rec::GuidedBasis>(json),
         "guided_profile" => go::<rec::GuidedProfile>(json),
         "local_derivatives" => go::<rec::LocalDerivatives>(json),
+        "guided_sensitivity" => go::<rec::GuidedSensitivity>(json),
+        "group_index" => go::<rec::GroupIndex>(json),
         other => Err(format!("unknown record kind {other:?}")),
     }
     .map_err(SchemaError::new_err)

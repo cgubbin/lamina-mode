@@ -1,8 +1,8 @@
 //! Adapter between the SI records and lamina-mode's internal cm^-1 units.
 use crate::records::{self as rec, C2};
 use lamina_core::{
-    AnalyticalMaterialStack, Constant, ExteriorSampling, FieldSampling, LayerSampling,
-    Polarisation, Scatter2, Stack,
+    AnalyticalMaterialHandle, AnalyticalMaterialStack, Constant, ExteriorSampling, FieldSampling,
+    LayerSampling, Polarisation, Scatter2, stack::StackBuilder,
 };
 use lamina_mode::{
     AnalyticAssumption, Complex, FieldRecoverySettings, GuidedDirection, GuidedLimit, GuidedWindow,
@@ -13,15 +13,57 @@ use lamina_units::{Length, LengthUnit};
 use std::f64::consts::TAU;
 
 /// Metres per centimetre.
-const M_PER_CM: f64 = 0.01;
+pub(crate) const M_PER_CM: f64 = 0.01;
 /// Impedance of free space, as lamina-mode uses it for guided power.
-const Z0_OHM: f64 = 376.730313412;
+pub(crate) const Z0_OHM: f64 = 376.730313412;
 
 /// The bindings accept constant real materials only. These are entire
 /// functions of frequency and wavenumber, so the analytic declarations that
 /// lamina-mode requires hold by construction.
 pub const ASSUMPTION: &str = "constant real materials: holomorphic and pole-free in k0 and beta, \
      regular in layer thickness (declared by the bindings)";
+
+/// The declaration for stacks with a Sellmeier material: its poles are
+/// checked to lie away from the operating wavelength, so the materials are
+/// holomorphic in a neighbourhood of the operating k0 and entire in beta.
+pub const DISPERSIVE_ASSUMPTION: &str = "constant or Sellmeier real materials with every pole away \
+     from the operating wavelength: holomorphic near the operating k0, pole-free in beta, regular in \
+     layer thickness (declared by the bindings)";
+
+/// Minimum relative separation of a Sellmeier pole wavelength from the
+/// operating wavelength.
+const POLE_SEPARATION: f64 = 1e-6;
+
+pub fn regions(spec: &rec::Stack) -> impl Iterator<Item = &rec::Material> {
+    std::iter::once(&spec.left)
+        .chain(spec.layers.iter().map(|l| &l.material))
+        .chain(std::iter::once(&spec.right))
+}
+
+pub fn assumption(spec: &rec::Stack) -> &'static str {
+    if regions(spec).all(|m| matches!(m, rec::Material::Constant(_))) {
+        ASSUMPTION
+    } else {
+        DISPERSIVE_ASSUMPTION
+    }
+}
+
+/// The lamina-materials Sellmeier model of a record, in canonical units.
+pub fn sellmeier_model(spec: &rec::Sellmeier) -> Result<lamina_materials::Sellmeier<f64>, Failure> {
+    let terms = spec
+        .terms
+        .iter()
+        .map(|t| {
+            lamina_materials::SellmeierTerm::from_wavelength_pole(
+                t.coefficient,
+                lamina_units::Wavelength::centimetres(t.pole_wavelength_m / M_PER_CM),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| Failure::Invalid(format!("Sellmeier term: {e:?}")))?;
+    lamina_materials::Sellmeier::new(spec.constant, terms)
+        .map_err(|e| Failure::Invalid(format!("Sellmeier model: {e:?}")))
+}
 
 #[derive(Debug)]
 pub enum Failure {
@@ -31,7 +73,7 @@ pub enum Failure {
     Derivatives(String),
 }
 
-fn c2(z: Complex) -> C2 {
+pub(crate) fn c2(z: Complex) -> C2 {
     [z.re, z.im]
 }
 
@@ -49,15 +91,48 @@ fn finite_positive(name: &str, v: f64) -> Result<f64, Failure> {
 /// one canonical form.
 pub fn normalise(mut input: rec::GuidedInput) -> Result<rec::GuidedInput, Failure> {
     rec::check_identity(&input).map_err(Failure::Invalid)?;
+    let wavelength = input.request.wavelength_m;
     let material = |name: &str, m: &rec::Material| -> Result<(), Failure> {
-        finite_positive(
-            &format!("{name} relative permittivity"),
-            m.relative_permittivity,
-        )?;
-        finite_positive(
-            &format!("{name} relative permeability"),
-            m.relative_permeability,
-        )?;
+        match m {
+            rec::Material::Constant(c) => {
+                finite_positive(
+                    &format!("{name} relative permittivity"),
+                    c.relative_permittivity,
+                )?;
+                finite_positive(
+                    &format!("{name} relative permeability"),
+                    c.relative_permeability,
+                )?;
+            }
+            rec::Material::Sellmeier(m) => {
+                if m.relative_permeability != 1. {
+                    return Err(Failure::Invalid(format!(
+                        "{name}: Sellmeier materials support relative_permeability 1 only"
+                    )));
+                }
+                if !m.sellmeier.constant.is_finite() {
+                    return Err(Failure::Invalid(format!(
+                        "{name} Sellmeier constant must be finite"
+                    )));
+                }
+                for (j, t) in m.sellmeier.terms.iter().enumerate() {
+                    if !t.coefficient.is_finite() {
+                        return Err(Failure::Invalid(format!(
+                            "{name} Sellmeier term {j} coefficient must be finite"
+                        )));
+                    }
+                    finite_positive(
+                        &format!("{name} Sellmeier term {j} pole_wavelength_m"),
+                        t.pole_wavelength_m,
+                    )?;
+                    if (t.pole_wavelength_m - wavelength).abs() <= POLE_SEPARATION * wavelength {
+                        return Err(Failure::Invalid(format!(
+                            "{name} Sellmeier term {j} has its pole at the operating wavelength"
+                        )));
+                    }
+                }
+            }
+        }
         Ok(())
     };
     material("left exterior", &input.stack.left)?;
@@ -96,21 +171,40 @@ pub fn normalise(mut input: rec::GuidedInput) -> Result<rec::GuidedInput, Failur
     Ok(input)
 }
 
-fn stack(spec: &rec::Stack) -> AnalyticalMaterialStack<Complex> {
-    let constant =
-        |m: &rec::Material| Constant::new(m.relative_permittivity, m.relative_permeability);
-    let mut builder = Stack::from_analytical_materials(constant(&spec.left), constant(&spec.right));
+fn handle(m: &rec::Material) -> Result<AnalyticalMaterialHandle<Complex>, Failure> {
+    Ok(match m {
+        rec::Material::Constant(c) => AnalyticalMaterialHandle::new(Constant::new(
+            c.relative_permittivity,
+            c.relative_permeability,
+        )),
+        rec::Material::Sellmeier(s) => {
+            AnalyticalMaterialHandle::new(sellmeier_model(&s.sellmeier)?)
+        }
+    })
+}
+
+fn stack(spec: &rec::Stack) -> Result<AnalyticalMaterialStack<Complex>, Failure> {
+    let mut builder = StackBuilder::new(handle(&spec.left)?, handle(&spec.right)?);
     for layer in &spec.layers {
-        builder = builder.analytical_layer(
-            constant(&layer.material),
+        builder = builder.layer(
+            handle(&layer.material)?,
             Length::centimetres(layer.thickness_m / M_PER_CM),
         );
     }
-    builder.finalise()
+    Ok(builder.finalise())
 }
 
 /// k0 in lamina-mode's internal cm^-1.
-fn k0_cm(r: &rec::GuidedRequest) -> f64 {
+/// Field-recovery settings with the characteristic limit scaled to k0.
+pub(crate) fn recovery_settings(r: &rec::GuidedRequest) -> FieldRecoverySettings {
+    FieldRecoverySettings {
+        characteristic_limit: CHARACTERISTIC_RTOL * k0_cm(r),
+        relative_boundary_limit: RELATIVE_BOUNDARY_LIMIT,
+        ..Default::default()
+    }
+}
+
+pub(crate) fn k0_cm(r: &rec::GuidedRequest) -> f64 {
     TAU / (r.wavelength_m / M_PER_CM)
 }
 
@@ -145,10 +239,16 @@ fn window(r: &rec::GuidedRequest) -> GuidedWindow {
     }
 }
 
-/// Residual limit per unit k0 (cm^-1). lamina-mode's default absolute limit,
-/// 1e-10, is about 1.6e-11 k0 at its reference wavelength of 1 cm; the bindings
-/// keep that ratio at every scale (docs/decisions/0003).
-const RESIDUAL_RTOL: f64 = 1e-11;
+/// Residual limit per unit k0 (cm^-1). The residual floor at accepted roots
+/// depends on the stack and the search path, up to about 2e-10 k0 measured;
+/// the default leaves a fivefold margin while keeping the seed's boundary
+/// defect near 1e-7. Root accuracy is set by the native correction
+/// tolerances, which must also pass (docs/decisions/0003).
+const RESIDUAL_RTOL: f64 = 1e-9;
+/// Field-recovery limit on the seed's relative boundary defect, above the
+/// defects that roots accepted at the residual limit leave; every profile
+/// records its actual defect (docs/decisions/0003).
+const RELATIVE_BOUNDARY_LIMIT: f64 = 1e-5;
 /// Field-recovery characteristic limit per unit k0 (cm^-1): lamina-mode's
 /// default, 1e-6, at a wavelength of 1 cm.
 const CHARACTERISTIC_RTOL: f64 = 1e-6 / TAU;
@@ -190,7 +290,7 @@ fn gap(g: &lamina_mode::GuidedGap) -> rec::Gap {
 
 pub fn enumerate(input: rec::GuidedInput) -> Result<Solved, Failure> {
     let input = normalise(input)?;
-    let basis = lamina_mode::enumerate_guided_modes(stack(&input.stack), window(&input.request))
+    let basis = lamina_mode::enumerate_guided_modes(stack(&input.stack)?, window(&input.request))
         .map_err(|e| Failure::Enumeration(e.to_string()))?;
     let k0_cm = k0_cm(&input.request);
     let modes = basis
@@ -225,7 +325,7 @@ pub fn enumerate(input: rec::GuidedInput) -> Result<Solved, Failure> {
         schema: rec::BASIS_SCHEMA.to_owned(),
         schema_version: rec::SCHEMA_VERSION,
         conventions: rec::Conventions::current(),
-        assumption: ASSUMPTION.to_owned(),
+        assumption: assumption(&input.stack).to_owned(),
         input_hash: rec::digest(&input).map_err(Failure::Invalid)?,
         k0_rad_per_m: k0_cm / M_PER_CM,
         light_line_rad_per_m: basis.light_line / M_PER_CM,
@@ -244,7 +344,7 @@ pub fn enumerate(input: rec::GuidedInput) -> Result<Solved, Failure> {
 /// Map z positions (m) to core sampling regions. Consecutive samples in the
 /// same region share one request; request order is preserved. A sample on
 /// an interface belongs to the region on its +z side.
-fn sampling(spec: &rec::Stack, z_m: &[f64]) -> Result<FieldSampling<f64>, Failure> {
+pub(crate) fn sampling(spec: &rec::Stack, z_m: &[f64]) -> Result<FieldSampling<f64>, Failure> {
     let mut interfaces_cm = vec![0.];
     for layer in &spec.layers {
         interfaces_cm.push(interfaces_cm.last().unwrap() + layer.thickness_m / M_PER_CM);
@@ -285,7 +385,10 @@ fn sampling(spec: &rec::Stack, z_m: &[f64]) -> Result<FieldSampling<f64>, Failur
         }))
 }
 
-fn point(solved: &Solved, mode_index: usize) -> Result<&lamina_mode::ModePoint, Failure> {
+pub(crate) fn point(
+    solved: &Solved,
+    mode_index: usize,
+) -> Result<&lamina_mode::ModePoint, Failure> {
     solved.basis.modes.get(mode_index).ok_or_else(|| {
         Failure::Invalid(format!(
             "mode_index {mode_index} is out of range for {} modes",
@@ -305,10 +408,7 @@ pub fn profile(
         .guided_power_profile_with(
             Scatter2::new(),
             &sampling,
-            FieldRecoverySettings {
-                characteristic_limit: CHARACTERISTIC_RTOL * k0_cm(&solved.record.input.request),
-                ..Default::default()
-            },
+            recovery_settings(&solved.record.input.request),
         )
         .map_err(|e| Failure::Fields(format!("{e}: {e:?}")))?;
     let normalisation = match &profile.normalization {
@@ -460,7 +560,7 @@ pub fn derivatives(
         schema: rec::DERIVATIVES_SCHEMA.to_owned(),
         schema_version: rec::SCHEMA_VERSION,
         conventions: rec::Conventions::current(),
-        assumption: ASSUMPTION.to_owned(),
+        assumption: assumption(&solved.record.input.stack).to_owned(),
         input_hash: solved.record.input_hash.clone(),
         mode_index,
         characteristic,

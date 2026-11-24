@@ -35,6 +35,10 @@ __all__ = [
     "SCHEMA_VERSION",
     "CONVENTIONS",
     "Material",
+    "SellmeierMaterial",
+    "Parameter",
+    "GuidedSensitivity",
+    "GroupIndex",
     "Layer",
     "Stack",
     "Refinement",
@@ -144,6 +148,9 @@ class Material:
     def refractive_index(self) -> float:
         return math.sqrt(self.relative_permittivity * self.relative_permeability)
 
+    def refractive_index_at(self, wavelength_m: float) -> float:
+        return self.refractive_index
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "relative_permittivity": self.relative_permittivity,
@@ -161,8 +168,52 @@ class Material:
         return hash((self.relative_permittivity, self.relative_permeability))
 
 
-def _material(m: Material | float) -> Material:
-    return m if isinstance(m, Material) else Material(float(m))
+@dataclass(frozen=True)
+class SellmeierMaterial:
+    """A dispersive dielectric: ε(λ) = constant + Σ Bⱼ λ² / (λ² − λⱼ²), μ = 1.
+
+    `terms` holds `(Bⱼ, λⱼ in metres)` pairs. No pole may sit at the operating
+    wavelength.
+    """
+
+    constant: float
+    terms: tuple[tuple[float, float], ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "constant", float(self.constant))
+        object.__setattr__(self, "terms", tuple((float(b), float(p)) for b, p in self.terms))
+
+    def relative_permittivity_at(self, wavelength_m: float) -> float:
+        l2 = wavelength_m * wavelength_m
+        return self.constant + sum(b * l2 / (l2 - p * p) for b, p in self.terms)
+
+    def refractive_index_at(self, wavelength_m: float) -> float:
+        return math.sqrt(self.relative_permittivity_at(wavelength_m))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "sellmeier": {
+                "constant": self.constant,
+                "terms": [{"coefficient": b, "pole_wavelength_m": p} for b, p in self.terms],
+            },
+            "relative_permeability": 1.0,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> SellmeierMaterial:
+        s = d["sellmeier"]
+        return cls(s["constant"], tuple((t["coefficient"], t["pole_wavelength_m"]) for t in s["terms"]))
+
+
+AnyMaterial = Material | SellmeierMaterial
+
+
+def _material(m: AnyMaterial | float) -> AnyMaterial:
+    return m if isinstance(m, (Material, SellmeierMaterial)) else Material(float(m))
+
+
+def _material_from_dict(d: Mapping[str, Any]) -> AnyMaterial:
+    return SellmeierMaterial.from_dict(d) if "sellmeier" in d else Material.from_dict(d)
 
 
 @dataclass(frozen=True, eq=False)
@@ -181,14 +232,14 @@ class Layer:
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> Layer:
-        return cls(Material.from_dict(d["material"]), d["thickness_m"])
+        return cls(_material_from_dict(d["material"]), d["thickness_m"])
 
 
 @dataclass(frozen=True, eq=False)
 class Stack:
     """A planar multilayer: left exterior, finite layers along +z, right exterior.
 
-    Materials may be given as a `Material` or as a relative permittivity.
+    Materials may be given as a `Material`, a `SellmeierMaterial`, or a relative permittivity.
     Layers may be given as a `Layer` or as a `(material, thickness_m)` pair.
     """
 
@@ -210,9 +261,9 @@ class Stack:
         """Interface positions, with the first at z = 0."""
         return _readonly(np.concatenate([[0.0], np.cumsum([l.thickness_m for l in self.layers])]))
 
-    @property
-    def max_refractive_index(self) -> float:
-        return max(m.refractive_index for m in (self.left, self.right, *(l.material for l in self.layers)))
+    def max_refractive_index(self, wavelength_m: float) -> float:
+        materials = (self.left, self.right, *(l.material for l in self.layers))
+        return max(m.refractive_index_at(wavelength_m) for m in materials)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -224,9 +275,9 @@ class Stack:
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> Stack:
         return cls(
-            Material.from_dict(d["left"]),
+            _material_from_dict(d["left"]),
             tuple(Layer.from_dict(l) for l in d["layers"]),
-            Material.from_dict(d["right"]),
+            _material_from_dict(d["right"]),
         )
 
     def __eq__(self, other: object) -> bool:
@@ -339,7 +390,7 @@ class GuidedInput(_Record):
         """Fill a default |beta| window and validate."""
         if request.abs_beta_rad_per_m is None:
             try:
-                upper = 1.01 * request.k0_rad_per_m * stack.max_refractive_index
+                upper = 1.01 * request.k0_rad_per_m * stack.max_refractive_index(request.wavelength_m)
             except (ValueError, ZeroDivisionError, OverflowError):
                 # Left to the native validation below, which names the bad value.
                 upper = 1.0
@@ -531,6 +582,28 @@ class GuidedBasis(_Record):
         text = self._solver().local_derivatives(int(mode_index), [int(i) for i in thickness_layers])
         return LocalDerivatives.from_dict(json.loads(text))
 
+    def sensitivity(
+        self,
+        mode_index: int,
+        parameter: Parameter,
+        z_m: Sequence[float] | np.ndarray = (),
+        frame: Literal["material_attached", "fixed_lab"] = "material_attached",
+    ) -> GuidedSensitivity:
+        """Total derivatives of one mode with respect to `parameter`: dβ/dp, the
+        unit-power fields at z (m) and their derivatives in `frame`, and the
+        regional power fractions with their derivatives."""
+        z = np.ascontiguousarray(z_m, dtype=float).ravel()
+        text = self._solver().sensitivity(
+            int(mode_index), _dumps(parameter.to_dict()), z.tolist(), frame
+        )
+        return GuidedSensitivity.from_dict(json.loads(text))
+
+    def group_index(self, mode_index: int, tolerance: float = 1e-8) -> GroupIndex:
+        """The group index of one mode, certified by two independent estimates
+        agreeing within `tolerance`; raises `DerivativesFailed` otherwise."""
+        text = self._solver().group_index(int(mode_index), float(tolerance))
+        return GroupIndex.from_dict(json.loads(text))
+
 
 @dataclass(frozen=True)
 class PowerNormalisation:
@@ -720,6 +793,230 @@ class LocalDerivatives(_Record):
             d["characteristic_failure"],
             tuple(Partial.from_dict(p) for p in d["partials"]),
             tuple(Slope.from_dict(s) for s in d["slopes"]),
+        )
+
+
+@dataclass(frozen=True)
+class Parameter:
+    """A stack or material parameter to differentiate with respect to.
+
+    Regions run left exterior (0), layers (1..n), right exterior (n + 1).
+    Interfaces run 0..n from the left. Build one with the class methods.
+    """
+
+    kind: str
+    layer: int | None = None
+    interface: int | None = None
+    region: int | None = None
+    term: int | None = None
+
+    @classmethod
+    def thickness(cls, layer: int) -> Parameter:
+        """A layer's thickness, with the interfaces to its left fixed (per m)."""
+        return cls("thickness", layer=layer)
+
+    @classmethod
+    def interface_position(cls, interface: int) -> Parameter:
+        """One interface's position, with its neighbours fixed (per m)."""
+        return cls("interface", interface=interface)
+
+    @classmethod
+    def translation(cls) -> Parameter:
+        """A rigid translation of the whole stack along z (per m)."""
+        return cls("translation")
+
+    @classmethod
+    def wavelength(cls) -> Parameter:
+        """The vacuum wavelength, with every material's dispersion (per m)."""
+        return cls("wavelength")
+
+    @classmethod
+    def permittivity(cls, region: int) -> Parameter:
+        """A region's relative permittivity at the operating wavelength (per unit)."""
+        return cls("permittivity", region=region)
+
+    @classmethod
+    def permeability(cls, region: int) -> Parameter:
+        """A region's relative permeability at the operating wavelength (per unit)."""
+        return cls("permeability", region=region)
+
+    @classmethod
+    def sellmeier_constant(cls, region: int) -> Parameter:
+        return cls("sellmeier_constant", region=region)
+
+    @classmethod
+    def sellmeier_coefficient(cls, region: int, term: int) -> Parameter:
+        return cls("sellmeier_coefficient", region=region, term=term)
+
+    @classmethod
+    def sellmeier_pole_wavelength(cls, region: int, term: int) -> Parameter:
+        """A Sellmeier pole wavelength (per m)."""
+        return cls("sellmeier_pole_wavelength", region=region, term=term)
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"kind": self.kind}
+        for key in ("layer", "interface", "region", "term"):
+            value = getattr(self, key)
+            if value is not None:
+                d[key] = int(value)
+        return d
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> Parameter:
+        return cls(**d)
+
+
+@dataclass(frozen=True)
+class Conditioning:
+    """Conditioning of the implicit derivative at a simple root."""
+
+    characteristic: complex
+    characteristic_direction: complex
+    characteristic_beta: complex
+    denominator_threshold: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "characteristic": _pair(self.characteristic),
+            "characteristic_direction": _pair(self.characteristic_direction),
+            "characteristic_beta": _pair(self.characteristic_beta),
+            "denominator_threshold": self.denominator_threshold,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> Conditioning:
+        return cls(
+            _c(d["characteristic"]),
+            _c(d["characteristic_direction"]),
+            _c(d["characteristic_beta"]),
+            d["denominator_threshold"],
+        )
+
+
+@dataclass(frozen=True, eq=False)
+class GuidedSensitivity(_Record):
+    """Total derivatives of one mode with respect to one parameter.
+
+    `dbeta_rad_per_m` is in rad/m per `parameter_unit`. Field arrays have shape
+    (n, 3); derivative arrays are per `parameter_unit` and are zero where
+    `sample_failures` names a cause. Fractions run left exterior, layers, right
+    exterior; they sum to one and their rates to zero.
+    """
+
+    conventions: Mapping[str, str]
+    input_hash: str
+    mode_index: int
+    parameter: Parameter
+    parameter_unit: str
+    frame: str
+    beta_rad_per_m: complex
+    dbeta_rad_per_m: complex
+    conditioning: Conditioning
+    z_m: np.ndarray
+    electric_v_per_m: np.ndarray
+    magnetic_a_per_m: np.ndarray
+    d_electric_v_per_m: np.ndarray
+    d_magnetic_a_per_m: np.ndarray
+    sample_failures: tuple[str | None, ...]
+    power_fractions: np.ndarray
+    power_fraction_rates: np.ndarray
+    _kind = "guided_sensitivity"
+
+    def to_dict(self) -> dict[str, Any]:
+        e, h = self.electric_v_per_m, self.magnetic_a_per_m
+        de, dh = self.d_electric_v_per_m, self.d_magnetic_a_per_m
+        return {
+            "schema": "lamina.guided_sensitivity",
+            "schema_version": SCHEMA_VERSION,
+            "conventions": dict(self.conventions),
+            "input_hash": self.input_hash,
+            "mode_index": self.mode_index,
+            "parameter": self.parameter.to_dict(),
+            "parameter_unit": self.parameter_unit,
+            "frame": self.frame,
+            "beta_rad_per_m": _pair(self.beta_rad_per_m),
+            "dbeta_rad_per_m": _pair(self.dbeta_rad_per_m),
+            "conditioning": self.conditioning.to_dict(),
+            "z_m": self.z_m.tolist(),
+            "electric_real": e.real.tolist(),
+            "electric_imag": e.imag.tolist(),
+            "magnetic_real": h.real.tolist(),
+            "magnetic_imag": h.imag.tolist(),
+            "d_electric_real": de.real.tolist(),
+            "d_electric_imag": de.imag.tolist(),
+            "d_magnetic_real": dh.real.tolist(),
+            "d_magnetic_imag": dh.imag.tolist(),
+            "sample_failures": list(self.sample_failures),
+            "power_fractions": self.power_fractions.tolist(),
+            "power_fraction_rates": self.power_fraction_rates.tolist(),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> GuidedSensitivity:
+        return cls(
+            MappingProxyType(dict(d["conventions"])),
+            d["input_hash"],
+            d["mode_index"],
+            Parameter.from_dict(d["parameter"]),
+            d["parameter_unit"],
+            d["frame"],
+            _c(d["beta_rad_per_m"]),
+            _c(d["dbeta_rad_per_m"]),
+            Conditioning.from_dict(d["conditioning"]),
+            _readonly(np.asarray(d["z_m"], dtype=float)),
+            _components(d["electric_real"], d["electric_imag"]),
+            _components(d["magnetic_real"], d["magnetic_imag"]),
+            _components(d["d_electric_real"], d["d_electric_imag"]),
+            _components(d["d_magnetic_real"], d["d_magnetic_imag"]),
+            tuple(d["sample_failures"]),
+            _readonly(np.asarray(d["power_fractions"], dtype=float)),
+            _readonly(np.asarray(d["power_fraction_rates"], dtype=float)),
+        )
+
+
+@dataclass(frozen=True, eq=False)
+class GroupIndex(_Record):
+    """A certified group index: `value` = Re(dβ/dk0), signed like β, agreeing with
+    the energy-velocity estimate c W / P within `tolerance`."""
+
+    conventions: Mapping[str, str]
+    input_hash: str
+    mode_index: int
+    value: float
+    derivative: complex
+    energy_estimate: float
+    relative_discrepancy: float
+    tolerance: float
+    conditioning: Conditioning
+    _kind = "group_index"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": "lamina.group_index",
+            "schema_version": SCHEMA_VERSION,
+            "conventions": dict(self.conventions),
+            "input_hash": self.input_hash,
+            "mode_index": self.mode_index,
+            "value": self.value,
+            "derivative": _pair(self.derivative),
+            "energy_estimate": self.energy_estimate,
+            "relative_discrepancy": self.relative_discrepancy,
+            "tolerance": self.tolerance,
+            "conditioning": self.conditioning.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> GroupIndex:
+        return cls(
+            MappingProxyType(dict(d["conventions"])),
+            d["input_hash"],
+            d["mode_index"],
+            d["value"],
+            _c(d["derivative"]),
+            d["energy_estimate"],
+            d["relative_discrepancy"],
+            d["tolerance"],
+            Conditioning.from_dict(d["conditioning"]),
         )
 
 

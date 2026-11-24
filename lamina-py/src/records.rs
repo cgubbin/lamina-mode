@@ -13,6 +13,8 @@ pub const INPUT_SCHEMA: &str = "lamina.guided_input";
 pub const BASIS_SCHEMA: &str = "lamina.guided_basis";
 pub const PROFILE_SCHEMA: &str = "lamina.guided_profile";
 pub const DERIVATIVES_SCHEMA: &str = "lamina.local_derivatives";
+pub const SENSITIVITY_SCHEMA: &str = "lamina.guided_sensitivity";
+pub const GROUP_INDEX_SCHEMA: &str = "lamina.group_index";
 
 /// A complex number as `[real, imaginary]`.
 pub type C2 = [f64; 2];
@@ -57,14 +59,46 @@ impl Conventions {
     }
 }
 
+/// A layer or exterior material. Untagged, with the constant material first,
+/// so records written before the Sellmeier variant existed keep their form
+/// and hash (docs/decisions/0005).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(untagged)]
+pub enum Material {
+    Constant(ConstantMaterial),
+    Sellmeier(SellmeierMaterial),
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct Material {
+pub struct ConstantMaterial {
     pub relative_permittivity: f64,
     pub relative_permeability: f64,
 }
 
+/// ε(λ) = constant + Σ Bⱼ λ² / (λ² − λⱼ²), with a constant permeability.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SellmeierMaterial {
+    pub sellmeier: Sellmeier,
+    pub relative_permeability: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Sellmeier {
+    pub constant: f64,
+    pub terms: Vec<SellmeierTerm>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SellmeierTerm {
+    pub coefficient: f64,
+    pub pole_wavelength_m: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Layer {
     pub material: Material,
@@ -258,6 +292,87 @@ pub struct LocalDerivatives {
     pub slopes: Vec<Slope>,
 }
 
+/// A parameter of the stack or its materials. Region indices run left
+/// exterior (0), layers (1..=n), right exterior (n + 1); interface indices run
+/// 0..=n from the left. See docs/decisions/0006 for units.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Parameter {
+    Thickness { layer: usize },
+    Interface { interface: usize },
+    Translation,
+    Wavelength,
+    Permittivity { region: usize },
+    Permeability { region: usize },
+    SellmeierConstant { region: usize },
+    SellmeierCoefficient { region: usize, term: usize },
+    SellmeierPoleWavelength { region: usize, term: usize },
+}
+
+/// Conditioning of a simple root's implicit derivative.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Conditioning {
+    pub characteristic: C2,
+    pub characteristic_direction: C2,
+    pub characteristic_beta: C2,
+    pub denominator_threshold: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Frame {
+    MaterialAttached,
+    FixedLab,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct GuidedSensitivity {
+    pub schema: String,
+    pub schema_version: u32,
+    pub conventions: Conventions,
+    pub input_hash: String,
+    pub mode_index: usize,
+    pub parameter: Parameter,
+    pub parameter_unit: String,
+    pub frame: Frame,
+    pub beta_rad_per_m: C2,
+    /// dβ/dp in rad/m per parameter unit.
+    pub dbeta_rad_per_m: C2,
+    pub conditioning: Conditioning,
+    pub z_m: Vec<f64>,
+    pub electric_real: Vec<[f64; 3]>,
+    pub electric_imag: Vec<[f64; 3]>,
+    pub magnetic_real: Vec<[f64; 3]>,
+    pub magnetic_imag: Vec<[f64; 3]>,
+    /// Derivatives per parameter unit; zero where `sample_failures` names a cause.
+    pub d_electric_real: Vec<[f64; 3]>,
+    pub d_electric_imag: Vec<[f64; 3]>,
+    pub d_magnetic_real: Vec<[f64; 3]>,
+    pub d_magnetic_imag: Vec<[f64; 3]>,
+    pub sample_failures: Vec<Option<String>>,
+    /// Left exterior, layers, right exterior.
+    pub power_fractions: Vec<f64>,
+    pub power_fraction_rates: Vec<f64>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct GroupIndex {
+    pub schema: String,
+    pub schema_version: u32,
+    pub conventions: Conventions,
+    pub input_hash: String,
+    pub mode_index: usize,
+    pub value: f64,
+    pub derivative: C2,
+    pub energy_estimate: f64,
+    pub relative_discrepancy: f64,
+    pub tolerance: f64,
+    pub conditioning: Conditioning,
+}
+
 /// Records with a schema identity that can be checked after deserialisation.
 pub trait Record: Serialize + for<'de> Deserialize<'de> {
     const SCHEMA: &'static str;
@@ -315,6 +430,8 @@ impl Record for GuidedBasis {
 
 record!(GuidedProfile, PROFILE_SCHEMA, conventions);
 record!(LocalDerivatives, DERIVATIVES_SCHEMA, conventions);
+record!(GuidedSensitivity, SENSITIVITY_SCHEMA, conventions);
+record!(GroupIndex, GROUP_INDEX_SCHEMA, conventions);
 
 pub fn check_identity<R: Record>(record: &R) -> Result<(), String> {
     let (schema, version) = record.identity();
