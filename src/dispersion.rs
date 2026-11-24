@@ -1100,7 +1100,7 @@ mod integration_tests {
 
         let solver = CompiledPlaneWaveModeSolver::<J, _, _>::compile(
             &stack,
-            Scatter2::default(),
+            Scatter2::new(),
             Polarisation::TransverseMagnetic,
         )
         .unwrap();

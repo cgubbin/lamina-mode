@@ -801,7 +801,10 @@ fn guided_rates_combine_dispersion_and_explicit_index_variation() {
     assert!((explicit.relative_permittivity - 0.6).abs() < 1e-14);
     assert!((direction.k0_rate(TAU).unwrap() + TAU * wavelength_rate).abs() < 1e-14);
     let h = 1e-5;
-    for (region, handle) in [stack.left_exterior(), stack.right_exterior()].into_iter().enumerate() {
+    for (region, handle) in [stack.left_exterior(), stack.right_exterior()]
+        .into_iter()
+        .enumerate()
+    {
         let evaluate = |step| {
             let k0 = Scalar(Complex::new(TAU / (1.0 + step * wavelength_rate), 0.0));
             let epsilon_rate = direction.regional_rates()[region].relative_permittivity;
@@ -812,7 +815,11 @@ fn guided_rates_combine_dispersion_and_explicit_index_variation() {
         };
         let plus = evaluate(h);
         let minus = evaluate(-h);
-        assert!((rates[region].relative_permittivity - (plus.0 - minus.0) / (2.0 * h)).abs() < 1e-10);
-        assert!((rates[region].relative_permeability - (plus.1 - minus.1) / (2.0 * h)).abs() < 1e-10);
+        assert!(
+            (rates[region].relative_permittivity - (plus.0 - minus.0) / (2.0 * h)).abs() < 1e-10
+        );
+        assert!(
+            (rates[region].relative_permeability - (plus.1 - minus.1) / (2.0 * h)).abs() < 1e-10
+        );
     }
 }
