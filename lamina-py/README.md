@@ -58,14 +58,12 @@ limits. Partial coverage is a result, not an exception. Invalid input raises
 `InvalidInput`; failed enumeration, field recovery or derivatives raise
 `EnumerationFailed`, `FieldsFailed` or `DerivativesFailed`, all `LaminaError`.
 
-## Sampling far into an exterior
+## Exterior fields
 
-Exterior fields are propagated outward from their interface. The finite
-precision of the root leaves a tiny admixture of the growing exterior wave,
-which overtakes the decaying one some tens of decay lengths out (the distance
-depends on the mode). Profiles are reliable within roughly ten decay lengths of
-the stack. The unit-power normalisation doesn't depend on samples: lamina-mode
-integrates the tails analytically.
+Exterior samples keep only the outgoing wave, so a guided field decays
+monotonically however far from the stack it is sampled. The unit-power
+normalisation integrates the tails analytically and doesn't depend on the
+samples.
 
 ## Serialisation and identity
 
