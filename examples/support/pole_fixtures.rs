@@ -63,15 +63,26 @@ pub fn frequency(
     target: Complex,
     pol: Polarisation,
 ) -> Result<ModePoint, Error> {
+    frequency_at_beta(stack, target, 0.0, pol)
+}
+
+pub fn frequency_at_beta(
+    stack: AnalyticalMaterialStack<Complex>,
+    target: Complex,
+    beta: f64,
+    pol: Polarisation,
+) -> Result<ModePoint, Error> {
     use lamina_core::{EvaluateMeromorphicMaterial, Scalar};
     let anchor = target + Complex::new(0.03, 0.02);
     let kappa = [stack.left_exterior(), stack.right_exterior()].map(|m| {
-        anchor
-            * (m.evaluate_relative_permittivity_complex(Scalar(anchor))
-                * m.evaluate_relative_permeability_complex(Scalar(anchor)))
+        (anchor
+            * anchor
+            * m.evaluate_relative_permittivity_complex(Scalar(anchor))
+            * m.evaluate_relative_permeability_complex(Scalar(anchor))
+            - beta * beta)
             .sqrt()
     });
-    let p = FrequencyProblem::new(stack, 0., pol)?;
+    let p = FrequencyProblem::new(stack, beta, pol)?;
     let d = p.domain(
         FrequencyDomainInput {
             bounds: FrequencyRegion::new(

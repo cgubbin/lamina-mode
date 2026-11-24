@@ -616,3 +616,9 @@ impl<S: ModeDeterminantSolver<J> + Clone> ModalProblem<(), S> {
 
 #[cfg(test)]
 mod tests;
+
+impl<S> FrequencyDomain<S> {
+    pub(crate) fn frequency_chart(&self) -> &FrequencyChart {
+        self.search.dispersion().chart()
+    }
+}

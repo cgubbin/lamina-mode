@@ -388,3 +388,28 @@ where
         self.refine(&discovered, refinement, matching)
     }
 }
+
+impl FrequencyProblem {
+    pub(super) fn correct_frequency_seed(
+        &self,
+        domain: &Domain,
+        seed: Complex,
+        settings: RefinementConfig,
+    ) -> Result<ModePoint, BranchFailure> {
+        let DomainKind::Frequency(domain) = &domain.inner else {
+            return Err(BranchFailure::InvalidRequest);
+        };
+        let settings = crate::refinement::RefinementConfig::from(settings)
+            .validate()
+            .map_err(|_| BranchFailure::InvalidRequest)?;
+        let (root, signature, enclosure) = self.inner.corrected_point(domain, seed, settings)?;
+        Ok(ModePoint {
+            root,
+            signature: Ok(signature),
+            enclosure,
+            chart: 0,
+            candidate: 0,
+            backend: std::any::type_name::<Scatter2>(),
+        })
+    }
+}
