@@ -1,6 +1,6 @@
 # Enumerating a guided basis
 
-Run the downstream example with `cargo run --locked --example guided_basis`. It builds an asymmetric dielectric slab at a fixed vacuum wavelength, enumerates six forward TE modes and samples each with unit longitudinal power per metre of invariant width.
+Run the example with `cargo run --locked --example guided_basis`. It builds an asymmetric dielectric slab at a fixed vacuum wavelength, enumerates six forward TE modes and samples each with unit longitudinal power per metre of invariant width.
 
 Pass an analytical core stack and a `GuidedWindow` to `enumerate_guided_modes`. Set the wavelength with a typed length and specify the open interval of |β| and cutoff margin in cm⁻¹. Select TE or TM and forward or backward propagation. Materials may be dispersive; all relative permittivities and permeabilities must be finite, positive and real at the stated wavelength. The caller's analytic declaration covers each local characteristic correction. Results use Scatter2.
 

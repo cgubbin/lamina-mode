@@ -173,7 +173,7 @@ fn guided_beta_sensitivity_matches_corrected_slabs_in_both_directions() {
         let mut req = request(Polarisation::TransverseElectric);
         req.direction = propagation;
         let solve = |d| {
-            enumerate_guided_modes(slab(d, 1.44), req.clone())
+            enumerate_guided_modes(slab(d, 1.44), req)
                 .unwrap()
                 .modes
                 .remove(0)
@@ -194,7 +194,7 @@ fn guided_beta_sensitivity_matches_corrected_slabs_in_both_directions() {
         assert!((result.beta_rate - difference).norm() < 1e-6);
         let layer = lamina_core::FiniteLayerIndex::new(0);
         let local = point.local_derivatives_with(
-            backend.clone(),
+            backend,
             &[PhysicalParameter::Beta, PhysicalParameter::LayerThickness(layer)],
             LocalAnalyticityAssumption::CallerAssumedHolomorphicInK0AndBetaAndRegularInThickness,
             Default::default(),
@@ -440,7 +440,7 @@ fn guided_power_tangent_matches_independently_normalized_slabs() {
         let step = 1e-5;
         let profile = |d| {
             solve(d)
-                .guided_power_profile_with(backend.clone(), &sampling, Default::default())
+                .guided_power_profile_with(backend, &sampling, Default::default())
                 .unwrap()
         };
         let plus = profile(0.25 + step);
@@ -532,7 +532,7 @@ fn slab_sensitivities_converge_for_wavelength_index_and_interface_motion() {
                     (beta_fd - tangent.eigenvalue.beta_rate).norm() / beta_fd.norm().max(1.0);
                 let profile = |point: &ModePoint| {
                     point
-                        .guided_power_profile_with(backend.clone(), &sampling, Default::default())
+                        .guided_power_profile_with(backend, &sampling, Default::default())
                         .unwrap()
                 };
                 let plus = profile(&plus);
