@@ -71,6 +71,8 @@ pub enum Failure {
     Enumeration(String),
     Fields(String),
     Derivatives(String),
+    /// A pairing integral exceeded its accuracy or sampling budget.
+    Integration(String),
 }
 
 pub(crate) fn c2(z: Complex) -> C2 {

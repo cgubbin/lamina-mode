@@ -1,9 +1,10 @@
 """Python bindings over the lamina-mode guided basis.
 
 Enumerate the guided modes of a planar multilayer of constant real materials,
-sample their unit-power fields and evaluate their local derivatives. Every
-quantity is SI with its unit in its name: lengths in metres, wavenumbers in
-rad/m, fields in V/m and A/m, power in W per metre of invariant width.
+sample their unit-power fields, evaluate their local derivatives and pair
+modes with each other and with supplied fields. Every quantity is SI with its
+unit in its name: lengths in metres, wavenumbers in rad/m, fields in V/m and
+A/m, power in W per metre of invariant width.
 
 Results keep their evidence (the window, expected and found counts,
 unresolved intervals, completeness, and each root's residual and limits) and
@@ -17,7 +18,7 @@ import json
 import math
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence
 
 import numpy as np
 
@@ -26,6 +27,7 @@ from ._native import (
     DerivativesFailed,
     EnumerationFailed,
     FieldsFailed,
+    IntegrationFailed,
     InvalidInput,
     LaminaError,
     SchemaError,
@@ -52,13 +54,22 @@ __all__ = [
     "Partial",
     "Slope",
     "LocalDerivatives",
+    "PowerOverlap",
+    "PowerOverlapSensitivity",
+    "Reciprocity",
+    "LocalCoupling",
+    "FieldProjection",
     "enumerate_guided_modes",
+    "power_overlap",
+    "power_overlap_sensitivity",
+    "reciprocity",
     "LaminaError",
     "SchemaError",
     "InvalidInput",
     "EnumerationFailed",
     "FieldsFailed",
     "DerivativesFailed",
+    "IntegrationFailed",
 ]
 
 SCHEMA_VERSION: int = _native.SCHEMA_VERSION
@@ -604,6 +615,62 @@ class GuidedBasis(_Record):
         text = self._solver().group_index(int(mode_index), float(tolerance))
         return GroupIndex.from_dict(json.loads(text))
 
+    def local_coupling(self, parameter: Parameter, gap_rad_per_m: float | None = None) -> LocalCoupling:
+        """The perturbation matrix and coupling coefficients of this basis along a
+        fixed-wavelength `parameter`.
+
+        The basis must be complete, its regions nonmagnetic with positive
+        permittivity, and `parameter` neither the wavelength nor a permeability;
+        otherwise `InvalidInput`. Modes whose propagation constants differ by no
+        more than `gap_rad_per_m` (default 1e-6 k0) form an unresolved group
+        whose mutual coefficients are absent.
+        """
+        gap = None if gap_rad_per_m is None else float(gap_rad_per_m)
+        text = self._solver().local_coupling(_dumps(parameter.to_dict()), gap)
+        return LocalCoupling.from_dict(json.loads(text))
+
+    def project_field(
+        self,
+        field: Callable[[float, str], tuple[Any, Any]],
+        support_m: tuple[float, float],
+        interfaces_m: Sequence[float] = (),
+        origin_m: float = 0.0,
+        rank_rtol: float = 1e-8,
+        field_id: str | None = None,
+    ) -> FieldProjection:
+        """Project a supplied field onto this complete basis.
+
+        `field(z_m, side)` returns `(E, H)`: E in V/m and H in A/m, each three
+        complex components (x, y, z), at position `z_m` in the field's own
+        coordinate. `side` is "left" (the limit from -z), "right" (the limit from
+        +z) or "interior". The field must vanish outside `support_m`;
+        `interfaces_m` lists the points strictly inside the support where it may
+        be discontinuous. `origin_m` places the basis's first interface in the
+        field's coordinate.
+
+        The callable runs once per distinct (position, side), from Python, inside
+        an adaptive quadrature for each mode, so its cost sets the projection's.
+        Each interval is integrated with uniform panels: a support far wider than
+        the field's decay length costs samples and may exceed the sampling budget
+        (`IntegrationFailed`). An exception the callable raises propagates
+        unchanged; a wrong shape or a non-finite value raises `InvalidInput`.
+
+        The result has the Gram matrix, the right-hand side, the numerical rank
+        under `rank_rtol` and the singular values; at full rank, the coefficients,
+        condition number and residual. `field_id` identifies the field in the
+        record and so enters its hash; without it the field is unidentified.
+        """
+        lo, hi = support_m
+        text = self._solver().project_field(
+            _field_sampler(field),
+            [float(lo), float(hi)],
+            [float(z) for z in interfaces_m],
+            float(origin_m),
+            float(rank_rtol),
+            None if field_id is None else str(field_id),
+        )
+        return FieldProjection.from_dict(json.loads(text))
+
 
 @dataclass(frozen=True)
 class PowerNormalisation:
@@ -1018,6 +1085,497 @@ class GroupIndex(_Record):
             d["tolerance"],
             Conditioning.from_dict(d["conditioning"]),
         )
+
+
+# ---------------------------------------------------------------- pairings
+
+
+def _origins(origins_m: tuple[float, float]) -> list[float]:
+    first, second = origins_m
+    return [float(first), float(second)]
+
+
+def _complex_matrix(re: Sequence[Sequence[float]], im: Sequence[Sequence[float]]) -> np.ndarray:
+    return _readonly(np.asarray(re, dtype=float) + 1j * np.asarray(im, dtype=float))
+
+
+def _complex_vector(re: Sequence[float], im: Sequence[float]) -> np.ndarray:
+    return _readonly(np.asarray(re, dtype=float) + 1j * np.asarray(im, dtype=float))
+
+
+def _optional_matrix(rows: Sequence[Sequence[float | None]]) -> np.ndarray:
+    return np.array([[math.nan if v is None else v for v in row] for row in rows], dtype=float)
+
+
+def _optional_rows(a: np.ndarray, present: np.ndarray) -> list[list[float | None]]:
+    return [
+        [float(v) if ok else None for v, ok in zip(row, mask)]
+        for row, mask in zip(a.tolist(), present.tolist())
+    ]
+
+
+class _TwoModeRecord(_Record):
+    """Fields shared by the records of two registered modes."""
+
+    def _identity(self, schema: str) -> dict[str, Any]:
+        return {
+            "schema": schema,
+            "schema_version": SCHEMA_VERSION,
+            "conventions": dict(self.conventions),  # type: ignore[attr-defined]
+            "assumption": self.assumption,  # type: ignore[attr-defined]
+            "definition": self.definition,  # type: ignore[attr-defined]
+            "first_input_hash": self.first_input_hash,  # type: ignore[attr-defined]
+            "first_mode_index": self.first_mode_index,  # type: ignore[attr-defined]
+            "second_input_hash": self.second_input_hash,  # type: ignore[attr-defined]
+            "second_mode_index": self.second_mode_index,  # type: ignore[attr-defined]
+        }
+
+
+@dataclass(frozen=True, eq=False)
+class PowerOverlap(_TwoModeRecord):
+    """The power pairing (1/4) ∫ (E1 × H2* + E2* × H1) · x dz of two unit-power
+    modes, linear in the first, in W/m.
+
+    `origins_m` places each basis's first interface in a common frame.
+    `exterior_power_w_per_m` holds the analytic tails beyond the outermost
+    interfaces (left, right); `partition_m` is the union of both stacks'
+    interfaces; `quadrature_change_w_per_m` is the change between the last two
+    composite estimates.
+    """
+
+    conventions: Mapping[str, str]
+    assumption: str
+    definition: str
+    first_input_hash: str
+    first_mode_index: int
+    second_input_hash: str
+    second_mode_index: int
+    origins_m: tuple[float, float]
+    power_w_per_m: complex
+    exterior_power_w_per_m: tuple[complex, complex]
+    partition_m: np.ndarray
+    sample_count: int
+    quadrature_change_w_per_m: float
+    _kind = "guided_power_overlap"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            **self._identity("lamina.guided_power_overlap"),
+            "origins_m": list(self.origins_m),
+            "power_w_per_m": _pair(self.power_w_per_m),
+            "exterior_power_w_per_m": [_pair(z) for z in self.exterior_power_w_per_m],
+            "partition_m": self.partition_m.tolist(),
+            "sample_count": self.sample_count,
+            "quadrature_change_w_per_m": self.quadrature_change_w_per_m,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> PowerOverlap:
+        return cls(
+            MappingProxyType(dict(d["conventions"])),
+            d["assumption"],
+            d["definition"],
+            d["first_input_hash"],
+            d["first_mode_index"],
+            d["second_input_hash"],
+            d["second_mode_index"],
+            tuple(d["origins_m"]),
+            _c(d["power_w_per_m"]),
+            tuple(_c(z) for z in d["exterior_power_w_per_m"]),
+            _readonly(np.asarray(d["partition_m"], dtype=float)),
+            d["sample_count"],
+            d["quadrature_change_w_per_m"],
+        )
+
+
+@dataclass(frozen=True, eq=False)
+class PowerOverlapSensitivity(_TwoModeRecord):
+    """The power overlap of two modes and its derivative, each stack along its own
+    parameter (None holds it fixed), per one shared `parameter_unit`.
+
+    The base overlap and its evidence are always present. `power_rate_w_per_m`
+    is in W/m per `parameter_unit`; when the derivative cannot be formed it is
+    None and `derivative_failure` names the cause.
+    """
+
+    conventions: Mapping[str, str]
+    assumption: str
+    definition: str
+    first_input_hash: str
+    first_mode_index: int
+    second_input_hash: str
+    second_mode_index: int
+    first_parameter: Parameter | None
+    second_parameter: Parameter | None
+    parameter_unit: str
+    origins_m: tuple[float, float]
+    power_w_per_m: complex
+    exterior_power_w_per_m: tuple[complex, complex]
+    partition_m: np.ndarray
+    sample_count: int
+    quadrature_change_w_per_m: float
+    power_rate_w_per_m: complex | None
+    exterior_rates_w_per_m: tuple[complex, complex] | None
+    rate_sample_count: int | None
+    rate_quadrature_change_w_per_m: float | None
+    derivative_failure: str | None
+    _kind = "guided_overlap_sensitivity"
+
+    def to_dict(self) -> dict[str, Any]:
+        rates = self.exterior_rates_w_per_m
+        return {
+            **self._identity("lamina.guided_overlap_sensitivity"),
+            "first_parameter": None if self.first_parameter is None else self.first_parameter.to_dict(),
+            "second_parameter": None if self.second_parameter is None else self.second_parameter.to_dict(),
+            "parameter_unit": self.parameter_unit,
+            "origins_m": list(self.origins_m),
+            "power_w_per_m": _pair(self.power_w_per_m),
+            "exterior_power_w_per_m": [_pair(z) for z in self.exterior_power_w_per_m],
+            "partition_m": self.partition_m.tolist(),
+            "sample_count": self.sample_count,
+            "quadrature_change_w_per_m": self.quadrature_change_w_per_m,
+            "power_rate_w_per_m": _opt_pair(self.power_rate_w_per_m),
+            "exterior_rates_w_per_m": None if rates is None else [_pair(z) for z in rates],
+            "rate_sample_count": self.rate_sample_count,
+            "rate_quadrature_change_w_per_m": self.rate_quadrature_change_w_per_m,
+            "derivative_failure": self.derivative_failure,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> PowerOverlapSensitivity:
+        def parameter(p: Mapping[str, Any] | None) -> Parameter | None:
+            return None if p is None else Parameter.from_dict(p)
+
+        rates = d["exterior_rates_w_per_m"]
+        return cls(
+            MappingProxyType(dict(d["conventions"])),
+            d["assumption"],
+            d["definition"],
+            d["first_input_hash"],
+            d["first_mode_index"],
+            d["second_input_hash"],
+            d["second_mode_index"],
+            parameter(d["first_parameter"]),
+            parameter(d["second_parameter"]),
+            d["parameter_unit"],
+            tuple(d["origins_m"]),
+            _c(d["power_w_per_m"]),
+            tuple(_c(z) for z in d["exterior_power_w_per_m"]),
+            _readonly(np.asarray(d["partition_m"], dtype=float)),
+            d["sample_count"],
+            d["quadrature_change_w_per_m"],
+            _opt_c(d["power_rate_w_per_m"]),
+            None if rates is None else tuple(_c(z) for z in rates),
+            d["rate_sample_count"],
+            d["rate_quadrature_change_w_per_m"],
+            d["derivative_failure"],
+        )
+
+
+@dataclass(frozen=True, eq=False)
+class Reciprocity(_TwoModeRecord):
+    """The unconjugated, antisymmetric flux ∫ (E1 × H2 − E2 × H1) · x dz of two
+    unit-power modes, in W/m, registered as for `PowerOverlap`."""
+
+    conventions: Mapping[str, str]
+    assumption: str
+    definition: str
+    first_input_hash: str
+    first_mode_index: int
+    second_input_hash: str
+    second_mode_index: int
+    origins_m: tuple[float, float]
+    flux_w_per_m: complex
+    exterior_flux_w_per_m: tuple[complex, complex]
+    partition_m: np.ndarray
+    sample_count: int
+    quadrature_change_w_per_m: float
+    _kind = "guided_reciprocity"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            **self._identity("lamina.guided_reciprocity"),
+            "origins_m": list(self.origins_m),
+            "flux_w_per_m": _pair(self.flux_w_per_m),
+            "exterior_flux_w_per_m": [_pair(z) for z in self.exterior_flux_w_per_m],
+            "partition_m": self.partition_m.tolist(),
+            "sample_count": self.sample_count,
+            "quadrature_change_w_per_m": self.quadrature_change_w_per_m,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> Reciprocity:
+        return cls(
+            MappingProxyType(dict(d["conventions"])),
+            d["assumption"],
+            d["definition"],
+            d["first_input_hash"],
+            d["first_mode_index"],
+            d["second_input_hash"],
+            d["second_mode_index"],
+            tuple(d["origins_m"]),
+            _c(d["flux_w_per_m"]),
+            tuple(_c(z) for z in d["exterior_flux_w_per_m"]),
+            _readonly(np.asarray(d["partition_m"], dtype=float)),
+            d["sample_count"],
+            d["quadrature_change_w_per_m"],
+        )
+
+
+@dataclass(frozen=True, eq=False)
+class LocalCoupling(_Record):
+    """The local coupling of a basis along one fixed-wavelength parameter.
+
+    `perturbation_matrix_rad_per_m` is Hermitian, in rad/m per `parameter_unit`;
+    on a forward basis its diagonal is each mode's dβ/dp. `coefficients` are per
+    `parameter_unit`, row the receiving mode and column the differentiated mode;
+    entries on the diagonal and within an unresolved group are absent: nan there,
+    with `coefficient_resolved` False. `unresolved_groups` lists the modes whose
+    propagation constants lie within `gap_rad_per_m` of each other.
+    """
+
+    conventions: Mapping[str, str]
+    assumption: str
+    definition: str
+    input_hash: str
+    parameter: Parameter
+    parameter_unit: str
+    gap_rad_per_m: float
+    perturbation_matrix_rad_per_m: np.ndarray
+    coefficients: np.ndarray
+    coefficient_resolved: np.ndarray
+    unresolved_groups: tuple[tuple[int, ...], ...]
+    quadrature_change_rad_per_m: float
+    _kind = "guided_local_coupling"
+
+    def to_dict(self) -> dict[str, Any]:
+        m, c, ok = self.perturbation_matrix_rad_per_m, self.coefficients, self.coefficient_resolved
+        return {
+            "schema": "lamina.guided_local_coupling",
+            "schema_version": SCHEMA_VERSION,
+            "conventions": dict(self.conventions),
+            "assumption": self.assumption,
+            "definition": self.definition,
+            "input_hash": self.input_hash,
+            "parameter": self.parameter.to_dict(),
+            "parameter_unit": self.parameter_unit,
+            "gap_rad_per_m": self.gap_rad_per_m,
+            "perturbation_matrix_real": m.real.tolist(),
+            "perturbation_matrix_imag": m.imag.tolist(),
+            "coefficients_real": _optional_rows(c.real, ok),
+            "coefficients_imag": _optional_rows(c.imag, ok),
+            "unresolved_groups": [list(g) for g in self.unresolved_groups],
+            "quadrature_change_rad_per_m": self.quadrature_change_rad_per_m,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> LocalCoupling:
+        re = _optional_matrix(d["coefficients_real"])
+        im = _optional_matrix(d["coefficients_imag"])
+        resolved = np.array(
+            [[v is not None for v in row] for row in d["coefficients_real"]], dtype=bool
+        ).reshape(re.shape)
+        return cls(
+            MappingProxyType(dict(d["conventions"])),
+            d["assumption"],
+            d["definition"],
+            d["input_hash"],
+            Parameter.from_dict(d["parameter"]),
+            d["parameter_unit"],
+            d["gap_rad_per_m"],
+            _complex_matrix(d["perturbation_matrix_real"], d["perturbation_matrix_imag"]),
+            _readonly(re + 1j * im),
+            _readonly(resolved),
+            tuple(tuple(g) for g in d["unresolved_groups"]),
+            d["quadrature_change_rad_per_m"],
+        )
+
+
+@dataclass(frozen=True, eq=False)
+class FieldProjection(_Record):
+    """The projection of a supplied field onto a complete basis.
+
+    Solves G c = b, with `gram_w_per_m[i, j]` the power overlap of mode j with
+    mode i and `right_hand_side_w_per_m[i]` that of the supplied field with
+    mode i over the support. `rank` counts the singular values above
+    `rank_rtol` times the largest. Below full rank, `coefficients`,
+    `condition_number` and `residual_w_per_m` are None.
+    `field_sample_count` is the number of distinct samples of the field.
+    """
+
+    conventions: Mapping[str, str]
+    assumption: str
+    definition: str
+    input_hash: str
+    field_id: str | None
+    support_m: tuple[float, float]
+    interfaces_m: tuple[float, ...]
+    origin_m: float
+    rank_rtol: float
+    gram_w_per_m: np.ndarray
+    right_hand_side_w_per_m: np.ndarray
+    rank: int
+    singular_values_w_per_m: np.ndarray
+    field_sample_count: int
+    quadrature_change_w_per_m: float
+    coefficients: np.ndarray | None
+    condition_number: float | None
+    residual_w_per_m: float | None
+    _kind = "guided_projection"
+
+    @property
+    def is_full_rank(self) -> bool:
+        return self.coefficients is not None
+
+    def to_dict(self) -> dict[str, Any]:
+        g, b, c = self.gram_w_per_m, self.right_hand_side_w_per_m, self.coefficients
+        return {
+            "schema": "lamina.guided_projection",
+            "schema_version": SCHEMA_VERSION,
+            "conventions": dict(self.conventions),
+            "assumption": self.assumption,
+            "definition": self.definition,
+            "input_hash": self.input_hash,
+            "field_id": self.field_id,
+            "support_m": list(self.support_m),
+            "interfaces_m": list(self.interfaces_m),
+            "origin_m": self.origin_m,
+            "rank_rtol": self.rank_rtol,
+            "gram_real": g.real.tolist(),
+            "gram_imag": g.imag.tolist(),
+            "right_hand_side_real": b.real.tolist(),
+            "right_hand_side_imag": b.imag.tolist(),
+            "rank": self.rank,
+            "singular_values_w_per_m": self.singular_values_w_per_m.tolist(),
+            "field_sample_count": self.field_sample_count,
+            "quadrature_change_w_per_m": self.quadrature_change_w_per_m,
+            "coefficients_real": None if c is None else c.real.tolist(),
+            "coefficients_imag": None if c is None else c.imag.tolist(),
+            "condition_number": self.condition_number,
+            "residual_w_per_m": self.residual_w_per_m,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> FieldProjection:
+        c_re, c_im = d["coefficients_real"], d["coefficients_imag"]
+        coefficients = None if c_re is None or c_im is None else _complex_vector(c_re, c_im)
+        return cls(
+            MappingProxyType(dict(d["conventions"])),
+            d["assumption"],
+            d["definition"],
+            d["input_hash"],
+            d["field_id"],
+            tuple(d["support_m"]),
+            tuple(d["interfaces_m"]),
+            d["origin_m"],
+            d["rank_rtol"],
+            _complex_matrix(d["gram_real"], d["gram_imag"]),
+            _complex_vector(d["right_hand_side_real"], d["right_hand_side_imag"]),
+            d["rank"],
+            _readonly(np.asarray(d["singular_values_w_per_m"], dtype=float)),
+            d["field_sample_count"],
+            d["quadrature_change_w_per_m"],
+            coefficients,
+            d["condition_number"],
+            d["residual_w_per_m"],
+        )
+
+
+def _field_sampler(field: Callable[[float, str], tuple[Any, Any]]) -> Callable[[float, str], list[float]]:
+    """Adapt `field(z_m, side) -> (E, H)` to the twelve floats the native module reads."""
+
+    def sample(z_m: float, side: str) -> list[float]:
+        result = field(z_m, side)
+        try:
+            e, h = result
+            e = np.asarray(e, dtype=complex)
+            h = np.asarray(h, dtype=complex)
+        except (TypeError, ValueError) as error:
+            raise InvalidInput(
+                f"the field must return (E, H), each three complex components: {error}"
+            ) from None
+        if e.shape != (3,) or h.shape != (3,):
+            raise InvalidInput(
+                f"the field must return (E, H), each three complex components; got shapes {e.shape} and {h.shape}"
+            )
+        return [*e.real.tolist(), *e.imag.tolist(), *h.real.tolist(), *h.imag.tolist()]
+
+    return sample
+
+
+def power_overlap(
+    first: GuidedBasis,
+    first_mode: int,
+    second: GuidedBasis,
+    second_mode: int,
+    origins_m: tuple[float, float] = (0.0, 0.0),
+) -> PowerOverlap:
+    """The power overlap of mode `first_mode` of `first` with mode `second_mode`
+    of `second`, linear in the first, in W/m.
+
+    The two bases may come from different stacks at one wavelength.
+    `origins_m` places each basis's first interface in a common frame; the
+    default aligns them. A different wavelength, a non-finite origin or a mode
+    index out of range raises `InvalidInput`; field recovery raises
+    `FieldsFailed`, and a quadrature over its budget `IntegrationFailed`.
+    """
+    text = _native.power_overlap(
+        first._solver(), int(first_mode), second._solver(), int(second_mode), _origins(origins_m)
+    )
+    return PowerOverlap.from_dict(json.loads(text))
+
+
+def power_overlap_sensitivity(
+    first: GuidedBasis,
+    first_mode: int,
+    second: GuidedBasis,
+    second_mode: int,
+    first_parameter: Parameter | None,
+    second_parameter: Parameter | None,
+    origins_m: tuple[float, float] = (0.0, 0.0),
+) -> PowerOverlapSensitivity:
+    """The power overlap of two modes and its derivative when the first stack
+    varies along `first_parameter` and the second along `second_parameter`
+    (None holds that stack fixed), at one shared rate.
+
+    At least one parameter must be set; two set parameters must share their
+    unit; the wavelength varies on both sides or neither. Otherwise
+    `InvalidInput`. Each stack's first interface moves with its parameter, so
+    `(None, Parameter.translation())` is a relative translation and
+    `(Parameter.translation(), Parameter.translation())` a common one. A
+    derivative that cannot be formed (for example where coincident interfaces
+    of the two stacks separate) is reported in `derivative_failure`, with the
+    base overlap present.
+    """
+
+    def parameter(p: Parameter | None) -> str | None:
+        return None if p is None else _dumps(p.to_dict())
+
+    text = _native.power_overlap_sensitivity(
+        first._solver(),
+        int(first_mode),
+        second._solver(),
+        int(second_mode),
+        parameter(first_parameter),
+        parameter(second_parameter),
+        _origins(origins_m),
+    )
+    return PowerOverlapSensitivity.from_dict(json.loads(text))
+
+
+def reciprocity(
+    first: GuidedBasis,
+    first_mode: int,
+    second: GuidedBasis,
+    second_mode: int,
+    origins_m: tuple[float, float] = (0.0, 0.0),
+) -> Reciprocity:
+    """The unconjugated, antisymmetric flux ∫ (E1 × H2 − E2 × H1) · x dz of two
+    unit-power modes, in W/m, registered and checked as for `power_overlap`."""
+    text = _native.reciprocity(
+        first._solver(), int(first_mode), second._solver(), int(second_mode), _origins(origins_m)
+    )
+    return Reciprocity.from_dict(json.loads(text))
 
 
 # ---------------------------------------------------------------- entry point
