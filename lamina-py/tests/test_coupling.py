@@ -37,7 +37,11 @@ CASES = [
 def dbeta_dp(base, mode, parameter):
     """dβ/dp from the sensitivity result. Where its power-fraction quadrature
     exceeds its budget, interface 1's rate is the difference of the implicit
-    thickness slopes of layers 0 and 1."""
+    thickness slopes of layers 0 and 1.
+
+    The fallback covers TE mode 1 under interface motion, where the regional
+    rates converged against their own magnitudes. Remove it once the fix that
+    converges them against the largest regional rate is merged."""
     try:
         return base.sensitivity(mode, parameter).dbeta_rad_per_m
     except lamina.DerivativesFailed:
