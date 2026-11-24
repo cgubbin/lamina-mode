@@ -1,0 +1,99 @@
+# Build the lamina-py wheel (abi3, manylinux2014 x86-64) and test the
+# installed wheel without a Rust toolchain.
+name: lamina-py wheels
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build abi3 manylinux2014 wheel
+    runs-on: ubuntu-latest
+    steps:
+      # The family crates depend on their siblings by version and by path, so
+      # check them out side by side. lamina-units, lamina-materials and this
+      # repository are private: LAMINA_REPOS_TOKEN must be a token with read
+      # access to them. The siblings are checked out at their default
+      # branches, so they must carry the versions this branch depends on
+      # (argloc 0.3.1, lamina-* 0.1.0); pin `ref:` here until they do.
+      - uses: actions/checkout@v4
+        with:
+          path: lamina-mode
+      - uses: actions/checkout@v4
+        with:
+          repository: cgubbin/argloc
+          path: argloc
+      - uses: actions/checkout@v4
+        with:
+          repository: cgubbin/lamina-core
+          path: lamina-core
+      - uses: actions/checkout@v4
+        with:
+          repository: cgubbin/lamina-units
+          path: lamina-units
+          token: ${{ secrets.LAMINA_REPOS_TOKEN }}
+      - uses: actions/checkout@v4
+        with:
+          repository: cgubbin/lamina-materials
+          path: lamina-materials
+          token: ${{ secrets.LAMINA_REPOS_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # zig links against glibc 2.17, so the wheel is manylinux2014.
+      - name: Install maturin and zig
+        run: python -m pip install "maturin>=1.9,<2" ziglang
+
+      - name: Build wheel
+        working-directory: lamina-mode/lamina-py
+        run: maturin build --release --locked --zig --compatibility manylinux2014 --out "$GITHUB_WORKSPACE/dist"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lamina-py-wheel
+          path: dist/*.whl
+          if-no-files-found: error
+
+  test:
+    name: Test installed wheel (Python ${{ matrix.python }})
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The wheel is abi3: one build serves the oldest and newest Pythons.
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: lamina-py/tests
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: lamina-py-wheel
+          path: dist
+
+      - name: Install the wheel into a fresh venv
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install dist/*.whl pytest
+
+      # The runner image ships a Rust toolchain; hide it so the test proves
+      # the wheel installs and runs without one.
+      - name: Run pytest without cargo or rustc on PATH
+        run: |
+          export PATH="$RUNNER_TEMP/venv/bin:/usr/bin:/bin"
+          if command -v cargo || command -v rustc; then
+            echo "a Rust toolchain is still on PATH" >&2
+            exit 1
+          fi
+          python -m pytest -q lamina-py/tests
