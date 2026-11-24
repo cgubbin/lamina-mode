@@ -5,6 +5,8 @@ name: lamina-py wheels
 on:
   push:
   pull_request:
+  # lamina-py-release.yml builds and tests the wheel it publishes here.
+  workflow_call:
 
 permissions:
   contents: read
