@@ -1,0 +1,66 @@
+# Publish lamina-mode to crates.io when a version tag (v<version>) is pushed,
+# with trusted publishing: no stored token.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Cargo resolves the sibling path dependencies when it loads the
+      # manifest, so check the siblings out beside this crate. The package
+      # itself depends on them by version.
+      - uses: actions/checkout@v4
+        with:
+          path: lamina-mode
+      - uses: actions/checkout@v4
+        with:
+          repository: cgubbin/argloc
+          path: argloc
+      - uses: actions/checkout@v4
+        with:
+          repository: cgubbin/lamina-core
+          path: lamina-core
+      - uses: actions/checkout@v4
+        with:
+          repository: cgubbin/lamina-units
+          path: lamina-units
+      - uses: actions/checkout@v4
+        with:
+          repository: cgubbin/lamina-materials
+          path: lamina-materials
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check the tag matches the crate version
+        working-directory: lamina-mode
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "lamina-mode") | .version')
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match lamina-mode $version" >&2
+            exit 1
+          fi
+
+      - name: Dry run
+        working-directory: lamina-mode
+        run: cargo publish -p lamina-mode --locked --dry-run
+
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - name: Publish
+        working-directory: lamina-mode
+        run: cargo publish -p lamina-mode --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
