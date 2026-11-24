@@ -16,8 +16,8 @@ package include list keeps lamina-py out of its crate.
 
 lamina-py depends on lamina-mode, lamina-core and lamina-units through their
 public APIs only (version plus path, as in [0001](0001-family-dependencies.md)),
-so it can move to its own repository unchanged when lamina-reduce or
-lamina-design need bindings too. It is distributed as a Python wheel and is
+so it can move to its own repository unchanged if other crates need
+bindings too. It is distributed as a Python wheel and is
 marked `publish = false` for crates.io.
 
 ## Consequences
