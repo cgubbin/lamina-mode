@@ -131,7 +131,7 @@ pub fn project_guided_field(
                 return Err(Quadrature);
             }
             let profile = mode.guided_power_profile_with(
-                backend.clone(),
+                backend,
                 &sample_grid_with_exterior(&edges, &widths, &grid, panels, true),
                 settings,
             )?;

@@ -46,6 +46,10 @@ use ndarray::Ix0;
 use num_traits::{Float, FromPrimitive, float::FloatCore};
 use std::sync::{Arc, Mutex};
 
+/// A single-chart search failure: the chart or the determinant solver failed.
+type ChartSearchError<C, ChartError, SolverError> =
+    ModalSearchError<C, ChartDispersionError<ChartError, SolverError>>;
+
 use crate::{
     conformal::ConformalRegion,
     dispersion::{ConformalDispersion, ModeDeterminantSolver},
@@ -252,8 +256,7 @@ where
     pub fn search(
         &self,
         config: ArgumentConfig<R>,
-    ) -> Result<ModalSearchResult<C>, ModalSearchError<C, ChartDispersionError<H::Error, S::Error>>>
-    {
+    ) -> Result<ModalSearchResult<C>, ChartSearchError<C, H::Error, S::Error>> {
         let domain = self
             .search_region
             .try_into()
@@ -358,7 +361,7 @@ mod tests {
 
         let solver = CompiledPlaneWaveModeSolver::<J, _, _>::compile(
             &stack,
-            Scatter2::default(),
+            Scatter2::new(),
             Polarisation::TransverseElectric,
         )
         .unwrap();

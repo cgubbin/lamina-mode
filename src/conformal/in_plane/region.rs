@@ -177,7 +177,8 @@ where
         let re_min = left.real();
         let re_max = right.real();
 
-        if !(re_min < re_max) {
+        // Rejects NaN as well as an empty or reversed interval.
+        if re_min.partial_cmp(&re_max) != Some(std::cmp::Ordering::Less) {
             return Err(InPlaneSearchError::InvalidRegion);
         }
 
