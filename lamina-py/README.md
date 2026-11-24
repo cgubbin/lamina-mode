@@ -48,6 +48,45 @@ Parameters: `thickness`, `interface_position`, `translation`, `wavelength` (with
 `permeability`, and the Sellmeier `constant`, `coefficient` and `pole_wavelength` of a region's material. Each
 result names its `parameter_unit` and carries the conditioning of the implicit derivative.
 
+## Pairings
+
+Modes pair with each other, from one basis or from two stacks at one wavelength, and with supplied fields:
+
+```python
+request = lamina.GuidedRequest(wavelength_m=1e-6)
+a = lamina.enumerate_guided_modes(lamina.Stack(1.0, [(4.0, 0.6e-6)], 1.44), request)
+b = lamina.enumerate_guided_modes(lamina.Stack(1.0, [(4.0, 0.7e-6)], 1.44), request)
+
+o = lamina.power_overlap(a, 0, b, 0, origins_m=(0.0, 0.07e-6))
+o.power_w_per_m             # (1/4) ∫ (E1 × H2* + E2* × H1) · x dz, W/m
+
+s = lamina.power_overlap_sensitivity(
+    a, 0, b, 0, None, lamina.Parameter.thickness(0), origins_m=(0.0, 0.07e-6)
+)
+s.power_rate_w_per_m        # W/m per m of the second stack's layer, or None with s.derivative_failure
+
+r = lamina.reciprocity(a, 0, b, 0)
+r.flux_w_per_m              # ∫ (E1 × H2 − E2 × H1) · x dz, unconjugated
+
+c = b.local_coupling(lamina.Parameter.permittivity(1))
+c.perturbation_matrix_rad_per_m  # Hermitian, rad/m per unit permittivity
+c.coefficients              # row receiving, column differentiated; nan where not c.coefficient_resolved
+
+def field(z_m, side):       # side: "left", "right" or "interior"
+    ey = np.exp(-(z_m / 0.3e-6) ** 2)
+    return (0, ey, 0), (0, 0, ey / 300)  # E in V/m, H in A/m
+
+p = b.project_field(field, support_m=(-2e-6, 2e-6), interfaces_m=(0.0, 0.7e-6), field_id="gaussian")
+p.rank, p.singular_values_w_per_m, p.coefficients  # coefficients None below full rank
+```
+
+`origins_m` places each basis's first interface in a common frame. An overlap derivative takes one parameter per
+stack (`None` holds it fixed), both per one unit. Each result records its pairing `definition`, the input hash of
+every basis it used, and its quadrature evidence. A local coupling needs a complete basis of a nonmagnetic stack
+and a fixed-wavelength parameter; modes within `gap_rad_per_m` (default 1e-6 k0) of each other form an unresolved
+group without mutual coefficients. The supplied field must vanish outside its support and is sampled one point at
+a time, once per position and side; an exception it raises propagates. Decision note 0008 has the details.
+
 ## Scope
 
 lamina-py presents lamina-mode's results in Python: SI quantities with the unit in every field name, typed
@@ -80,7 +119,8 @@ their causes, and a `completeness` of `complete`, `partial` or
 `count_unknown`. Each mode records its residual, correction and acceptance
 limits. Partial coverage is a result, not an exception. Invalid input raises
 `InvalidInput`; failed enumeration, field recovery or derivatives raise
-`EnumerationFailed`, `FieldsFailed` or `DerivativesFailed`, all `LaminaError`.
+`EnumerationFailed`, `FieldsFailed` or `DerivativesFailed`, and a pairing
+integral over its budget raises `IntegrationFailed`, all `LaminaError`.
 
 ## Exterior fields
 
