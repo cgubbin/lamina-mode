@@ -1,12 +1,12 @@
 # 0005: Additive schema changes keep schema version 1
 
-Status: accepted (milestone 2)
+Status: accepted
 
 ## Context
 
-Milestone 2 adds Sellmeier materials to the input and two result kinds (`lamina.guided_sensitivity`,
-`lamina.group_index`). The result contract says serialised results carry a schema version and that "a change
-to any convention above bumps it". It doesn't say what an addition that changes no convention does.
+Sellmeier materials were added to the input, and two result kinds (`lamina.guided_sensitivity`,
+`lamina.group_index`). Serialised results carry a schema version that changes when a convention changes
+(decision 0004). An addition that changes no convention needs a rule too.
 
 ## Decision
 
@@ -21,7 +21,7 @@ An addition that changes no convention keeps the schema version:
   that uses it (`SchemaError`) rather than misreading it.
 
 A change to a convention (units, frame, phasor sign, normalisation, the interface-sample rule) still bumps the
-version, as the contract says.
+version.
 
 ## Consequences
 

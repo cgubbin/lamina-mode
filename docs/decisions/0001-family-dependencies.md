@@ -1,13 +1,12 @@
 # 0001: Family dependencies carry a version and a sibling path
 
-Status: accepted (milestone 0)
+Status: accepted
 
 ## Context
 
-Milestone 0 of the [target development guide](../target-development-guide.md)
-publishes lamina-units, lamina-core, lamina-materials and lamina-mode to crates.io
-in dependency order. A consumer can't depend on path dependencies, but the
-crates are developed side by side in sibling checkouts.
+lamina-units, lamina-core, lamina-materials and lamina-mode are published to crates.io in dependency order. A
+published crate can't depend on path dependencies, but the crates are developed side by side in sibling
+checkouts.
 
 ## Decision
 

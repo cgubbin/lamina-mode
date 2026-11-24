@@ -1,4 +1,4 @@
-//! Milestone 2 sensitivities and the certified group index, in SI.
+//! Guided-mode sensitivities and the certified group index, in SI.
 use crate::records::{self as rec};
 use crate::solve::{Failure, M_PER_CM, Solved, Z0_OHM, c2, k0_cm, point, sampling};
 use lamina_core::Scatter2;

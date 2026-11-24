@@ -7,8 +7,7 @@ released in step until 1.0. Each entry names any shared convention it changes.
 
 First release on crates.io.
 
-Conventions fixed by this release (see `docs/modal-fields.md` and the result
-contract in `docs/target-development-guide.md`):
+Conventions fixed by this release (see `docs/modal-fields.md`):
 
 - the canonical spectral coordinate is vacuum angular wavenumber `k₀ = 2π/λ₀`
   in `cm⁻¹`; in-plane wavenumber β uses the same unit internally;

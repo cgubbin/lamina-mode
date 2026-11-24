@@ -48,17 +48,11 @@ Parameters: `thickness`, `interface_position`, `translation`, `wavelength` (with
 `permeability`, and the Sellmeier `constant`, `coefficient` and `pole_wavelength` of a region's material. Each
 result names its `parameter_unit` and carries the conditioning of the implicit derivative.
 
-## Boundary
+## Scope
 
-lamina-py exposes lamina-mode's public results and nothing else. It owns the
-conversion to SI at the boundary, the serialised form of inputs and results,
-and their hashes. It owns no physics: every number comes from lamina-mode.
-
-| lamina-py owns | lamina-py never owns |
-| --- | --- |
-| SI units at the boundary, named in every field | Mode searches, fields, derivatives (lamina-mode) |
-| Typed Python results with numpy arrays | Geometry, layouts, processes, ports |
-| The versioned JSON form of inputs and results, and their hashes | Choosing a mode or a design |
+lamina-py presents lamina-mode's results in Python: SI quantities with the unit in every field name, typed
+results with numpy arrays, and a versioned, canonical JSON form of every input and result with its SHA-256
+identity. Every number comes from lamina-mode.
 
 ## Conventions
 

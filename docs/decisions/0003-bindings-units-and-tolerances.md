@@ -1,12 +1,11 @@
 # 0003: SI at the bindings' boundary, with k0-relative residual limits
 
-Status: accepted (milestone 1)
+Status: accepted
 
 ## Context
 
-The result contract asks for SI at the boundary, with the unit named in every
-field: lengths in metres or micrometres, chosen once; β and k0 in rad/m. The
-internal cm⁻¹ stays internal.
+Python results should be plain SI, with the unit named in every field, whatever units lamina-mode uses
+internally (cm and cm⁻¹).
 
 ## Decision
 
@@ -44,7 +43,7 @@ analytic slab ladders match to better than 1e-10 in n_eff at both scales.
 - A k0-relative default could move into lamina-mode itself; until then the
   bindings own it.
 
-## Revision (milestone 2)
+## Revision (sensitivities)
 
 The first default, `residual_rtol = 1e-11`, matched lamina-mode's ratio at its 1 cm reference wavelength and
 passed the slab benchmarks. On a four-region multilayer (ε up to 6, λ = 1 µm) one TE mode stopped with
