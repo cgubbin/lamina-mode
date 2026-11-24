@@ -1,13 +1,11 @@
 # 0004: Canonical JSON records with SHA-256 identities
 
-Status: accepted (milestone 1)
+Status: accepted
 
 ## Context
 
-The result contract asks for determinism and identity ("inputs have a canonical
-serialisation, so consumers can key caches on a hash of them") and versioned
-results ("serialised results carry a schema version; a change to any
-convention bumps it"). Evidence travels with every answer.
+Results are cached and compared against other calculations, so equal inputs must serialise and hash equally,
+and a serialised result must say which schema and conventions it follows. Evidence travels with every answer.
 
 ## Decision
 
@@ -15,7 +13,8 @@ convention bumps it"). Evidence travels with every answer.
   `lamina.guided_basis`, `lamina.guided_profile`, `lamina.local_derivatives`)
   and `schema_version` (1). Results also carry the `conventions` they were
   produced under (units, frame, polarisation, phasor sign, normalisation and
-  the interface-sample rule) and the analytic `assumption` behind them.
+  the interface-sample rule) and the analytic `assumption` behind them. A
+  change to any of those conventions bumps the schema version.
 - **Canonical form:** serialised by the Rust side from typed records, with
   fields in schema order, no whitespace, and shortest round-trip floats
   (serde_json with `float_roundtrip` when parsing). Complex numbers are

@@ -1,4 +1,4 @@
-"""Milestone 2 acceptance through the bindings: sensitivities, fractions and the group index."""
+"""Sensitivities, power fractions and the group index through the bindings."""
 
 from __future__ import annotations
 

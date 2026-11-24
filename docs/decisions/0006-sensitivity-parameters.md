@@ -1,6 +1,6 @@
 # 0006: Sensitivity parameters, units and observation frames
 
-Status: accepted (milestone 2)
+Status: accepted
 
 ## Decision
 

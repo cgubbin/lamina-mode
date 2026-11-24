@@ -1,12 +1,11 @@
 # 0002: lamina-py lives in lamina-mode's workspace
 
-Status: accepted (milestone 1)
+Status: accepted
 
 ## Context
 
-The [target development guide](../target-development-guide.md) places
-lamina-py in the family's layering as "Python bindings over the public APIs
-above", but names no repository for it.
+lamina-py provides Python bindings over the public APIs of the lamina crates and needs a home: its own
+repository, or a workspace beside one of the crates it binds.
 
 ## Decision
 

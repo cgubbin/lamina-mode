@@ -1,11 +1,11 @@
 # 0007: The group index is certified by two independent estimates
 
-Status: accepted (milestone 2)
+Status: accepted
 
 ## Context
 
-The guide asks for the group index of lossless guided modes "as a certified real quantity, distinct from the
-complex local slopes available now".
+The group index of a lossless guided mode is a real quantity. The complex local slopes lamina-mode already
+returns neither show that it is real nor check its value.
 
 ## Decision
 
