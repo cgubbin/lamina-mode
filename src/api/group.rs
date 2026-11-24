@@ -60,10 +60,14 @@ pub enum GroupIndexError {
 }
 
 impl ModePoint {
-    /// Evaluate and certify the group index of a lossless guided mode.
+    /// Evaluate and certify the group index of a lossless guided mode. The
+    /// field-recovery settings apply to the stored-energy integral; their
+    /// characteristic limit must suit the device scale, as for unit-power
+    /// profiles.
     pub fn guided_group_index_with<B>(
         &self,
         backend: &B,
+        settings: FieldRecoverySettings,
         tolerance: f64,
     ) -> Result<GroupIndex, GroupIndexError>
     where
@@ -164,11 +168,7 @@ impl ModePoint {
                     sampling.layer(i, LayerSampling::uniform_with_boundaries(count, true, true));
             }
             sampling = sampling.right_exterior(edge());
-            let recovered = self.recover_fields_with(
-                backend.clone(),
-                &sampling,
-                FieldRecoverySettings::default(),
-            )?;
+            let recovered = self.recover_fields_with(backend.clone(), &sampling, settings)?;
             let fields = recovered.fields.quantity();
             let (e, h) = (fields.electric(), fields.magnetic());
             let flux =

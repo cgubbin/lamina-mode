@@ -61,7 +61,7 @@ fn group_index_matches_finite_difference_and_energy_velocity() {
             let mut worst: f64 = 0.;
             for (i, point) in base.modes.iter().enumerate() {
                 let group = point
-                    .guided_group_index_with(&Scatter2::new(), 1e-8)
+                    .guided_group_index_with(&Scatter2::new(), Default::default(), 1e-8)
                     .unwrap();
                 let fd = (plus[i] - minus[i]) / (2. * h * k0);
                 // Dispersion makes the group index exceed the phase index.
@@ -85,7 +85,7 @@ fn group_index_matches_finite_difference_and_energy_velocity() {
 fn group_index_rejects_invalid_tolerance() {
     let basis = modes(1.0, Polarisation::TransverseElectric);
     assert!(matches!(
-        basis.modes[0].guided_group_index_with(&Scatter2::new(), 0.0),
+        basis.modes[0].guided_group_index_with(&Scatter2::new(), Default::default(), 0.0),
         Err(GroupIndexError::InvalidTolerance)
     ));
 }
