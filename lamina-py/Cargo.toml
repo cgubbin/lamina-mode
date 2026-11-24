@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.85"
 authors = ["Christopher R. Gubbin <cgubbin@gmail.com>"]
 description = "Python bindings over the lamina-mode guided basis"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/cgubbin/lamina-mode"
 readme = "README.md"
 # Distributed as a Python wheel, not as a crate.
