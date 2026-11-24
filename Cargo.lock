@@ -184,6 +184,7 @@ name = "lamina-py"
 version = "0.1.0"
 dependencies = [
  "lamina-core",
+ "lamina-materials",
  "lamina-mode",
  "lamina-units",
  "ndarray",

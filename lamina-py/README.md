@@ -24,6 +24,30 @@ assert lamina.GuidedBasis.from_json(text) == basis
 basis.input.canonical_hash()              # cache key for the input
 ```
 
+## Sensitivities and the group index
+
+```python
+stack = lamina.Stack(
+    left=1.0,
+    layers=[(lamina.SellmeierMaterial(1.5, [(1.2, 0.7e-6)]), 1.2e-6)],
+    right=lamina.SellmeierMaterial(1.6, [(0.3, 0.42e-6)]),
+)
+basis = lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(wavelength_m=1e-6))
+
+s = basis.sensitivity(0, lamina.Parameter.thickness(0), z_m=np.linspace(0, 1.2e-6, 50))
+s.dbeta_rad_per_m          # rad/m per m of thickness
+s.d_electric_v_per_m       # (50, 3): dE/dd of the unit-power field, material-attached frame
+s.power_fractions          # left exterior, layers, right exterior; sums to one
+s.power_fraction_rates     # per m; sums to zero
+
+g = basis.group_index(0)   # certified: dβ/dk0 agrees with c W / P within g.tolerance
+g.value, g.energy_estimate, g.relative_discrepancy
+```
+
+Parameters: `thickness`, `interface_position`, `translation`, `wavelength` (with dispersion), `permittivity`,
+`permeability`, and the Sellmeier `constant`, `coefficient` and `pole_wavelength` of a region's material. Each
+result names its `parameter_unit` and carries the conditioning of the implicit derivative.
+
 ## Scope
 
 lamina-py presents lamina-mode's results in Python: SI quantities with the unit in every field name, typed
