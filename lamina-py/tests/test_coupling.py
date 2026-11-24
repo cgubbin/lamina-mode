@@ -34,23 +34,6 @@ CASES = [
 ]
 
 
-def dbeta_dp(base, mode, parameter):
-    """dβ/dp from the sensitivity result. Where its power-fraction quadrature
-    exceeds its budget, interface 1's rate is the difference of the implicit
-    thickness slopes of layers 0 and 1.
-
-    The fallback covers TE mode 1 under interface motion, where the regional
-    rates converged against their own magnitudes. Remove it once the fix that
-    converges them against the largest regional rate is merged."""
-    try:
-        return base.sensitivity(mode, parameter).dbeta_rad_per_m
-    except lamina.DerivativesFailed:
-        if parameter != lamina.Parameter.interface_position(1):
-            raise
-        local = base.local_derivatives(mode, thickness_layers=[0, 1])
-        return local.dbeta_dthickness(0) - local.dbeta_dthickness(1)
-
-
 @pytest.mark.parametrize("polarisation", ["TE", "TM"])
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c[0])
 def test_diagonal_matches_the_eigenvalue_sensitivity(case, polarisation):
@@ -60,7 +43,7 @@ def test_diagonal_matches_the_eigenvalue_sensitivity(case, polarisation):
     coupling = base.local_coupling(parameter)
     assert coupling.parameter_unit == base.sensitivity(0, parameter).parameter_unit
     for mode in base.modes:
-        dbeta = dbeta_dp(base, mode.index, parameter)
+        dbeta = base.sensitivity(mode.index, parameter).dbeta_rad_per_m
         k = coupling.perturbation_matrix_rad_per_m[mode.index, mode.index]
         assert abs(k - dbeta) < 1e-6 * abs(dbeta)
 
