@@ -1,0 +1,45 @@
+# Publish the lamina-py wheel to PyPI when a tag lamina-py-v<version> is
+# pushed, with trusted publishing: no stored token. The wheel is built and
+# tested by the same workflow that runs on every push.
+name: lamina-py release
+
+on:
+  push:
+    tags: ["lamina-py-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check-version:
+    name: Check the tag matches the package version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: lamina-py/pyproject.toml
+          sparse-checkout-cone-mode: false
+      - run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("lamina-py/pyproject.toml", "rb"))["project"]["version"])')
+          if [ "$GITHUB_REF_NAME" != "lamina-py-v$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match lamina-py $version" >&2
+            exit 1
+          fi
+
+  wheel:
+    needs: check-version
+    uses: ./.github/workflows/lamina-py-wheels.yml
+
+  publish:
+    name: Publish to PyPI
+    needs: wheel
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: lamina-py-wheel
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
