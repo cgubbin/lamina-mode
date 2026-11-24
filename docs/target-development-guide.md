@@ -160,15 +160,25 @@ A 2D cross-section solver by film mode matching cuts the cross-section into vert
 each slice's stack with lamina, and solves a mode-matching determinant across the slice boundaries. The matching
 itself belongs to the consumer. It needs from lamina:
 
-- **A basis per slice that is complete within a stated window.** The window is a region of the complex β plane,
-  and the basis holds every mode in it: guided, leaky and radiation-like. Radiation is discretised by a stated
-  termination of the stack (open exteriors with leaky modes on a named branch, or a closing wall such as a perfect
-  conductor or a perfectly matched layer), and the termination is named in the result. Each basis carries the same
-  completeness evidence as milestone 1: expected and found counts from an independent count over the window,
-  unresolved regions with their causes, and a completeness status.
+- **Terminations as part of the stack input.** lamina owns how a slice's stack is closed. lamina-core's stack
+  input gains a termination on each side, chosen by the consumer:
+  - a perfect electric or perfect magnetic wall at a stated position;
+  - a perfectly matched layer by complex coordinate stretching, with its thickness and stretching profile stated;
+  - open exteriors, as today.
+
+  The result records the termination, and it is part of the canonical input, so it enters the input hash.
+- **A basis per slice that is complete within a stated window.** The window is a region of the complex β plane.
+  Each basis carries the same completeness evidence as milestone 1 (expected and found counts from an independent
+  count over the window, unresolved regions with their causes, and a completeness status), stated relative to the
+  termination:
+  - a closed stack (walls, or a PML backed by a wall) has a discrete spectrum, so its basis holds every mode in
+    the window, the radiation-like ones included, and the count covers them all;
+  - an open stack has guided and leaky modes as discrete roots and a radiation continuum besides. Its basis holds
+    the guided and leaky modes in the window, and the result says that the radiation continuum isn't included.
 - **Overlaps between neighbouring slices' modes**, at one frequency and in one registered frame: the unconjugated
   reciprocity pairing listed above, which the matching equations use, plus the conjugated power product for power
-  bookkeeping. Both integrate over the union of both stacks' interfaces and exteriors (or up to the closing wall).
+  bookkeeping. Both integrate over the union of both stacks' interfaces and exteriors, up to any wall or through
+  any PML.
 - **Deterministic ordering and normalisation**, so that the matching determinant, as a function of the consumer's
   unknown, is stable across calls and small parameter changes. Modes are ordered by a documented key (for example
   decreasing Re β, with ties broken by Im β). Each is normalised to unit unconjugated self-pairing with a
@@ -176,9 +186,14 @@ itself belongs to the consumer. It needs from lamina:
 
 *Accept when:*
 
-- **completeness:** on a closed slab (wall-terminated), whose full mode set is analytic, the expected and found
-  counts agree in windows of increasing size; on an open slab, guided and leaky counts agree with the analytic
-  ladder; a window edge placed on a mode is reported as unresolved, not guessed;
+- **walls:** the modes of a slab terminated by perfect electric (and, separately, perfect magnetic) walls match
+  the analytic ladder of the layered box waveguide, guided and radiation-like alike;
+- **PML:** as the PML moves out from the stack (and thickens, at a fixed profile), the PML-terminated guided and
+  leaky modes converge to the open stack's, while its remaining modes stay off them;
+- **counts:** in every window, the number of modes found matches an independent argument-principle count of the
+  characteristic's zeros, for walls, PML and open exteriors; on an open slab, guided and leaky counts also agree
+  with the analytic ladder; a window edge placed on a mode is reported as unresolved, not guessed;
+- **identity:** changing a wall's position or type, or the PML's thickness or profile, changes the input hash;
 - **overlaps:** the unconjugated pairing is symmetric under exchange of the two slices, bi-orthogonal within one
   slice to tolerance, and agrees with direct quadrature of the sampled fields; between identical slices it is the
   identity;
