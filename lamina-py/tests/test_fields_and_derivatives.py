@@ -30,11 +30,9 @@ def test_profiles_carry_unit_power_in_si(basis):
     k0 = basis.k0_rad_per_m
     for mode in basis.modes:
         n = mode.n_eff.real
-        # Exterior fields are propagated outward from each interface, so far out
-        # the finite-precision admixture of the growing wave takes over. Twelve
-        # decay lengths leave a truncated tail of e^-24 and stay clear of it.
-        reach_left = 12.0 / (k0 * math.sqrt(n * n - LEFT))
-        reach_right = 12.0 / (k0 * math.sqrt(n * n - RIGHT))
+        # Twenty decay lengths leave a truncated tail of e^-40.
+        reach_left = 20.0 / (k0 * math.sqrt(n * n - LEFT))
+        reach_right = 20.0 / (k0 * math.sqrt(n * n - RIGHT))
         # Integrate region by region: TM's E_z jumps at each interface, so each
         # region's end points are one-sided limits from inside it.
         regions = [
@@ -51,6 +49,22 @@ def test_profiles_carry_unit_power_in_si(basis):
             power += trapezoid(s_x, z)
         assert power == pytest.approx(1.0, rel=1e-6)
         assert profile.normalisation.signed_power_w_per_m == pytest.approx(1.0, rel=1e-9)
+
+
+def test_fields_decay_deep_into_both_claddings(basis):
+    k0 = basis.k0_rad_per_m
+    for mode in basis.modes:
+        n = mode.n_eff.real
+        for eps, side in ((LEFT, -1.0), (RIGHT, 1.0)):
+            kappa = k0 * math.sqrt(n * n - eps)
+            depth = np.linspace(0.0, 60.0 / kappa, 601)
+            z = depth * side + (D if side > 0 else 0.0)
+            if side < 0:
+                z[0] = np.nextafter(0.0, -1.0)  # the left exterior side of z = 0
+            p = basis.sample_fields(mode.index, z)
+            magnitude = np.linalg.norm(np.hstack([p.electric_v_per_m, p.magnetic_a_per_m]), axis=1)
+            assert np.all(np.diff(magnitude) < 0)
+            assert magnitude[-1] / magnitude[0] == pytest.approx(math.exp(-60.0), rel=1e-6)
 
 
 def test_phase_rule_and_field_components(basis):
