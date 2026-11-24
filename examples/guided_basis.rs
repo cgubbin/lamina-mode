@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ey_rate = centre
             .tangent
             .map_err(|e| format!("mode {i} centre: {e:?}"))?[1];
-        // A downstream slab propagator with unit input amplitude and a fixed length.
+        // A slab propagator with unit input amplitude and a fixed length.
         let length_cm = 0.5;
         let phase = (Complex::I * beta * length_cm).exp();
         let output = phase * centre.field[1];

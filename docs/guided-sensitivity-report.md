@@ -27,11 +27,11 @@ Both errors decrease from the first to the second step in all six cases. Some fi
 - The regional powers sum to unity and their rates sum to zero within 1e−12 in the forward normalization benchmark. Rescaling the backend seed by −2 + 3i preserves the normalized tangent to a scaled tolerance of 1e−8. The left-interface phase stays real to 1e−9 in the tested derivatives.
 - The single-thickness β derivative agrees with the existing implicit slope within 1e−10 in both propagation directions. Independently corrected perturbed slab roots agree within 1e−6.
 
-## Downstream slab example
+## Slab propagation example
 
 The example enumerates six TE modes of an asymmetric slab and evaluates the outgoing field contribution of each mode with unit input amplitude over 0.5 cm. It applies the propagation phase and its derivative to the normalized centre field and its tangent. The first mode has β = 12.485931298 cm⁻¹ and dβ/dd = 0.072873 cm⁻², where d is the core thickness.
 
-The field result owns the accepted point, the perturbation and conditioning evidence, the sided base fields and tangents, and the regional powers. A slab propagator can use these quantities after enumeration and field recovery have finished. Excitation coefficients from a physical input field use the planned guided overlap API.
+The field result owns the accepted point, the perturbation and conditioning evidence, the sided base fields and tangents, and the regional powers. These quantities remain available after enumeration and field recovery have finished. Excitation coefficients from a physical input field use the [guided overlaps](guided-overlap-report.md).
 
 ```sh
 cargo run --locked --offline --example guided_basis

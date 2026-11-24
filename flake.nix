@@ -32,7 +32,7 @@
 
       rustToolchain = pkgs.fenix.fromToolchainFile {
         file = ./rust-toolchain.toml;
-        sha256 = "mvUGEOHYJpn3ikC5hckneuGixaC+yGrkMM/liDIDgoU=";
+        sha256 = "MFHoWVcPZKjFrLnQnodCXbUsfZcofGfo9tV9fTTvklg=";
       };
 
       craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
@@ -59,6 +59,11 @@
           cargo-deny
           cargo-semver-checks
           just
+
+          # Python bindings (lamina-py): wheels via maturin, portable manylinux via zig
+          maturin
+          zig
+          python3
 
           pkg-config
           openssl
@@ -91,7 +96,7 @@
 
       rustToolchain = pkgs.fenix.fromToolchainFile {
         file = ./rust-toolchain.toml;
-        sha256 = "mvUGEOHYJpn3ikC5hckneuGixaC+yGrkMM/liDIDgoU=";
+        sha256 = "MFHoWVcPZKjFrLnQnodCXbUsfZcofGfo9tV9fTTvklg=";
       };
 
       craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
@@ -118,7 +123,7 @@
 
       rustToolchain = pkgs.fenix.fromToolchainFile {
         file = ./rust-toolchain.toml;
-        sha256 = "mvUGEOHYJpn3ikC5hckneuGixaC+yGrkMM/liDIDgoU=";
+        sha256 = "MFHoWVcPZKjFrLnQnodCXbUsfZcofGfo9tV9fTTvklg=";
       };
 
       craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
