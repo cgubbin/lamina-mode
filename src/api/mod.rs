@@ -19,6 +19,7 @@
 mod derivatives;
 mod diagnostic;
 mod fields;
+mod group;
 mod guided;
 mod normalization;
 mod overlap;
@@ -29,6 +30,7 @@ mod sensitivity;
 mod tracking;
 pub use derivatives::*;
 pub use fields::*;
+pub use group::*;
 pub use guided::*;
 pub use normalization::*;
 pub use overlap::*;
