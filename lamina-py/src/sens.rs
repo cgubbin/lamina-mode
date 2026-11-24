@@ -9,14 +9,14 @@ use lamina_mode::{
 
 /// A perturbation in lamina-mode's units, and the factors that take its
 /// rates to SI per parameter unit.
-struct Direction {
-    perturbation: GuidedPerturbation,
-    unit: &'static str,
+pub(crate) struct Direction {
+    pub(crate) perturbation: GuidedPerturbation,
+    pub(crate) unit: &'static str,
     /// Multiplies a rate per internal parameter unit to a rate per SI unit.
-    per_unit: f64,
+    pub(crate) per_unit: f64,
 }
 
-fn direction(solved: &Solved, parameter: rec::Parameter) -> Result<Direction, Failure> {
+pub(crate) fn direction(solved: &Solved, parameter: rec::Parameter) -> Result<Direction, Failure> {
     use rec::Parameter::*;
     let input = &solved.record.input;
     let n = input.stack.layers.len();

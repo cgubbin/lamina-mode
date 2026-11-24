@@ -772,13 +772,30 @@ fn guided_tracking_refreshes_when_an_upper_mode_reaches_cutoff() {
     assert_eq!(tracked.unmatched_source, [1]);
 }
 
-#[test]
-fn guided_projection_recovers_complex_coefficients_and_reports_rank() {
+/// Project an analytic superposition of a TE slab's two modes, with every
+/// length scaled by `scale` (cm), and return the projection.
+fn project_slab_superposition(
+    scale: f64,
+    settings: FieldRecoverySettings,
+    duplicate_first_mode: bool,
+) -> GuidedFieldProjection {
     use lamina_core::{ExteriorSampling, FieldSampling, Scatter2};
-    let width = 0.4;
-    let mut basis =
-        enumerate_guided_modes(slab(width, 1.0), request(Polarisation::TransverseElectric))
-            .unwrap();
+    let width = 0.4 * scale;
+    let k0 = TAU / scale;
+    let mut window = request(Polarisation::TransverseElectric);
+    window.wavelength = Length::centimetres(scale);
+    window.abs_beta = [0., 15. / scale];
+    window.cutoff_margin = 1e-8 / scale;
+    if scale != 1.0 {
+        // Residual limit relative to k0, as for the field-recovery limits.
+        window.refinement.residual_atol = 0.0;
+        window.refinement.residual_rtol = 1e-9;
+        window.refinement.residual_scale = k0;
+    }
+    let stack = Stack::from_analytical_materials(Constant::vacuum(), Constant::vacuum())
+        .analytical_layer(Constant::dielectric(4.), Length::centimetres(width))
+        .finalise();
+    let mut basis = enumerate_guided_modes(stack, window).unwrap();
     assert_eq!(basis.modes.len(), 2);
     let expected = [Complex::new(0.8, 0.2), Complex::new(-0.3, 0.4)];
     let modes: Vec<_> = basis
@@ -789,7 +806,7 @@ fn guided_projection_recovers_complex_coefficients_and_reports_rank() {
                 .guided_power_profile_with(
                     Scatter2::new(),
                     &FieldSampling::new().left_exterior(ExteriorSampling::point(Length::zero())),
-                    Default::default(),
+                    settings,
                 )
                 .unwrap();
             let beta = mode.physical_coordinate().re;
@@ -800,8 +817,8 @@ fn guided_projection_recovers_complex_coefficients_and_reports_rank() {
     let sample = |z: f64, _side| {
         let mut result = [Complex::ZERO; 6];
         for ((beta, amplitude), coefficient) in modes.iter().copied().zip(expected) {
-            let alpha = (beta * beta - TAU * TAU).sqrt();
-            let q = (4.0 * TAU * TAU - beta * beta).sqrt();
+            let alpha = (beta * beta - k0 * k0).sqrt();
+            let q = (4.0 * k0 * k0 - beta * beta).sqrt();
             let core = |z: f64| (q * z).cos() + alpha / q * (q * z).sin();
             let (ey, derivative) = if z <= 0.0 {
                 let ey = (alpha * z).exp();
@@ -814,34 +831,56 @@ fn guided_projection_recovers_complex_coefficients_and_reports_rank() {
             };
             let scale = coefficient * amplitude;
             result[1] += scale * ey;
-            result[3] += scale * Complex::I * derivative / TAU;
-            result[5] += scale * beta * ey / TAU;
+            result[3] += scale * Complex::I * derivative / k0;
+            result[5] += scale * beta * ey / k0;
         }
         result
     };
-    let input = || GuidedProjectionInput {
-        wavelength_cm: 1.0,
-        support_cm: [-12.0, 12.0],
-        interfaces_cm: &[0.0, 0.4],
+    if duplicate_first_mode {
+        basis.modes[1] = basis.modes[0].clone();
+    }
+    let input = GuidedProjectionInput {
+        wavelength_cm: scale,
+        support_cm: [-12.0 * scale, 12.0 * scale],
+        interfaces_cm: &[0.0, width],
         sample: &sample,
     };
-    let projection = project_guided_field(&basis, 0.0, input(), 1e-8).unwrap();
-    assert_eq!(projection.rank, 2);
-    let solution = projection.solution.unwrap();
-    assert!(solution.condition_number < 1.000001);
-    assert!(
-        solution.residual_w_per_m < 1e-9,
-        "{solution:?} · gram {:?} · rhs {:?}",
-        projection.gram,
-        projection.right_hand_side
-    );
-    for (actual, expected) in solution.coefficients.iter().zip(expected) {
-        assert!((*actual - expected).norm() < 1e-7, "{actual} != {expected}");
+    let projection = project_guided_field(&basis, 0.0, input, 1e-8, settings).unwrap();
+    if !duplicate_first_mode {
+        assert_eq!(projection.rank, 2);
+        let solution = projection.solution.as_ref().unwrap();
+        assert!(solution.condition_number < 1.000001);
+        assert!(
+            solution.residual_w_per_m < 1e-9,
+            "{solution:?} · gram {:?} · rhs {:?}",
+            projection.gram,
+            projection.right_hand_side
+        );
+        for (actual, expected) in solution.coefficients.iter().zip(expected) {
+            assert!((*actual - expected).norm() < 1e-7, "{actual} != {expected}");
+        }
     }
-    basis.modes[1] = basis.modes[0].clone();
-    let rank_deficient = project_guided_field(&basis, 0.0, input(), 1e-8).unwrap();
+    projection
+}
+
+#[test]
+fn guided_projection_recovers_complex_coefficients_and_reports_rank() {
+    project_slab_superposition(1.0, Default::default(), false);
+    let rank_deficient = project_slab_superposition(1.0, Default::default(), true);
     assert_eq!(rank_deficient.rank, 1);
     assert!(rank_deficient.solution.is_none());
+}
+
+#[test]
+fn guided_projection_at_micron_scale_uses_k0_relative_recovery_limits() {
+    // λ = 1 µm: lamina-mode's absolute default characteristic limit (1e-6 at
+    // k0 = 2π cm^-1) is scaled with k0.
+    let scale = 1e-4;
+    let settings = FieldRecoverySettings {
+        characteristic_limit: 1e-6 / scale,
+        ..Default::default()
+    };
+    project_slab_superposition(scale, settings, false);
 }
 
 #[test]

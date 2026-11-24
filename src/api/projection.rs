@@ -57,11 +57,14 @@ pub enum GuidedProjectionError {
 }
 
 /// Project a finite-support input field onto an ordered guided basis.
+/// `settings` applies to every mode-field recovery, in the Gram matrix and in
+/// the right-hand side.
 pub fn project_guided_field(
     basis: &GuidedBasis,
     origin_cm: f64,
     input: GuidedProjectionInput<'_>,
     rank_rtol: f64,
+    settings: FieldRecoverySettings,
 ) -> Result<GuidedFieldProjection, GuidedProjectionError> {
     use super::overlap::{interface_positions, pairing, sample_grid_with_exterior};
     use GuidedProjectionError::*;
@@ -82,7 +85,6 @@ pub fn project_guided_field(
         return Err(InvalidInput);
     }
     let backend = Scatter2::new();
-    let settings = FieldRecoverySettings::default();
     let n = basis.modes.len();
     let mut gram = DMatrix::zeros(n, n);
     let mut rhs = DVector::zeros(n);

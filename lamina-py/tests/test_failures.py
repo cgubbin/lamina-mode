@@ -47,7 +47,8 @@ def test_partial_coverage_is_a_result_with_its_gaps():
 
 
 def test_failures_share_a_base_class():
-    for error in (lamina.EnumerationFailed, lamina.FieldsFailed, lamina.DerivativesFailed):
+    for error in (lamina.EnumerationFailed, lamina.FieldsFailed, lamina.DerivativesFailed,
+                  lamina.IntegrationFailed):
         assert issubclass(error, lamina.LaminaError)
     assert issubclass(lamina.InvalidInput, ValueError)
     assert issubclass(lamina.SchemaError, ValueError)

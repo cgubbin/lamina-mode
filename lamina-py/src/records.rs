@@ -15,6 +15,25 @@ pub const PROFILE_SCHEMA: &str = "lamina.guided_profile";
 pub const DERIVATIVES_SCHEMA: &str = "lamina.local_derivatives";
 pub const SENSITIVITY_SCHEMA: &str = "lamina.guided_sensitivity";
 pub const GROUP_INDEX_SCHEMA: &str = "lamina.group_index";
+pub const POWER_OVERLAP_SCHEMA: &str = "lamina.guided_power_overlap";
+pub const OVERLAP_SENSITIVITY_SCHEMA: &str = "lamina.guided_overlap_sensitivity";
+pub const RECIPROCITY_SCHEMA: &str = "lamina.guided_reciprocity";
+pub const LOCAL_COUPLING_SCHEMA: &str = "lamina.guided_local_coupling";
+pub const PROJECTION_SCHEMA: &str = "lamina.guided_projection";
+
+/// The pairing each record kind evaluates. A record's `definition` must equal
+/// its kind's, as its conventions must equal the current ones.
+pub const POWER_OVERLAP_DEFINITION: &str =
+    "(1/4) ∫ (E1 × H2* + E2* × H1) · x dz, linear in the first mode";
+pub const OVERLAP_SENSITIVITY_DEFINITION: &str = "d/dp of (1/4) ∫ (E1 × H2* + E2* × H1) · x dz, \
+     linear in the first mode, each mode along its own parameter direction";
+pub const RECIPROCITY_DEFINITION: &str = "∫ (E1 × H2 − E2 × H1) · x dz, unconjugated";
+pub const LOCAL_COUPLING_DEFINITION: &str = "K_ij = (ω ε0 / 4) [∫ (∂ε/∂p) E_i* · E_j dz \
+     + Σ_k v_k ((ε_k− − ε_k+) E_i,t* · E_j,t − (1/ε_k− − 1/ε_k+) D_i,z* D_j,z / ε0²)], \
+     v_k the velocity of interface k; C_ij = s K_ij / (β_j − β_i), s = +1 forward and −1 backward; \
+     row i the receiving mode, column j the differentiated mode";
+pub const PROJECTION_DEFINITION: &str = "G c = b with G_ij = (1/4) ∫ (E_j × H_i* + E_i* × H_j) · x dz \
+     and b_i = (1/4) ∫ (E × H_i* + E_i* × H) · x dz over the support, E and H the supplied field";
 
 /// A complex number as `[real, imaginary]`.
 pub type C2 = [f64; 2];
@@ -373,6 +392,134 @@ pub struct GroupIndex {
     pub conditioning: Conditioning,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PowerOverlap {
+    pub schema: String,
+    pub schema_version: u32,
+    pub conventions: Conventions,
+    pub assumption: String,
+    pub definition: String,
+    pub first_input_hash: String,
+    pub first_mode_index: usize,
+    pub second_input_hash: String,
+    pub second_mode_index: usize,
+    /// Each basis's first interface in a common frame.
+    pub origins_m: [f64; 2],
+    pub power_w_per_m: C2,
+    /// Analytic tails beyond the outermost interfaces: left, right.
+    pub exterior_power_w_per_m: [C2; 2],
+    pub partition_m: Vec<f64>,
+    pub sample_count: usize,
+    pub quadrature_change_w_per_m: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct OverlapSensitivity {
+    pub schema: String,
+    pub schema_version: u32,
+    pub conventions: Conventions,
+    pub assumption: String,
+    pub definition: String,
+    pub first_input_hash: String,
+    pub first_mode_index: usize,
+    pub second_input_hash: String,
+    pub second_mode_index: usize,
+    /// None holds that stack fixed.
+    pub first_parameter: Option<Parameter>,
+    pub second_parameter: Option<Parameter>,
+    pub parameter_unit: String,
+    pub origins_m: [f64; 2],
+    pub power_w_per_m: C2,
+    pub exterior_power_w_per_m: [C2; 2],
+    pub partition_m: Vec<f64>,
+    pub sample_count: usize,
+    pub quadrature_change_w_per_m: f64,
+    /// W/m per parameter unit; None where `derivative_failure` names a cause.
+    pub power_rate_w_per_m: Option<C2>,
+    pub exterior_rates_w_per_m: Option<[C2; 2]>,
+    pub rate_sample_count: Option<usize>,
+    pub rate_quadrature_change_w_per_m: Option<f64>,
+    pub derivative_failure: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Reciprocity {
+    pub schema: String,
+    pub schema_version: u32,
+    pub conventions: Conventions,
+    pub assumption: String,
+    pub definition: String,
+    pub first_input_hash: String,
+    pub first_mode_index: usize,
+    pub second_input_hash: String,
+    pub second_mode_index: usize,
+    pub origins_m: [f64; 2],
+    pub flux_w_per_m: C2,
+    pub exterior_flux_w_per_m: [C2; 2],
+    pub partition_m: Vec<f64>,
+    pub sample_count: usize,
+    pub quadrature_change_w_per_m: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct LocalCoupling {
+    pub schema: String,
+    pub schema_version: u32,
+    pub conventions: Conventions,
+    pub assumption: String,
+    pub definition: String,
+    pub input_hash: String,
+    pub parameter: Parameter,
+    pub parameter_unit: String,
+    /// Modes whose |β| differ by no more than this share a group.
+    pub gap_rad_per_m: f64,
+    /// Rows first, in rad/m per parameter unit.
+    pub perturbation_matrix_real: Vec<Vec<f64>>,
+    pub perturbation_matrix_imag: Vec<Vec<f64>>,
+    /// Rows first, per parameter unit; null on the diagonal and within a group.
+    pub coefficients_real: Vec<Vec<Option<f64>>>,
+    pub coefficients_imag: Vec<Vec<Option<f64>>>,
+    pub unresolved_groups: Vec<Vec<usize>>,
+    pub quadrature_change_rad_per_m: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FieldProjection {
+    pub schema: String,
+    pub schema_version: u32,
+    pub conventions: Conventions,
+    pub assumption: String,
+    pub definition: String,
+    pub input_hash: String,
+    /// Caller-supplied identity of the field; null when unidentified.
+    pub field_id: Option<String>,
+    /// In the supplied field's coordinate.
+    pub support_m: [f64; 2],
+    pub interfaces_m: Vec<f64>,
+    /// The basis's first interface in the supplied field's coordinate.
+    pub origin_m: f64,
+    pub rank_rtol: f64,
+    pub gram_real: Vec<Vec<f64>>,
+    pub gram_imag: Vec<Vec<f64>>,
+    pub right_hand_side_real: Vec<f64>,
+    pub right_hand_side_imag: Vec<f64>,
+    pub rank: usize,
+    pub singular_values_w_per_m: Vec<f64>,
+    /// Distinct samples of the supplied field.
+    pub field_sample_count: usize,
+    pub quadrature_change_w_per_m: f64,
+    /// Present at full numerical rank only.
+    pub coefficients_real: Option<Vec<f64>>,
+    pub coefficients_imag: Option<Vec<f64>>,
+    pub condition_number: Option<f64>,
+    pub residual_w_per_m: Option<f64>,
+}
+
 /// Records with a schema identity that can be checked after deserialisation.
 pub trait Record: Serialize + for<'de> Deserialize<'de> {
     const SCHEMA: &'static str;
@@ -432,6 +579,40 @@ record!(GuidedProfile, PROFILE_SCHEMA, conventions);
 record!(LocalDerivatives, DERIVATIVES_SCHEMA, conventions);
 record!(GuidedSensitivity, SENSITIVITY_SCHEMA, conventions);
 record!(GroupIndex, GROUP_INDEX_SCHEMA, conventions);
+
+macro_rules! pairing_record {
+    ($ty:ty, $schema:expr, $definition:expr) => {
+        impl Record for $ty {
+            const SCHEMA: &'static str = $schema;
+            fn identity(&self) -> (&str, u32) {
+                (&self.schema, self.schema_version)
+            }
+            fn conventions(&self) -> Option<&Conventions> {
+                Some(&self.conventions)
+            }
+            fn check(&self) -> Result<(), String> {
+                if self.definition != $definition {
+                    return Err(format!("definition differs from {}'s", $schema));
+                }
+                Ok(())
+            }
+        }
+    };
+}
+
+pairing_record!(PowerOverlap, POWER_OVERLAP_SCHEMA, POWER_OVERLAP_DEFINITION);
+pairing_record!(
+    OverlapSensitivity,
+    OVERLAP_SENSITIVITY_SCHEMA,
+    OVERLAP_SENSITIVITY_DEFINITION
+);
+pairing_record!(Reciprocity, RECIPROCITY_SCHEMA, RECIPROCITY_DEFINITION);
+pairing_record!(
+    LocalCoupling,
+    LOCAL_COUPLING_SCHEMA,
+    LOCAL_COUPLING_DEFINITION
+);
+pairing_record!(FieldProjection, PROJECTION_SCHEMA, PROJECTION_DEFINITION);
 
 pub fn check_identity<R: Record>(record: &R) -> Result<(), String> {
     let (schema, version) = record.identity();
