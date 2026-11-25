@@ -230,24 +230,46 @@ pub fn profile(
         ));
     }
     let length = spec.layers.iter().fold(0., |t, l| t + l.thickness_m);
-    let region = z_m
-        .iter()
-        .map(|&z| {
-            let outside = |termination: &rec::Termination| match termination {
-                rec::Termination::Open => "exterior",
-                // Bases refuse PML sides, so a closed side here is a wall.
-                rec::Termination::Wall { .. } | rec::Termination::Pml { .. } => "gap",
-            };
-            if z < 0. {
-                outside(&spec.left_termination)
-            } else if z >= length {
-                outside(&spec.right_termination)
-            } else {
-                "layer"
+    // Each sample's region, and inside a PML its stretched coordinate z̃ and
+    // stretch s(ζ) = 1 + c (ζ/d)^m at the outward depth ζ from the start.
+    let sample = |z: f64| {
+        let (termination, outward) = if z < 0. {
+            (&spec.left_termination, -1.)
+        } else if z >= length {
+            (&spec.right_termination, 1.)
+        } else {
+            return ("layer", None);
+        };
+        match *termination {
+            rec::Termination::Open => ("exterior", None),
+            rec::Termination::Pml {
+                start_z_m,
+                thickness_m,
+                profile: rec::StretchProfile::Polynomial { order, strength },
+                ..
+            } if (z - start_z_m) * outward > 0. => {
+                let c = lamina_mode::Complex::new(strength[0], strength[1]);
+                let depth = ((z - start_z_m) * outward).min(thickness_m);
+                let fraction = depth / thickness_m;
+                let stretched =
+                    depth + c * (thickness_m / (order + 1.)) * fraction.powf(order + 1.);
+                let stretch = 1. + c * fraction.powf(order);
+                let z = start_z_m + outward * stretched;
+                ("pml", Some(([z.re, z.im], [stretch.re, stretch.im])))
             }
-            .to_owned()
-        })
-        .collect();
+            _ => ("gap", None),
+        }
+    };
+    let samples: Vec<_> = z_m.iter().map(|&z| sample(z)).collect();
+    let region = samples.iter().map(|(r, _)| (*r).to_owned()).collect();
+    let has_pml = [&spec.left_termination, &spec.right_termination]
+        .iter()
+        .any(|t| matches!(t, rec::Termination::Pml { .. }));
+    let pml = has_pml.then(|| rec::PmlSamples {
+        fields: rec::PML_FIELDS.to_owned(),
+        stretched_z_m: samples.iter().map(|(_, p)| p.map(|p| p.0)).collect(),
+        stretch: samples.iter().map(|(_, p)| p.map(|p| p.1)).collect(),
+    });
     let part = |range: std::ops::Range<usize>, scale: f64, imaginary: bool| {
         fields
             .iter()
@@ -272,6 +294,7 @@ pub fn profile(
         // Core stores Z0*H in V/m; divide by Z0 for A/m.
         magnetic_real: part(3..6, 1. / Z0_OHM, false),
         magnetic_imag: part(3..6, 1. / Z0_OHM, true),
+        pml,
     })
 }
 

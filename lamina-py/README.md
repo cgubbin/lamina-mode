@@ -87,7 +87,8 @@ stack = lamina.Stack(
 The record stores it as `{"kind": "pml", "start_z_m": ..., "thickness_m": ..., "profile": {"kind": "polynomial",
 "order": ..., "strength": [re, im]}, "backing": ...}`; a non-positive thickness, a negative order or a strength with
 a negative real or non-positive imaginary part is `InvalidInput`. A PML-closed stack has no guided basis:
-`enumerate_guided_modes` raises `UnsupportedTermination`, an `InvalidInput`.
+`enumerate_guided_modes` raises `UnsupportedTermination`, an `InvalidInput`; a stack closed on both sides has a
+modal basis (below).
 
 ## Pairings
 
@@ -130,7 +131,7 @@ a time, once per position and side; an exception it raises propagates. Decision 
 
 ## Modal bases
 
-A stack closed by walls on both sides has a discrete spectrum. `modal_basis` returns every mode in a window of the
+A stack closed by walls or PMLs on both sides has a discrete spectrum. `modal_basis` returns every mode in a window of the
 complex β plane, guided, radiation-like, evanescent and complex, as a complete modal basis in that window:
 
 ```python
@@ -156,6 +157,24 @@ fixed at the first interface, and the order of `definitions["ordering"]`; modes 
 matrices between two bases at one wavelength whose walls coincide once `origins_m` places each first interface,
 with singular values, the condition number of every leading block and each basis's own Gram defect. Every record
 carries the fixed `definitions`; decision note 0011 has the details.
+
+A side may also be closed by a `Pml`; its basis holds the modes converging to the open stack's guided and exposed
+leaky modes as the PML thickens and the modes near the rotated continuum, all counted:
+
+```python
+pml = lambda start: lamina.Pml(start, 0.75e-6, 2.0, 1 + 3j, "pec")
+stack = lamina.Stack(2.25, [(4.0, 0.7e-6)], 2.25, pml(-0.1e-6), pml(0.8e-6))
+basis = lamina.modal_basis(stack, 1e-6, "TE", lamina.BetaWindow((k0, 2.03 * k0), (-0.031 * k0, k0)))
+profile = basis.profile(0, np.linspace(-0.85e-6, 1.55e-6, 241))
+profile.region                             # "pml", "gap" or "layer" per sample
+profile.stretched_z_m, profile.stretch     # z̃ and s inside a PML, nan elsewhere
+```
+
+Inside a PML the profile holds the fields continued to the stretched coordinate z̃; the equivalent medium in real z
+has the same tangential components and normal components s E_z and s H_z (`profile.pml_fields`). Pairings integrate
+the unconjugated pairing along z̃ and the conjugated product over the equivalent-medium fields, and two bases pair
+when their PMLs agree in start, thickness, profile and backing; their materials may differ. A window on which a
+PML's normalisation scale leaves the representable range raises `InvalidInput` naming the side and log-magnitude.
 
 ## Scope
 

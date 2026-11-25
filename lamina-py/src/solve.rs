@@ -474,7 +474,11 @@ pub(crate) fn sampling(spec: &rec::Stack, z_m: &[f64]) -> Result<FieldSampling<f
         interfaces_cm.push(interfaces_cm.last().unwrap() + layer.thickness_m / M_PER_CM);
     }
     let total = *interfaces_cm.last().unwrap();
-    let right_gap = terminations(spec)[1].map(|(_, gap)| gap);
+    // Samples reach a right wall, or a right PML's backing wall.
+    let right_gap = terminations(spec)[1].map(|(termination, gap)| match termination {
+        Termination::Pml(pml) => gap + pml.thickness().as_centimetres(),
+        _ => gap,
+    });
     #[derive(PartialEq, Clone, Copy)]
     enum Region {
         Left,
@@ -494,7 +498,20 @@ pub(crate) fn sampling(spec: &rec::Stack, z_m: &[f64]) -> Result<FieldSampling<f
             ),
             ("right", spec.right_termination, |z, wall| z > wall),
         ] {
-            if let rec::Termination::Wall { z_m: wall, .. } = termination
+            let wall = match termination {
+                rec::Termination::Wall { z_m, .. } => Some(z_m),
+                rec::Termination::Pml {
+                    start_z_m,
+                    thickness_m,
+                    ..
+                } => Some(if side == "left" {
+                    start_z_m - thickness_m
+                } else {
+                    start_z_m + thickness_m
+                }),
+                _ => None,
+            };
+            if let Some(wall) = wall
                 && beyond(z, wall)
             {
                 return Err(Failure::Invalid(format!(
