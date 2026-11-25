@@ -10,6 +10,17 @@ primitives and returns numerical evidence with explicit branch and coverage limi
 | `ConformalSpectralProblem` | Constant exterior evidence, core analytical layers and fixed real beta | Dimensionless conformal z |
 | `FrequencyProblem` | Core analytical stack, including dispersive exteriors, and fixed real beta | Physical k0 in cm^-1 |
 
+A core stack may close either side with a perfect electric or perfect magnetic
+wall. Only open sides carry an exterior wavevector, and `PropagationProblem`
+charts them: with both sides open, the two-exterior conformal map; with one,
+the same map built from the open side's material alone; with none,
+`direct_domain` over a β rectangle in cm^-1 (`CoordinateKind::Wavenumber`),
+since the characteristic of a stack walled on both sides is entire and even in
+β and needs no sheet or radiation reference. Conformal domains of such a stack,
+and `FrequencyProblem` on any walled stack, fail with typed errors. A walled
+side is classified `Closed` with no flux; with one open side the mode type
+follows from that side alone, and with none it is `ModeType::Closed`.
+
 `new` uses core Scatter2. `with_backend` accepts an explicit core backend, including
 supported Transfer2 evaluation; there is no backend or strategy fallback. Problems
 use complex f64 scalars. Physical k0, beta and exterior kappa use vacuum angular

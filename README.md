@@ -17,8 +17,9 @@ accepted roots, residuals, coverage and the completeness of a stated window. It
 provides their fields, normalisation, regional power and overlaps between
 stacks, derivatives of modal quantities with respect to stack, wavelength and
 material parameters, a certified group index, and continuation of modes and
-modal sets along a parameter. It builds on `lamina-units`, `lamina-core` and
-`argloc`.
+modal sets along a parameter. Either side of a stack may be open or closed by a
+perfect electric or perfect magnetic wall. It builds on `lamina-units`,
+`lamina-core` and `argloc`.
 
 Read the [modal transform guide](docs/modal-transform.md) for the
 correspondence to Bakhtazad et al. (1997), field conventions and physical scope.
