@@ -292,7 +292,7 @@ fn run_inner(out: &Path, full: bool) -> Result<(), Error> {
             let point = &report.observations()[0];
             let v = point.physical_coordinate() / KP;
             let detail = point.describe(InterpretationConfig::default())?;
-            let k = detail.data.kappa;
+            let k = detail.data.kappa.map(|k| k.expect("an open stack"));
             let boundary = (k[0] + k[1] / metal(c(u))) / KP;
             let t = PropagationProblem::with_backend(
                 stack(),
@@ -388,7 +388,7 @@ fn run_inner(out: &Path, full: bool) -> Result<(), Error> {
             let point = &report.observations()[0];
             let u = point.physical_coordinate() / KP;
             let detail = point.describe(InterpretationConfig::default())?;
-            let k = detail.data.kappa;
+            let k = detail.data.kappa.map(|k| k.expect("an open stack"));
             let boundary = (k[0] + k[1] / metal(u)) / KP;
             let t = FrequencyProblem::with_backend(
                 stack(),

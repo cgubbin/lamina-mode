@@ -109,6 +109,14 @@ pub(crate) fn direction(solved: &Solved, parameter: rec::Parameter) -> Result<Di
             (name, unit, 1.)
         }
     };
+    // Walls stay fixed in the stack frame, whose origin is the first interface.
+    let walled =
+        !(input.stack.left_termination.is_open() && input.stack.right_termination.is_open());
+    if walled && velocities[0] != 0. {
+        return Err(invalid(format!(
+            "{name} moves the first interface, and the stack, against its walls"
+        )));
+    }
     let internal_unit = if per_unit == 1. { "1" } else { "cm" };
     let perturbation =
         GuidedPerturbation::new(name, internal_unit, velocities, wavelength_rate, rates)

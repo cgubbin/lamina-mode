@@ -240,12 +240,34 @@ pub enum BatchRefinementError {
     #[error(transparent)]
     Matching(#[from] InvalidMatchConfig),
 }
+/// Physical coordinates of a point and the exterior wavevector of each open
+/// side; a side closed by a wall carries none.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BranchSignature {
     pub k0: C,
     pub k_parallel: C,
-    pub left: C,
-    pub right: C,
+    pub left: Option<C>,
+    pub right: Option<C>,
+}
+impl BranchSignature {
+    pub(crate) fn of(point: &crate::conformal::ConformalPoint<J>) -> Self {
+        let value = |a: &J| a.value()[()];
+        let exterior = point.exterior_wavevectors();
+        Self {
+            k0: value(point.coordinates().vacuum_angular_wavenumber()),
+            k_parallel: value(point.coordinates().parallel_angular_wavenumber()),
+            left: exterior.left().map(value),
+            right: exterior.right().map(value),
+        }
+    }
+    /// The exterior wavevectors in left/right order, `None` on a closed side.
+    pub fn exteriors(&self) -> [Option<C>; 2] {
+        [self.left, self.right]
+    }
+    /// Both exterior wavevectors, when both sides are open.
+    pub fn open_exteriors(&self) -> Option<[C; 2]> {
+        Some([self.left?, self.right?])
+    }
 }
 #[derive(Debug)]
 pub struct AcceptedObservation<E> {
@@ -476,13 +498,7 @@ where
                                     error,
                                 )))
                             });
-                        let signature = signature.map(|point| BranchSignature {
-                            k0: point.coordinates().vacuum_angular_wavenumber().value()[()],
-                            k_parallel: point.coordinates().parallel_angular_wavenumber().value()
-                                [()],
-                            left: point.exterior_wavevectors().left().value()[()],
-                            right: point.exterior_wavevectors().right().value()[()],
-                        });
+                        let signature = signature.map(|point| BranchSignature::of(&point));
                         observations.push(AcceptedObservation {
                             chart: index,
                             candidate: outcome.index(),
@@ -669,7 +685,9 @@ fn compatibility<E>(
     if !cfg.physical.close(a.k0, b.k0) || !cfg.physical.close(a.k_parallel, b.k_parallel) {
         return Compatibility::Ambiguous(Ambiguity::IncompatibleBranch);
     }
-    for (left, right) in [(a.left, b.left), (a.right, b.right)] {
+    // Both observations belong to one problem, so they share their open sides.
+    let open = a.exteriors().into_iter().zip(b.exteriors());
+    for (left, right) in open.filter_map(|(a, b)| Some((a?, b?))) {
         if !cfg.exterior.close(left, right) {
             return Compatibility::Ambiguous(Ambiguity::IncompatibleBranch);
         }

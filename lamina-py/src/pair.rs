@@ -36,6 +36,7 @@ fn overlap_failure(e: GuidedOverlapError) -> Failure {
         }
         GuidedOverlapError::Field { .. } => Failure::Fields(format!("{e}: {e:?}")),
         GuidedOverlapError::Quadrature => Failure::Integration(e.to_string()),
+        GuidedOverlapError::ClosedStack => Failure::Invalid(e.to_string()),
     }
 }
 

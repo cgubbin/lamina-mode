@@ -20,7 +20,7 @@ fn reference(z: C, coordinate: f64, choices: [RadiationChoice; 2]) -> RadiationR
     RadiationReference {
         z,
         coordinate,
-        choices,
+        choices: choices.map(Some),
         tolerance: RadiationTolerance::default(),
     }
 }
@@ -71,7 +71,7 @@ fn real_references_verify_open_closed_and_reversed_channels_for_both_maps() {
             let RadiationProvenance::Verified(v) = d.provenance().radiation() else {
                 panic!()
             };
-            assert_eq!(v.reference().choices, choices);
+            assert_eq!(v.reference().choices, choices.map(Some));
             assert_eq!(v.physical_coordinates(), (2.0, beta));
         }
         let p = SpectralProblem::spectral(
@@ -158,7 +158,7 @@ fn invalid_references_fail_without_reselecting_a_sheet() {
         p.domain_with_radiation_reference(
             r,
             RadiationReference {
-                choices: [OutgoingOrDecaying, IncomingOrGrowing],
+                choices: [Some(OutgoingOrDecaying), Some(IncomingOrGrowing)],
                 ..a
             },
             cfg,
@@ -193,7 +193,7 @@ fn invalid_references_fail_without_reselecting_a_sheet() {
         .chart()
         .map(J::lift_constant(arr0(z)))
         .unwrap();
-    assert!((mapped.exterior_wavevectors().left().value()[()] - c(2.0)).norm() < 1e-12);
+    assert!((mapped.exterior_wavevectors().left().unwrap().value()[()] - c(2.0)).norm() < 1e-12);
     assert_eq!(
         backwards.provenance().radiation(),
         &RadiationProvenance::Unspecified

@@ -1,12 +1,14 @@
 //! Counted enumeration on the real guided sheet. Counts refer to open |β| windows.
+//! On a stack walled on both sides every real-β mode in the window is counted,
+//! including those below the exterior light lines.
 use super::*;
 use crate::problem as p;
 use lamina_core::{
     AnalyticalMaterialHandle, AnalyticalMaterialStack, EvaluateMeromorphicMaterial, Polarisation,
-    Scalar, Scatter2,
+    Scalar, Scatter2, WallKind,
 };
 use lamina_units::Length;
-use std::f64::consts::{PI, TAU};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuidedDirection {
@@ -20,7 +22,9 @@ pub struct GuidedWindow {
     pub direction: GuidedDirection,
     /// Open interval in inverse centimetres.
     pub abs_beta: [f64; 2],
-    /// Lower end of eligible interval is at least this far above the exterior light line.
+    /// Lower end of eligible interval is at least this far above the light
+    /// line of the open exteriors. A stack walled on both sides has no light
+    /// line: its eligible interval is the window itself, below the upper bound.
     pub cutoff_margin: f64,
     /// Distance in phase cycles within which an endpoint count is ambiguous.
     pub phase_tolerance: f64,
@@ -76,21 +80,35 @@ struct Medium {
     line: f64,
     weight: f64,
 }
+/// The condition at one end of the counted interval.
+#[derive(Clone, Copy)]
+enum End {
+    /// The exterior decays away from the stack.
+    Open(Medium),
+    /// A wall imposing ψ = 0 (Dirichlet) or ∂ψ/∂z = 0.
+    Wall { dirichlet: bool },
+}
 struct Counter {
     k: f64,
-    left: Medium,
-    right: Medium,
+    ends: [End; 2],
+    /// The exteriors of the conformal chart: the open sides.
+    chart: [Medium; 2],
+    /// Layers left to right, wall gaps as layers of their exterior material.
     layers: Vec<(Medium, f64)>,
     tol: f64,
 }
 impl Counter {
     // Phase is atan2(primary, weighted normal derivative / k0). At an
-    // eigenvalue the right-decaying phase is attained modulo π. As |β|
-    // increases the crossing index decreases, counting one state per crossing.
+    // eigenvalue the right end's phase is attained modulo π. As |β| increases
+    // the crossing index decreases, counting one state per crossing: the
+    // separated end conditions keep the phase monotone (Sturm–Liouville).
     fn index(&self, b: f64) -> Option<i64> {
         let alpha = |m: Medium| ((b - m.line) * (b + m.line)).sqrt();
-        let mut y = 1.0_f64;
-        let mut v = alpha(self.left) / (self.left.weight * self.k);
+        let (mut y, mut v) = match self.ends[0] {
+            End::Open(m) => (1.0_f64, alpha(m) / (m.weight * self.k)),
+            End::Wall { dirichlet: true } => (0., 1.),
+            End::Wall { dirichlet: false } => (1., 0.),
+        };
         let mut phase = y.atan2(v);
         let mut work = phase.abs();
         for &(m, d) in &self.layers {
@@ -121,7 +139,12 @@ impl Counter {
             y = next_y / norm;
             v = next_v / norm;
         }
-        let cycles = (phase - 1_f64.atan2(-alpha(self.right) / (self.right.weight * self.k))) / PI;
+        let target = match self.ends[1] {
+            End::Open(m) => 1_f64.atan2(-alpha(m) / (m.weight * self.k)),
+            End::Wall { dirichlet: true } => 0.,
+            End::Wall { dirichlet: false } => FRAC_PI_2,
+        };
+        let cycles = (phase - target) / PI;
         let err = self.tol + 64. * f64::EPSILON * (1. + work);
         if !cycles.is_finite() || (cycles - cycles.round()).abs() <= err {
             None
@@ -131,7 +154,7 @@ impl Counter {
     }
     fn native(&self, b: f64) -> f64 {
         let decay = |m: Medium| ((b - m.line) * (b + m.line)).sqrt();
-        ((decay(self.left) + decay(self.right)) / (2. * self.k)).ln()
+        ((decay(self.chart[0]) + decay(self.chart[1])) / (2. * self.k)).ln()
     }
 }
 /// Enumerate one polarization and direction using the checked Scatter2 characteristic.
@@ -182,11 +205,27 @@ pub(super) fn search_guided_modes(
             },
         })
     };
-    let left = medium(stack.left_exterior(), 0)?;
-    let right = medium(stack.right_exterior(), stack.len() + 1)?;
-    let light_line = left.line.max(right.line);
-    let mut upper_bound = light_line;
-    let mut layers = vec![];
+    let exteriors = [
+        medium(stack.left_exterior(), 0)?,
+        medium(stack.right_exterior(), stack.len() + 1)?,
+    ];
+    let walls = p::walls(&stack).map_err(|e| EnumerationError::Problem(e.to_string()))?;
+    let ends = [0, 1].map(|side| match walls[side] {
+        None => End::Open(exteriors[side]),
+        Some((kind, _)) => End::Wall {
+            dirichlet: (kind == WallKind::PerfectElectric)
+                == (req.polarisation == Polarisation::TransverseElectric),
+        },
+    });
+    // The light line and its margin come from the open sides only.
+    let open: Vec<_> = (0..2).filter(|&side| walls[side].is_none()).collect();
+    let light_line = open
+        .iter()
+        .map(|&side| exteriors[side].line)
+        .fold(0., f64::max);
+    let mut upper_bound = exteriors[0].line.max(exteriors[1].line);
+    let gap = |side: usize| walls[side].map(|(_, gap)| (exteriors[side], gap));
+    let mut layers: Vec<_> = gap(0).into_iter().collect();
     for (i, layer) in stack.layers_left_to_right().iter().enumerate() {
         let m = medium(layer.material(), i + 1)?;
         let d = layer.thickness().as_centimetres();
@@ -196,7 +235,13 @@ pub(super) fn search_guided_modes(
         layers.push((m, d));
         upper_bound = upper_bound.max(m.line);
     }
-    let (lo, hi) = (lo.max(light_line + req.cutoff_margin), hi.min(upper_bound));
+    layers.extend(gap(1));
+    let margin = if open.is_empty() {
+        0.
+    } else {
+        req.cutoff_margin
+    };
+    let (lo, hi) = (lo.max(light_line + margin), hi.min(upper_bound));
     let mut report = GuidedBasis {
         request: req,
         eligible: (lo < hi).then_some([lo, hi]),
@@ -211,8 +256,11 @@ pub(super) fn search_guided_modes(
     }
     let counter = Counter {
         k,
-        left,
-        right,
+        ends,
+        chart: match *open {
+            [side] => [exteriors[side]; 2],
+            _ => exteriors,
+        },
         layers,
         tol: req.phase_tolerance,
     };
@@ -248,13 +296,25 @@ pub(super) fn search_guided_modes(
         } else {
             -1.
         };
-        let z = counter.native(mid);
-        let zl = counter.native(l);
-        let zh = counter.native(h);
-        let rad = (zh - zl) * 0.5;
         let accepted = (|| {
-            let bounds = ConformalRegion::new(zl, zh, -rad, rad)
-                .map_err(|e| BranchFailure::Domain(e.to_string()))?;
+            let fail = |e: String| BranchFailure::Domain(e);
+            if open.is_empty() {
+                // Walls on both sides: search β directly.
+                let rad = (h - l) * 0.5;
+                let [a, b] = if sign > 0. { [l, h] } else { [-h, -l] };
+                let bounds =
+                    ConformalRegion::new(a, b, -rad, rad).map_err(|e| fail(e.to_string()))?;
+                let d = problem
+                    .direct_domain(bounds, req.assumption)
+                    .map_err(|e| fail(e.to_string()))?;
+                return problem.corrected_point(&d, (mid * sign).into(), cfg);
+            }
+            let z = counter.native(mid);
+            let zl = counter.native(l);
+            let zh = counter.native(h);
+            let rad = (zh - zl) * 0.5;
+            let bounds =
+                ConformalRegion::new(zl, zh, -rad, rad).map_err(|e| fail(e.to_string()))?;
             let d = problem
                 .domain(
                     bounds,
@@ -265,7 +325,7 @@ pub(super) fn search_guided_modes(
                     Default::default(),
                     req.assumption,
                 )
-                .map_err(|e| BranchFailure::Domain(e.to_string()))?;
+                .map_err(|e| fail(e.to_string()))?;
             problem.corrected_point(&d, z.into(), cfg)
         })();
         match accepted {
@@ -273,8 +333,10 @@ pub(super) fn search_guided_modes(
                 if sig.k_parallel.re * sign > l
                     && sig.k_parallel.re * sign < h
                     && sig.k_parallel.im.abs() <= 1e-9 * mid
-                    && [sig.left, sig.right]
+                    && sig
+                        .exteriors()
                         .iter()
+                        .flatten()
                         .all(|r| r.im > 0. && r.re.abs() <= 1e-8 * r.im) =>
             {
                 Ok(ModePoint {

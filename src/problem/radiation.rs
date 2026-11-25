@@ -2,7 +2,7 @@
 //! The anchor must be strictly inside the requested chart. Verification establishes
 //! the selected analytic continuation, not material analyticity or global coverage.
 use super::*;
-use lamina_core::ScalarAlgebra;
+use lamina_core::{EvaluateMeromorphicMaterial, ScalarAlgebra};
 use ndarray::arr0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,7 +15,8 @@ pub struct RadiationReference {
     pub z: C,
     /// Real varying physical coordinate, in cm^-1.
     pub coordinate: f64,
-    pub choices: [RadiationChoice; 2],
+    /// One choice per open side; `None` exactly on a side closed by a wall.
+    pub choices: [Option<RadiationChoice>; 2],
     pub tolerance: RadiationTolerance,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,7 +50,7 @@ pub struct VerifiedRadiationReference {
     k0: f64,
     beta: f64,
     epsilon: [f64; 2],
-    observed: [C; 2],
+    observed: [Option<C>; 2],
 }
 impl VerifiedRadiationReference {
     pub fn reference(&self) -> RadiationReference {
@@ -61,11 +62,15 @@ impl VerifiedRadiationReference {
     pub fn epsilon(&self) -> [f64; 2] {
         self.epsilon
     }
-    pub fn observed(&self) -> [C; 2] {
+    pub fn observed(&self) -> [Option<C>; 2] {
         self.observed
     }
     pub fn all_outgoing(&self) -> bool {
-        self.reference.choices == [RadiationChoice::OutgoingOrDecaying; 2]
+        self.reference
+            .choices
+            .iter()
+            .flatten()
+            .all(|choice| *choice == RadiationChoice::OutgoingOrDecaying)
     }
 }
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -98,13 +103,9 @@ pub enum RadiationReferenceError<E: std::error::Error + 'static> {
     Chart(#[source] ConformalChartError<E>),
 }
 /// Actual bound material values, never supplied independently by a caller.
-pub(super) fn exterior_factors(context: &ProblemContext, k0: C) -> [(C, C); 2] {
+pub(super) fn exterior_factors(stack: &AnalyticalMaterialStack<C>, k0: C) -> [(C, C); 2] {
     let k = lamina_core::Scalar(k0);
-    [
-        context.stack.left_exterior(),
-        context.stack.right_exterior(),
-    ]
-    .map(|m| {
+    [stack.left_exterior(), stack.right_exterior()].map(|m| {
         (
             m.evaluate_relative_permittivity_complex(k),
             m.evaluate_relative_permeability_complex(k),
@@ -158,32 +159,11 @@ where
         {
             return Err(Err::InvalidReference);
         }
-        let factors = exterior_factors(&self.context, C::new(k0, 0.0));
-        let mut expected = [C::new(0.0, 0.0); 2];
-        for (side, (e, m)) in factors.into_iter().enumerate() {
-            if !finite(e) || !finite(m) {
-                return Err(Err::NonFinite);
-            }
-            if !positive_dielectric(e, m) {
-                return Err(Err::UnsupportedMaterial { side });
-            }
-            let q = e.re * k0 * k0 - beta * beta;
-            let magnitude = q.abs().sqrt();
-            if !magnitude.is_finite() {
-                return Err(Err::NonFinite);
-            }
-            if magnitude <= tol.cutoff {
-                return Err(Err::Cutoff { side });
-            }
-            expected[side] = if q > 0.0 {
-                C::new(magnitude, 0.0)
-            } else {
-                C::new(0.0, magnitude)
-            };
-            if reference.choices[side] == RadiationChoice::IncomingOrGrowing {
-                expected[side] = -expected[side];
-            }
+        if reference.choices.map(|c| c.is_some()) != self.context.open_sides() {
+            return Err(Err::InvalidReference);
         }
+        let factors = exterior_factors(&self.context.stack, C::new(k0, 0.0));
+        let expected = anchor_wavevectors(factors, k0, beta, reference.choices, tol)?;
         let mut domain = self
             .domain(
                 requested,
@@ -203,18 +183,19 @@ where
             .map_err(Err::Chart)?;
         let actual_k0 = point.coordinates().vacuum_angular_wavenumber().value()[()];
         let actual_beta = point.coordinates().parallel_angular_wavenumber().value()[()];
-        let observed = [
-            point.exterior_wavevectors().left().value()[()],
-            point.exterior_wavevectors().right().value()[()],
-        ];
+        let value = |a: &J| a.value()[()];
+        let exterior = point.exterior_wavevectors();
+        let observed = [exterior.left().map(value), exterior.right().map(value)];
         let scale = expected
             .iter()
+            .flatten()
             .map(|v| v.norm())
             .fold(k0.abs().max(beta.abs()), f64::max);
         let limit = tol.absolute + tol.relative * scale;
         if !limit.is_finite()
-            || ![actual_k0, actual_beta, observed[0], observed[1]]
+            || ![actual_k0, actual_beta]
                 .into_iter()
+                .chain(observed.into_iter().flatten())
                 .all(finite)
         {
             return Err(Err::NonFinite);
@@ -225,15 +206,17 @@ where
             return Err(Err::InvalidReference);
         }
         for side in 0..2 {
+            let (Some(expected), Some(observed)) = (expected[side], observed[side]) else {
+                continue;
+            };
             // Reject even if an excessively loose comparison band spans both signs.
-            if (observed[side] - expected[side]).norm() > limit
-                || (observed[side] + expected[side]).norm()
-                    <= (observed[side] - expected[side]).norm()
+            if (observed - expected).norm() > limit
+                || (observed + expected).norm() <= (observed - expected).norm()
             {
                 return Err(Err::BranchMismatch {
                     side,
-                    expected: expected[side],
-                    observed: observed[side],
+                    expected,
+                    observed,
                 });
             }
         }
@@ -246,6 +229,46 @@ where
         });
         Ok(domain)
     }
+}
+
+/// The exterior wavevector each open side's choice selects at a real anchor;
+/// a closed side, with no choice, has none.
+fn anchor_wavevectors<E: std::error::Error + 'static>(
+    factors: [(C, C); 2],
+    k0: f64,
+    beta: f64,
+    choices: [Option<RadiationChoice>; 2],
+    tolerance: RadiationTolerance,
+) -> Result<[Option<C>; 2], RadiationReferenceError<E>> {
+    use RadiationReferenceError as Err;
+    let mut selected = [None; 2];
+    for (side, ((e, m), choice)) in factors.into_iter().zip(choices).enumerate() {
+        let Some(choice) = choice else { continue };
+        if !finite(e) || !finite(m) {
+            return Err(Err::NonFinite);
+        }
+        if !positive_dielectric(e, m) {
+            return Err(Err::UnsupportedMaterial { side });
+        }
+        let q = e.re * k0 * k0 - beta * beta;
+        let magnitude = q.abs().sqrt();
+        if !magnitude.is_finite() {
+            return Err(Err::NonFinite);
+        }
+        if magnitude <= tolerance.cutoff {
+            return Err(Err::Cutoff { side });
+        }
+        let outgoing = if q > 0.0 {
+            C::new(magnitude, 0.0)
+        } else {
+            C::new(0.0, magnitude)
+        };
+        selected[side] = Some(match choice {
+            RadiationChoice::OutgoingOrDecaying => outgoing,
+            RadiationChoice::IncomingOrGrowing => -outgoing,
+        });
+    }
+    Ok(selected)
 }
 
 /// Direct-frequency anchor selection uses actual material values at this point;
@@ -269,32 +292,9 @@ pub(super) fn frequency_reference(
     if !k0.is_finite() || k0 <= 0.0 || !beta.is_finite() {
         return Err(Err::InvalidReference);
     }
-    let factors = exterior_factors(context, C::new(k0, 0.0));
-    let mut observed = [C::new(0.0, 0.0); 2];
-    for (side, (e, m)) in factors.into_iter().enumerate() {
-        if !finite(e) || !finite(m) {
-            return Err(Err::NonFinite);
-        }
-        if !positive_dielectric(e, m) {
-            return Err(Err::UnsupportedMaterial { side });
-        }
-        let q = e.re * k0 * k0 - beta * beta;
-        let magnitude = q.abs().sqrt();
-        if !magnitude.is_finite() {
-            return Err(Err::NonFinite);
-        }
-        if magnitude <= tolerance.cutoff {
-            return Err(Err::Cutoff { side });
-        }
-        observed[side] = if q > 0.0 {
-            C::new(magnitude, 0.0)
-        } else {
-            C::new(0.0, magnitude)
-        };
-        if choices[side] == RadiationChoice::IncomingOrGrowing {
-            observed[side] = -observed[side];
-        }
-    }
+    let factors = exterior_factors(&context.stack, C::new(k0, 0.0));
+    let choices = choices.map(Some);
+    let observed = anchor_wavevectors(factors, k0, beta, choices, tolerance)?;
     Ok(VerifiedRadiationReference {
         reference: RadiationReference {
             z: C::new(k0, 0.0),

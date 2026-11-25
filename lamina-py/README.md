@@ -48,6 +48,29 @@ Parameters: `thickness`, `interface_position`, `translation`, `wavelength` (with
 `permeability`, and the Sellmeier `constant`, `coefficient` and `pole_wavelength` of a region's material. Each
 result names its `parameter_unit` and carries the conditioning of the implicit derivative.
 
+## Walls
+
+Either side of a stack may be closed by a perfect electric (`"pec"`) or perfect magnetic (`"pmc"`) wall at an
+absolute position in the stack frame, on or outside its outermost interface; the exterior material fills the gap:
+
+```python
+stack = lamina.Stack(
+    left=2.25, layers=[(4.0, 0.7e-6)], right=2.25,
+    left_termination=lamina.Wall("pec", -0.45e-6),
+    right_termination=lamina.Wall("pec", 1.15e-6),
+)
+basis = lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(wavelength_m=1e-6))
+basis.light_line_rad_per_m   # 0.0: no open side
+basis.n_eff.real             # every real-beta mode in the window, below the cladding index too
+```
+
+A PEC wall makes the tangential electric field vanish (Ey in TE, Ex in TM), a PMC wall the tangential magnetic field
+(Hx in TE, Hy in TM). The light line and cutoff margin come from open sides; between two walls the basis holds every
+real-β mode in the window. Fields are sampled up to the walls, and sensitivities hold the walls fixed, so
+`translation` and `interface_position(0)` are refused on a walled stack. The record stores each wall as
+`{"kind": "wall", "type": ..., "z_m": ...}` and omits open sides, so open stacks keep their hashes; decision note
+0009 has the details.
+
 ## Pairings
 
 Modes pair with each other, from one basis or from two stacks at one wavelength, and with supplied fields:
@@ -124,8 +147,9 @@ integral over its budget raises `IntegrationFailed`, all `LaminaError`.
 
 ## Exterior fields
 
-Exterior samples keep only the outgoing wave, so a guided field decays
-monotonically however far from the stack it is sampled. The unit-power
+Exterior samples of an open side keep only the outgoing wave, so a guided field
+decays monotonically however far from the stack it is sampled. Behind a wall the
+field is a standing wave in the gap, integrated numerically. The unit-power
 normalisation integrates the tails analytically and doesn't depend on the
 samples.
 

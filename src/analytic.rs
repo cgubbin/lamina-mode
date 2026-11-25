@@ -14,12 +14,14 @@ use num_traits::{Float, FromPrimitive, float::FloatCore};
 pub enum CoordinateKind {
     Conformal,
     Frequency,
+    /// β itself, for a stack closed by walls on both sides.
+    Wavenumber,
 }
 impl CoordinateKind {
     pub fn units(self) -> &'static str {
         match self {
             Self::Conformal => "dimensionless",
-            Self::Frequency => "cm^-1",
+            Self::Frequency | Self::Wavenumber => "cm^-1",
         }
     }
 }

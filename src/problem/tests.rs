@@ -1,8 +1,9 @@
 use super::*;
 use lamina_core::{
     CanonicalCoordinates, ComplexScalar, Constant, DerivativeOrder, DeterminantEvaluationError,
-    DifferentiableMaterial, DifferentiableMeromorphicMaterial, ExteriorWavevectors, Material,
-    MeromorphicMaterial, Sampled, Scalar, ScalarAlgebra, Scatter2, SeedJet,
+    DifferentiableMaterial, DifferentiableMeromorphicMaterial, EvaluateMeromorphicMaterial,
+    ExteriorWavevectors, Material, MeromorphicMaterial, Sampled, Scalar, ScalarAlgebra, Scatter2,
+    SeedJet,
 };
 use lamina_units::Length;
 use ndarray::arr0;
@@ -208,12 +209,12 @@ fn in_plane_uses_stack_exteriors_at_fixed_spectral_point() {
         let b = chart.map(J::variable(arr0(z), 0).unwrap()).unwrap();
         for (a, b) in [
             (
-                a.exterior_wavevectors().left(),
-                b.exterior_wavevectors().left(),
+                a.exterior_wavevectors().left().unwrap(),
+                b.exterior_wavevectors().left().unwrap(),
             ),
             (
-                a.exterior_wavevectors().right(),
-                b.exterior_wavevectors().right(),
+                a.exterior_wavevectors().right().unwrap(),
+                b.exterior_wavevectors().right().unwrap(),
             ),
             (
                 a.coordinates().parallel_angular_wavenumber(),
@@ -374,12 +375,12 @@ where
             .unwrap();
         for (a, b) in [
             (
-                a.exterior_wavevectors().left(),
-                b.exterior_wavevectors().left(),
+                a.exterior_wavevectors().left().unwrap(),
+                b.exterior_wavevectors().left().unwrap(),
             ),
             (
-                a.exterior_wavevectors().right(),
-                b.exterior_wavevectors().right(),
+                a.exterior_wavevectors().right().unwrap(),
+                b.exterior_wavevectors().right().unwrap(),
             ),
         ] {
             assert_eq!(a.value(), b.value());
@@ -729,11 +730,11 @@ where
     for (material, kappa) in [
         (
             p.context().stack().left_exterior(),
-            point.exterior_wavevectors().left(),
+            point.exterior_wavevectors().left().unwrap(),
         ),
         (
             p.context().stack().right_exterior(),
-            point.exterior_wavevectors().right(),
+            point.exterior_wavevectors().right().unwrap(),
         ),
     ] {
         let chi = material.evaluate_relative_permittivity_complex(Scalar(k0))

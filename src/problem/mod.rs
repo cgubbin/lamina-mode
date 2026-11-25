@@ -11,6 +11,7 @@
 //! This is an internal construction layer, not the public physical-input API.
 use crate::analytic::{AnalyticChart, CoordinateKind};
 use crate::dispersion::ChartDispersionError;
+pub mod direct;
 pub mod frequency;
 pub(crate) mod material;
 pub mod orchestration;
@@ -33,9 +34,10 @@ use crate::{
 };
 use argloc::{ArgumentConfig, FunctionBundle};
 use lamina_core::{
-    AnalyticalMaterialHandle, AnalyticalMaterialStack, Backend, ComplexPlane,
-    EvaluateMeromorphicMaterial, Layer, ModeJet1, Polarisation, Stack, StackCompileError,
+    AnalyticalMaterialHandle, AnalyticalMaterialStack, Backend, ComplexPlane, Layer, ModeJet1,
+    Polarisation, Stack, StackCompileError, StackSide, Termination, WallKind,
 };
+use lamina_units::Length;
 pub use material::ConstantExterior;
 use nalgebra::Complex;
 use ndarray::Ix0;
@@ -88,6 +90,51 @@ impl ProblemContext {
     pub fn coordinate(&self) -> SearchCoordinate {
         self.coordinate
     }
+    /// Whether each side, left then right, is open rather than closed by a wall.
+    pub(crate) fn open_sides(&self) -> [bool; 2] {
+        open_sides(&self.stack)
+    }
+}
+pub(crate) fn open_sides<M>(stack: &Stack<M, f64>) -> [bool; 2] {
+    [stack.left_termination(), stack.right_termination()].map(|t| t.is_open())
+}
+/// Each side's wall and its gap from the outermost interface in cm, `None`
+/// when open. The right gap is formed as lamina-core validates it, in the
+/// wall's unit when the layers share it, so a wall on the interface has none.
+/// Any other termination is refused, naming its side.
+pub(crate) fn walls<M>(
+    stack: &Stack<M, f64>,
+) -> Result<[Option<(WallKind, f64)>; 2], ProblemError> {
+    let gap = |termination: &Termination<f64>, right: bool| match termination {
+        Termination::Open => Ok(None),
+        Termination::Wall(wall) => {
+            let position = wall.position();
+            let unit = position.unit();
+            let gap = if !right {
+                -position.as_centimetres()
+            } else if stack.iter().all(|layer| layer.thickness().unit() == unit) {
+                let total = stack.iter().fold(0.0, |t, l| t + l.thickness().value());
+                Length::new(position.value() - total, unit).as_centimetres()
+            } else {
+                let total = stack
+                    .iter()
+                    .fold(0.0, |t, l| t + l.thickness().as_centimetres());
+                position.as_centimetres() - total
+            };
+            Ok(Some((wall.kind(), gap.max(0.0))))
+        }
+        _ => Err(ProblemError::UnsupportedTermination {
+            side: if right {
+                StackSide::Right
+            } else {
+                StackSide::Left
+            },
+        }),
+    };
+    Ok([
+        gap(stack.left_termination(), false)?,
+        gap(stack.right_termination(), true)?,
+    ])
 }
 #[derive(Debug, thiserror::Error)]
 pub enum ProblemError {
@@ -97,6 +144,12 @@ pub enum ProblemError {
     Spectral(#[from] WavenumberMapError),
     #[error("optical stack compilation failed: {0}")]
     Stack(#[from] StackCompileError<f64>),
+    #[error("this strategy needs a stack open on both sides: a wall termination closes one")]
+    ClosedSide,
+    #[error(
+        "the {side:?} side is closed by a termination other than a wall, which is not supported"
+    )]
+    UnsupportedTermination { side: StackSide },
 }
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum ExecutionError<E: std::error::Error + 'static> {
@@ -125,16 +178,17 @@ where
         if !fixed_k0.is_finite() || fixed_k0 == 0.0 {
             return Err(InPlaneMapError::InvalidWavenumber.into());
         }
-        let k = lamina_core::Scalar(C::new(fixed_k0, 0.0));
-        let left = stack.left_exterior();
-        let right = stack.right_exterior();
-        let map = ComplexInPlaneMap::new(
-            fixed_k0,
-            left.evaluate_relative_permittivity_complex(k),
-            left.evaluate_relative_permeability_complex(k),
-            right.evaluate_relative_permittivity_complex(k),
-            right.evaluate_relative_permeability_complex(k),
-        )?;
+        // Only open sides carry a branch: with one open side, both map
+        // constants are that side's material (r = 0).
+        walls(&stack)?;
+        let open = open_sides(&stack);
+        let factors = radiation::exterior_factors(&stack, C::new(fixed_k0, 0.0));
+        let [(el, ml), (er, mr)] = match open {
+            [true, false] => [factors[0]; 2],
+            [false, true] => [factors[1]; 2],
+            _ => factors,
+        };
+        let map = ComplexInPlaneMap::new(fixed_k0, el, ml, er, mr)?.with_open_sides(open);
         let solver = Compiled::compile(&stack, backend, polarisation)?;
         Ok(Self {
             context: Arc::new(ProblemContext {
@@ -281,6 +335,9 @@ where
         config: ConformalChartConfig<f64>,
         assumption: AnalyticAssumption,
     ) -> Result<ProblemDomain<M, S>, ConformalChartError<RegionError<M>>> {
+        if self.context.open_sides() == [false; 2] {
+            return Err(ConformalChartError::ClosedStack);
+        }
         let chart = match selection {
             ReferenceSelection::Sheet(sheet) => {
                 ConformalChart::new(self.map.clone(), requested, sheet, config)?
@@ -454,12 +511,7 @@ impl<M: Clone, S: ModeDeterminantSolver<J> + Clone> ModalProblem<M, S> {
             .map_err(|e| BranchFailure::Correction(e.to_string()))?;
         Ok((
             (**root).clone(),
-            orchestration::BranchSignature {
-                k0: point.coordinates().vacuum_angular_wavenumber().value()[()],
-                k_parallel: point.coordinates().parallel_angular_wavenumber().value()[()],
-                left: point.exterior_wavevectors().left().value()[()],
-                right: point.exterior_wavevectors().right().value()[()],
-            },
+            orchestration::BranchSignature::of(&point),
             enclosure,
         ))
     }

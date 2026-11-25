@@ -91,7 +91,8 @@ pub struct RadiationReference {
     pub native_coordinate: Complex,
     /// Real varying physical wavenumber, cm^-1.
     pub coordinate: f64,
-    pub choices: [RadiationChoice; 2],
+    /// One choice per open side; `None` exactly on a side closed by a wall.
+    pub choices: [Option<RadiationChoice>; 2],
     pub tolerance: RadiationTolerance,
 }
 impl From<RadiationReference> for crate::problem::radiation::RadiationReference {
@@ -216,7 +217,7 @@ impl VerifiedRadiationReference {
     pub fn epsilon(&self) -> [f64; 2] {
         self.inner.epsilon()
     }
-    pub fn observed(&self) -> [Complex; 2] {
+    pub fn observed(&self) -> [Option<Complex>; 2] {
         self.inner.observed()
     }
     pub fn all_outgoing(&self) -> bool {

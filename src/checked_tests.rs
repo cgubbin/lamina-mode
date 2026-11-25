@@ -102,8 +102,8 @@ impl<S: ModeDeterminantSolver<J>> ModeDeterminantSolver<J> for Counting<S> {
         let [a, b, l, r] = [
             coords.vacuum_angular_wavenumber(),
             coords.parallel_angular_wavenumber(),
-            exterior.left(),
-            exterior.right(),
+            exterior.left().unwrap(),
+            exterior.right().unwrap(),
         ];
         *self.inputs.lock().unwrap() = Some([
             a.value()[()],
@@ -166,8 +166,8 @@ where
     let [a, b, l, r] = [
         point.coordinates().vacuum_angular_wavenumber(),
         point.coordinates().parallel_angular_wavenumber(),
-        point.exterior_wavevectors().left(),
-        point.exterior_wavevectors().right(),
+        point.exterior_wavevectors().left().unwrap(),
+        point.exterior_wavevectors().right().unwrap(),
     ];
     assert_eq!(
         inputs.lock().unwrap().unwrap(),
@@ -337,8 +337,11 @@ fn check_physical<M>(
     let ext = point.exterior_wavevectors();
     // The exterior jets belong to this exact sheet and satisfy their dispersion.
     for (kappa, eps) in [
-        (ext.left(), 1.0),
-        (ext.right(), if expected.im == 0.0 { 2.25 } else { 1.0 }),
+        (ext.left().unwrap(), 1.0),
+        (
+            ext.right().unwrap(),
+            if expected.im == 0.0 { 2.25 } else { 1.0 },
+        ),
     ] {
         let identity = kappa.value()[()] * kappa.value()[()]
             + coords.parallel_angular_wavenumber().value()[()].powi(2)

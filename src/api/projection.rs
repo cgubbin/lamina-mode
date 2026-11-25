@@ -111,6 +111,7 @@ pub fn project_guided_field(
             .map(|layer| layer.thickness().as_centimetres())
             .collect();
         let signature = mode.signature().map_err(|_| InvalidInput)?;
+        let [left_root, right_root] = signature.open_exteriors().ok_or(InvalidInput)?;
         let first_edge = edges[0];
         let last_edge = edges[edges.len() - 1];
         let mut partition = vec![lo, hi];
@@ -168,9 +169,9 @@ pub fn project_guided_field(
                     }
                     let p = 1 + interval * (panels + 1) + j;
                     let phase = if right <= first_edge {
-                        (Complex::I * signature.left * (first_edge - coordinate)).exp()
+                        (Complex::I * left_root * (first_edge - coordinate)).exp()
                     } else if left >= last_edge {
-                        (Complex::I * signature.right * (coordinate - last_edge)).exp()
+                        (Complex::I * right_root * (coordinate - last_edge)).exp()
                     } else {
                         Complex::ONE
                     };

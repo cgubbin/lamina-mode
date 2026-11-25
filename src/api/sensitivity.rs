@@ -22,6 +22,8 @@ pub enum DirectionError {
     InvalidRegion,
     InvalidRate,
     LossInducingRate,
+    /// Moves the first interface, and with it the stack, against its walls.
+    MovesAgainstWalls,
 }
 
 impl ConstitutiveRate {
@@ -150,14 +152,7 @@ impl GuidedPerturbation {
         }
         let coordinate = Scalar(Complex::new(k0, 0.0));
         let order = DerivativeOrder::First;
-        std::iter::once(stack.left_exterior())
-            .chain(
-                stack
-                    .layers_left_to_right()
-                    .iter()
-                    .map(|layer| layer.material()),
-            )
-            .chain(std::iter::once(stack.right_exterior()))
+        super::power::region_materials(stack)
             .zip(&self.regional_rates)
             .map(|(material, explicit)| {
                 let epsilon = material
@@ -328,7 +323,7 @@ impl super::ModePoint {
         let sig = self.signature().map_err(|_| Ineligible)?;
         let k = sig.k0;
         let beta = sig.k_parallel;
-        let roots = [sig.left, sig.right];
+        let roots = sig.exteriors();
         let tol = 1e-9;
         if k.re <= 0.0
             || k.im.abs() > tol * k.re
@@ -338,6 +333,7 @@ impl super::ModePoint {
             return Err(Ineligible);
         }
         for (side, root) in roots.iter().enumerate() {
+            let Some(root) = root else { continue };
             let magnitude = root.norm();
             if magnitude <= exterior_settings.exterior_kappa_cutoff {
                 return Err(ExteriorCutoff { side, magnitude });
@@ -349,14 +345,16 @@ impl super::ModePoint {
 
         let provenance = self.provenance();
         let stack = provenance.stack();
+        // Walls stay fixed in the stack frame, whose origin is the first
+        // interface: moving it would move the stack against the walls.
+        if !stack.is_open() && direction.interface_velocities()[0] != 0.0 {
+            return Err(Direction(DirectionError::MovesAgainstWalls));
+        }
         let rates = direction
             .total_regional_rates(stack, k.re)
             .map_err(Direction)?;
-        let materials = std::iter::once(stack.left_exterior())
-            .chain(stack.iter().map(|layer| layer.material()))
-            .chain(std::iter::once(stack.right_exterior()));
         let at = Scalar(Complex::new(k.re, 0.0));
-        let values: Vec<_> = materials
+        let values: Vec<_> = super::power::region_materials(stack)
             .map(|m| {
                 (
                     m.evaluate_relative_permittivity_complex(at),
@@ -372,7 +370,8 @@ impl super::ModePoint {
             return Err(Ineligible);
         }
         let exterior_regions = [0, values.len() - 1];
-        for (side, (&root, &region)) in roots.iter().zip(&exterior_regions).enumerate() {
+        for (side, (root, &region)) in roots.iter().zip(&exterior_regions).enumerate() {
+            let Some(root) = *root else { continue };
             let (e, m) = values[region];
             let q = e * m * k * k - beta * beta;
             let square = root * root;
@@ -399,16 +398,17 @@ impl super::ModePoint {
         let coordinate_jets =
             |k_rate: f64, beta_rate: Complex, constitutive_rates: &[(Complex, Complex)]| {
                 let [left, right] = std::array::from_fn(|side| {
+                    let root = roots[side]?;
                     let region = exterior_regions[side];
                     let (e, m) = values[region];
                     let (de, dm) = constitutive_rates[region];
                     let q_rate = (de * m + e * dm) * k * k + 2.0 * e * m * k * k_rate
                         - 2.0 * beta * beta_rate;
-                    seed(roots[side], q_rate / (2.0 * roots[side]))
+                    Some(seed(root, q_rate / (2.0 * root)))
                 });
                 (
                     CanonicalCoordinates::new(seed(k, k_rate.into()), seed(beta, beta_rate)),
-                    ExteriorWavevectors::new(left, right),
+                    ExteriorWavevectors::from_options(left, right),
                 )
             };
         let evaluate = |k_rate: f64,
@@ -550,9 +550,7 @@ impl GuidedBetaSensitivity {
             .map_err(|_| GuidedBetaError::Ineligible)?;
         let k = sig.k0;
         let beta = sig.k_parallel;
-        let materials: Vec<_> = std::iter::once(stack.left_exterior())
-            .chain(stack.iter().map(|layer| layer.material()))
-            .chain(std::iter::once(stack.right_exterior()))
+        let materials: Vec<_> = super::power::region_materials(stack)
             .map(|material| {
                 (
                     material.evaluate_relative_permittivity_complex(Scalar(k)),
@@ -739,11 +737,11 @@ impl GuidedBetaSensitivity {
         self.power_field_tangent_on_mesh(backend, sampling, frame, amplitude, None)
     }
 
+    /// Rates of the exterior decay constants; the pairings that use them
+    /// take open stacks only.
     pub(super) fn exterior_decay_rates(&self) -> [f64; 2] {
-        [
-            self.exterior.left().first()[()].im,
-            self.exterior.right().first()[()].im,
-        ]
+        [self.exterior.left(), self.exterior.right()]
+            .map(|root| root.expect("an open side").first()[()].im)
     }
 
     pub(super) fn power_field_tangent_on_mesh<B: lamina_core::ModalDerivativeBackend>(
@@ -756,56 +754,22 @@ impl GuidedBetaSensitivity {
     ) -> Result<GuidedPowerSensitivity, GuidedPowerSensitivityError> {
         use super::power::CM_TO_M_OVER_Z0;
         use GuidedPowerSensitivityError::*;
-        use lamina_core::{
-            EvaluateMeromorphicMaterial, ExteriorSampling, FieldSampling, LayerSampling,
-            Polarisation,
-        };
-        use lamina_units::Length;
+        use lamina_core::Polarisation;
 
         let provenance = self.point.provenance();
         let stack = provenance.stack();
         let k = self.coordinates.vacuum_angular_wavenumber().value()[()];
         let beta = self.coordinates.parallel_angular_wavenumber().value()[()];
-        let grid = stack
-            .iter()
-            .map(|layer| {
-                let d = layer.thickness().as_centimetres();
-                let material = layer.material();
-                let e = material.evaluate_relative_permittivity_complex(Scalar(k));
-                let m = material.evaluate_relative_permeability_complex(Scalar(k));
-                let phase = d * (e * m * k * k - beta * beta).norm().sqrt();
-                if !phase.is_finite() || phase > 4096.0 {
-                    return Err(Quadrature);
-                }
-                Ok((d, 2 * (phase.ceil() as usize).max(4)))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let tail = |sample: &GuidedFieldSample, root: &DirectionalJet| {
-            let [flux, rate] = flux_and_rate(sample);
-            let decay = root.value()[()].im;
-            let power = CM_TO_M_OVER_Z0 * flux / (2.0 * decay);
-            [
-                power,
-                CM_TO_M_OVER_Z0 * rate / (2.0 * decay) - power * root.first()[()].im / decay,
-            ]
-        };
+        let grid = super::power::ProfileGrid::new(stack, k, beta, 2, 4).ok_or(Quadrature)?;
+        let roots = [self.exterior.left(), self.exterior.right()];
+        // Walls stay fixed: the right gap narrows as the layers thicken.
+        let width_rates: Vec<_> = std::iter::once(0.0)
+            .chain(self.thickness_rates.iter().copied())
+            .chain(std::iter::once(-self.thickness_rates.iter().sum::<f64>()))
+            .collect();
         let mut previous: Option<Vec<[f64; 2]>> = None;
         for level in 0..8 {
-            let edge = || ExteriorSampling::point(Length::zero());
-            let mut integration = FieldSampling::new().left_exterior(edge());
-            let mut count = 2;
-            for (i, &(_, base)) in grid.iter().enumerate() {
-                let points = (base << level) + 1;
-                count += points;
-                if count > 131072 {
-                    return Err(Quadrature);
-                }
-                integration = integration.layer(
-                    i,
-                    LayerSampling::uniform_with_boundaries(points, true, true),
-                );
-            }
-            integration = integration.right_exterior(edge());
+            let integration = grid.sampling(level).ok_or(Quadrature)?;
             let fields = self
                 .field_tangent_with(
                     backend,
@@ -814,31 +778,44 @@ impl GuidedBetaSensitivity {
                     amplitude,
                 )
                 .map_err(Fields)?;
-            let mut regional = vec![tail(&fields[0], self.exterior.left())];
-            let mut offset = 1;
-            for (&(width, base), &width_rate) in grid.iter().zip(&self.thickness_rates) {
-                let n = base << level;
-                let mut sums = [0.0; 2];
-                for (j, sample) in fields[offset..=offset + n].iter().enumerate() {
-                    let weight = if j == 0 || j == n {
-                        1.0
-                    } else if j % 2 == 1 {
-                        4.0
-                    } else {
-                        2.0
-                    };
-                    let [flux, rate] = flux_and_rate(sample);
-                    sums[0] += weight * flux;
-                    sums[1] += weight * rate;
-                }
-                let scale = CM_TO_M_OVER_Z0 / (3.0 * n as f64);
-                regional.push([
-                    scale * width * sums[0],
-                    scale * (width * sums[1] + width_rate * sums[0]),
-                ]);
-                offset += n + 1;
-            }
-            regional.push(tail(&fields[offset], self.exterior.right()));
+            let spans = grid.spans(level);
+            let regional: Vec<_> = spans
+                .iter()
+                .map(|span| {
+                    let at = |i: usize| flux_and_rate(&fields[i]);
+                    match span.intervals {
+                        // An open exterior's tail, analytic in its decay constant.
+                        None => {
+                            let root = roots[usize::from(span.region > 0)].expect("open");
+                            let [flux, rate] = at(span.first);
+                            let decay = root.value()[()].im;
+                            let power = CM_TO_M_OVER_Z0 * flux / (2.0 * decay);
+                            [
+                                power,
+                                CM_TO_M_OVER_Z0 * rate / (2.0 * decay)
+                                    - power * root.first()[()].im / decay,
+                            ]
+                        }
+                        // A layer is sampled at fixed fractions. A gap is sampled
+                        // at fixed distances from its interface, and only the
+                        // right gap changes width, at its fixed wall.
+                        Some(_) => {
+                            let flux = span.mean(|i| at(i)[0]);
+                            let edge = if span.region == spans.len() - 1 {
+                                at(span.last())[0]
+                            } else {
+                                flux
+                            };
+                            [
+                                CM_TO_M_OVER_Z0 * span.width * flux,
+                                CM_TO_M_OVER_Z0
+                                    * (span.width * span.mean(|i| at(i)[1])
+                                        + width_rates[span.region] * edge),
+                            ]
+                        }
+                    }
+                })
+                .collect();
             let total: f64 = regional.iter().map(|p| p[0]).sum();
             let total_rate: f64 = regional.iter().map(|p| p[1]).sum();
             if !total.is_finite() || !total_rate.is_finite() || total == 0.0 {
@@ -868,8 +845,9 @@ impl GuidedBetaSensitivity {
                 Polarisation::TransverseElectric => 1,
                 Polarisation::TransverseMagnetic => 4,
             };
-            let reference = fields[0].field[primary];
-            let reference_rate = fields[0].tangent.expect("attached tangent")[primary];
+            let left = &fields[spans[0].last()];
+            let reference = left.field[primary];
+            let reference_rate = left.tangent.expect("attached tangent")[primary];
             let peak = fields
                 .iter()
                 .map(|sample| sample.field[primary].norm())

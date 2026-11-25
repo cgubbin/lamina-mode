@@ -23,7 +23,7 @@ pub fn guided() -> Result<SolveReport, Diagnostic> {
         RadiationReference {
             native_coordinate: c(z),
             coordinate: beta,
-            choices: [RadiationChoice::OutgoingOrDecaying; 2],
+            choices: [Some(RadiationChoice::OutgoingOrDecaying); 2],
             tolerance: RadiationTolerance::default(),
         },
         ConformalChartConfig::default(),
@@ -62,7 +62,7 @@ pub fn constant_cavity() -> Result<SolveReport, Diagnostic> {
         RadiationReference {
             native_coordinate: Complex::new(anchor, -std::f64::consts::FRAC_PI_2),
             coordinate: 5.5,
-            choices: [RadiationChoice::OutgoingOrDecaying; 2],
+            choices: [Some(RadiationChoice::OutgoingOrDecaying); 2],
             tolerance: RadiationTolerance::default(),
         },
         ConformalChartConfig::default(),

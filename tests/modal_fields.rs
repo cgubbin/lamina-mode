@@ -89,11 +89,11 @@ fn interface_profiles_both_complex_cases_and_owned_gauge() {
         close(f.electric().z()[0], epsilon * f.electric().z()[2]);
         close(
             h[1] / h[0],
-            (Complex::i() * signature.left * 0.2 / KP).exp(),
+            (Complex::i() * signature.left.unwrap() * 0.2 / KP).exp(),
         );
         close(
             h[3] / h[2],
-            (Complex::i() * signature.right * 0.2 / KP).exp(),
+            (Complex::i() * signature.right.unwrap() * 0.2 / KP).exp(),
         );
         for (index, e) in [(0, c(1.)), (2, epsilon)] {
             close(
@@ -203,8 +203,14 @@ fn both_film_modes_match_boundary_conditions_and_magnetic_parity() {
         let h = profile.fields.quantity().magnetic().y();
         assert!(h[1].norm() < h[0].norm() && h[3].norm() < h[2].norm());
         let sig = point.signature().unwrap();
-        close(h[1] / h[0], (Complex::i() * sig.left * 0.2 / KP).exp());
-        close(h[3] / h[2], (Complex::i() * sig.right * 0.2 / KP).exp());
+        close(
+            h[1] / h[0],
+            (Complex::i() * sig.left.unwrap() * 0.2 / KP).exp(),
+        );
+        close(
+            h[3] / h[2],
+            (Complex::i() * sig.right.unwrap() * 0.2 / KP).exp(),
+        );
     }
 }
 #[test]

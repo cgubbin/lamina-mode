@@ -178,7 +178,7 @@ pub struct FrequencyChart {
     beta: f64,
     evidence: FrequencyEvidence,
 }
-fn contains(r: ConformalRegion<f64>, k: C) -> bool {
+pub(super) fn contains(r: ConformalRegion<f64>, k: C) -> bool {
     let (x0, x1) = r.real_bounds();
     let (y0, y1) = r.imaginary_bounds();
     finite(k) && k.re >= x0 && k.re <= x1 && k.im >= y0 && k.im <= y1
@@ -472,26 +472,25 @@ impl AnalyticChart<J> for FrequencyChart {
         ))
     }
     fn with_evaluation_margin(&self) -> Result<Self, FrequencyError> {
-        let expand = |(lo, hi): (f64, f64)| {
-            let margin =
-                64.0 * f64::EPSILON * lo.abs().max(hi.abs()).max(hi - lo).max(f64::MIN_POSITIVE);
-            let a = lo - margin;
-            let b = hi + margin;
-            if !a.is_finite() || !b.is_finite() || a >= lo || b <= hi {
-                Err(FrequencyError::InvalidMargin)
-            } else {
-                Ok((a, b))
-            }
-        };
-        let (x0, x1) = expand(self.region.real_bounds())?;
-        let (y0, y1) = expand(self.region.imaginary_bounds())?;
-        let region =
-            ConformalRegion::new(x0, x1, y0, y1).map_err(|_| FrequencyError::InvalidMargin)?;
+        let region = halo(self.region).ok_or(FrequencyError::InvalidMargin)?;
         self.check_exclusions(region)?;
         let mut chart = self.clone();
         chart.region = region;
         Ok(chart)
     }
+}
+/// `region` grown by a few ulps on every side, absorbing boundary roundoff.
+pub(super) fn halo(region: ConformalRegion<f64>) -> Option<ConformalRegion<f64>> {
+    let expand = |(lo, hi): (f64, f64)| {
+        let margin =
+            64.0 * f64::EPSILON * lo.abs().max(hi.abs()).max(hi - lo).max(f64::MIN_POSITIVE);
+        let a = lo - margin;
+        let b = hi + margin;
+        (a.is_finite() && b.is_finite() && a < lo && b > hi).then_some((a, b))
+    };
+    let (x0, x1) = expand(region.real_bounds())?;
+    let (y0, y1) = expand(region.imaginary_bounds())?;
+    ConformalRegion::new(x0, x1, y0, y1).ok()
 }
 impl<B: Backend<J, ComplexPlane>> FrequencyProblem<B> {
     /// Reuse a complete core analytical stack. No sampled exterior replacement.
@@ -505,6 +504,10 @@ impl<B: Backend<J, ComplexPlane>> FrequencyProblem<B> {
             return Err(ProblemError::Spectral(
                 WavenumberMapError::InvalidInPlaneWavenumber,
             ));
+        }
+        walls(&stack)?;
+        if !stack.is_open() {
+            return Err(ProblemError::ClosedSide);
         }
         let solver = Compiled::compile(&stack, backend, pol)?;
         Ok(Self {
@@ -541,7 +544,7 @@ impl<S: ModeDeterminantSolver<J> + Clone> ModalProblem<(), S> {
                 (
                     ExteriorReferenceValues {
                         frequency: C::new(frequency, 0.0),
-                        kappa: verified.observed(),
+                        kappa: verified.observed().map(|k| k.expect("open stack")),
                     },
                     RadiationProvenance::Verified(verified),
                 )

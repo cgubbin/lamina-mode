@@ -90,21 +90,24 @@ impl<E: std::error::Error + 'static> std::error::Error for PointError<E> {
         }
     }
 }
+/// Physical coordinates and exterior data of a point. `kappa` holds the
+/// exterior wavevector of each open side; a side closed by a wall has none.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PhysicalData {
     pub k0: C,
     pub beta: C,
-    pub kappa: [C; 2],
+    pub kappa: [Option<C>; 2],
     pub epsilon: [C; 2],
     pub mu: [C; 2],
 }
 impl PhysicalData {
-    pub fn alpha(&self) -> [C; 2] {
-        self.kappa.map(|k| C::new(0.0, -1.0) * k)
+    pub fn alpha(&self) -> [Option<C>; 2] {
+        self.kappa.map(|k| k.map(|k| C::new(0.0, -1.0) * k))
     }
     fn scale(&self) -> f64 {
-        [self.k0, self.beta, self.kappa[0], self.kappa[1]]
+        [self.k0, self.beta]
             .into_iter()
+            .chain(self.kappa.into_iter().flatten())
             .map(|x| x.norm())
             .fold(0.0, f64::max)
     }
@@ -129,6 +132,8 @@ pub enum ExteriorBehaviour {
     Decay,
     Growth,
     Boundary,
+    /// Closed by a wall: no exterior wave.
+    Closed,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Evolution {
@@ -155,6 +160,8 @@ pub enum Flux {
         threshold: f64,
     },
     Unsupported(Unsupported),
+    /// Closed by a wall: no power crosses it.
+    Closed,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModeType {
@@ -167,6 +174,8 @@ pub enum ModeType {
     TwoSidedSource,
     Absorptive,
     Gain,
+    /// A mode of a stack closed by walls on both sides.
+    Closed,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoundaryReason {
@@ -219,18 +228,12 @@ fn interpret(
     config: InterpretationConfig,
 ) -> Result<PhysicalDetails, InputError> {
     config.validate()?;
-    if ![
-        data.k0,
-        data.beta,
-        data.kappa[0],
-        data.kappa[1],
-        data.epsilon[0],
-        data.epsilon[1],
-        data.mu[0],
-        data.mu[1],
-    ]
-    .into_iter()
-    .all(finite)
+    if ![data.k0, data.beta]
+        .into_iter()
+        .chain(data.kappa.into_iter().flatten())
+        .chain(data.epsilon)
+        .chain(data.mu)
+        .all(finite)
     {
         return Err(InputError::NonFinite);
     }
@@ -238,11 +241,13 @@ fn interpret(
     if !band.is_finite() {
         return Err(InputError::InvalidConfig);
     }
-    let exterior = data.kappa.map(|k| match sign(k.im, band) {
-        Sign::Positive => ExteriorBehaviour::Decay,
-        Sign::Negative => ExteriorBehaviour::Growth,
-        Sign::Boundary => ExteriorBehaviour::Boundary,
+    let exterior = data.kappa.map(|k| match k.map(|k| sign(k.im, band)) {
+        None => ExteriorBehaviour::Closed,
+        Some(Sign::Positive) => ExteriorBehaviour::Decay,
+        Some(Sign::Negative) => ExteriorBehaviour::Growth,
+        Some(Sign::Boundary) => ExteriorBehaviour::Boundary,
     });
+    let open: Vec<usize> = (0..2).filter(|&j| data.kappa[j].is_some()).collect();
     let spectral = matches!(coordinate, SearchCoordinate::Spectral { .. });
     let evolution = match (
         spectral,
@@ -254,7 +259,9 @@ fn interpret(
         (true, Sign::Positive) => Evolution::TemporalGrowth,
         (_, Sign::Boundary) => Evolution::Boundary,
     };
-    let supported_material = (0..2).all(|j| positive_dielectric(data.epsilon[j], data.mu[j]));
+    let supported_material = open
+        .iter()
+        .all(|&j| positive_dielectric(data.epsilon[j], data.mu[j]));
     let support = if spectral {
         Some(Unsupported::SolveDirection)
     } else if !supported_material {
@@ -264,25 +271,36 @@ fn interpret(
     } else {
         None
     };
-    let mut flux = [Flux::Unsupported(support.unwrap_or(Unsupported::Frequency)); 2];
+    let mut flux = data.kappa.map(|k| match k {
+        None => Flux::Closed,
+        Some(_) => Flux::Unsupported(support.unwrap_or(Unsupported::Frequency)),
+    });
     let mut directions = [Sign::Boundary; 2];
     if support.is_none() {
         let coefficients = [0, 1].map(|j| {
-            let factor = match pol {
-                Polarisation::TransverseElectric => data.mu[j],
-                Polarisation::TransverseMagnetic => data.epsilon[j],
-            };
-            (data.kappa[j] / data.k0 / factor).re
+            data.kappa[j].map(|kappa| {
+                let factor = match pol {
+                    Polarisation::TransverseElectric => data.mu[j],
+                    Polarisation::TransverseMagnetic => data.epsilon[j],
+                };
+                (kappa / data.k0 / factor).re
+            })
         });
+        let open_coefficients = coefficients.iter().flatten();
         let threshold = config.flux_absolute
-            + config.flux_relative * coefficients.iter().map(|x| x.abs()).fold(0.0, f64::max);
-        if !threshold.is_finite() || coefficients.iter().any(|x| !x.is_finite()) {
+            + config.flux_relative
+                * open_coefficients
+                    .clone()
+                    .map(|x| x.abs())
+                    .fold(0.0, f64::max);
+        if !threshold.is_finite() || open_coefficients.clone().any(|x| !x.is_finite()) {
             return Err(InputError::NonFinite);
         }
-        for j in 0..2 {
-            directions[j] = sign(coefficients[j], threshold);
+        for &j in &open {
+            let coefficient = coefficients[j].expect("open side");
+            directions[j] = sign(coefficient, threshold);
             flux[j] = Flux::Supported {
-                coefficient: coefficients[j],
+                coefficient,
                 direction: directions[j],
                 threshold,
             };
@@ -293,7 +311,15 @@ fn interpret(
     } else if data.beta.re <= band {
         Classification::Unsupported(Unsupported::PropagationDirection)
     } else {
-        classify(&data, exterior, evolution, directions, band, config.cutoff)
+        classify(
+            &data,
+            &open,
+            exterior,
+            evolution,
+            directions,
+            band,
+            config.cutoff,
+        )
     };
     let qualification = match radiation {
         RadiationProvenance::Unspecified => RadiationQualification::Unspecified,
@@ -315,8 +341,10 @@ fn interpret(
         },
     })
 }
+/// Classify from the open sides alone; `open` lists them in left/right order.
 fn classify(
     data: &PhysicalData,
+    open: &[usize],
     exterior: [ExteriorBehaviour; 2],
     evolution: Evolution,
     flux: [Sign; 2],
@@ -329,7 +357,11 @@ fn classify(
     use ExteriorBehaviour::{Decay, Growth};
     use ModeType::*;
     use Sign::{Boundary as Zero, Negative as I, Positive as O};
-    if data.kappa.iter().any(|k| k.norm() <= cutoff) {
+    if open.is_empty() {
+        return Classified(Closed);
+    }
+    let kappa = |j: usize| data.kappa[j].expect("open side");
+    if open.iter().any(|&j| kappa(j).norm() <= cutoff) {
         return Boundary(Cutoff);
     }
     // Check dispersion independently of the proposed labels. A generous roundoff
@@ -339,40 +371,52 @@ fn classify(
     if !limit.is_finite() {
         return Boundary(InconsistentEvidence);
     }
-    for j in 0..2 {
-        let residual = data.kappa[j] * data.kappa[j] - data.epsilon[j] * data.k0 * data.k0
-            + data.beta * data.beta;
+    for &j in open {
+        let residual =
+            kappa(j) * kappa(j) - data.epsilon[j] * data.k0 * data.k0 + data.beta * data.beta;
         if !finite(residual) || residual.norm() > limit {
             return Boundary(InconsistentEvidence);
         }
     }
     if evolution == Evolution::Boundary {
-        if exterior == [Decay; 2]
-            && flux == [Zero; 2]
-            && (0..2).all(|j| data.beta.re > data.epsilon[j].re.sqrt() * data.k0.re + band)
-        {
+        if open.iter().all(|&j| {
+            exterior[j] == Decay
+                && flux[j] == Zero
+                && data.beta.re > data.epsilon[j].re.sqrt() * data.k0.re + band
+        }) {
             return Classified(Guided);
         }
         return Boundary(ImproperRealAxis);
     }
-    let label = match (exterior, flux, evolution) {
-        ([Growth, Decay], [O, I], Attenuation) => LeftLeaky,
-        ([Decay, Growth], [O, I], Amplification) => RightSource,
-        ([Decay, Growth], [I, O], Attenuation) => RightLeaky,
-        ([Growth, Decay], [I, O], Amplification) => LeftSource,
-        ([Growth, Growth], [I, I], Amplification) => TwoSidedSource,
-        ([Decay, Decay], [I, I], Attenuation) => Absorptive,
-        ([Decay, Decay], [O, O], Amplification) => Gain,
-        ([Growth, Growth], [O, O], Attenuation) => TwoSidedLeaky,
-        _ => {
-            return Boundary(
-                if exterior.contains(&ExteriorBehaviour::Boundary) || flux.contains(&Zero) {
-                    NearSectorBoundary
-                } else {
-                    InconsistentEvidence
-                },
-            );
-        }
+    let label = match *open {
+        [j] => match (exterior[j], flux[j], evolution) {
+            (Growth, O, Attenuation) => Some([LeftLeaky, RightLeaky][j]),
+            (Growth, I, Amplification) => Some([LeftSource, RightSource][j]),
+            (Decay, I, Attenuation) => Some(Absorptive),
+            (Decay, O, Amplification) => Some(Gain),
+            _ => None,
+        },
+        _ => match (exterior, flux, evolution) {
+            ([Growth, Decay], [O, I], Attenuation) => Some(LeftLeaky),
+            ([Decay, Growth], [O, I], Amplification) => Some(RightSource),
+            ([Decay, Growth], [I, O], Attenuation) => Some(RightLeaky),
+            ([Growth, Decay], [I, O], Amplification) => Some(LeftSource),
+            ([Growth, Growth], [I, I], Amplification) => Some(TwoSidedSource),
+            ([Decay, Decay], [I, I], Attenuation) => Some(Absorptive),
+            ([Decay, Decay], [O, O], Amplification) => Some(Gain),
+            ([Growth, Growth], [O, O], Attenuation) => Some(TwoSidedLeaky),
+            _ => None,
+        },
+    };
+    let Some(label) = label else {
+        let near = open
+            .iter()
+            .any(|&j| exterior[j] == ExteriorBehaviour::Boundary || flux[j] == Zero);
+        return Boundary(if near {
+            NearSectorBoundary
+        } else {
+            InconsistentEvidence
+        });
     };
     Classified(label)
 }
@@ -382,23 +426,19 @@ pub(crate) fn from_signature(
     config: InterpretationConfig,
 ) -> Result<PhysicalDetails, InputError> {
     config.validate()?;
-    if ![
-        signature.k0,
-        signature.k_parallel,
-        signature.left,
-        signature.right,
-    ]
-    .into_iter()
-    .all(finite)
+    if ![signature.k0, signature.k_parallel]
+        .into_iter()
+        .chain(signature.exteriors().into_iter().flatten())
+        .all(finite)
     {
         return Err(InputError::NonFinite);
     }
-    let factors = exterior_factors(provenance.problem(), signature.k0);
+    let factors = exterior_factors(provenance.problem().stack(), signature.k0);
     interpret(
         PhysicalData {
             k0: signature.k0,
             beta: signature.k_parallel,
-            kappa: [signature.left, signature.right],
+            kappa: signature.exteriors(),
             epsilon: factors.map(|v| v.0),
             mu: factors.map(|v| v.1),
         },
@@ -440,17 +480,7 @@ where
                         ChartDispersionError::Chart(e),
                     )))
                 })?;
-            from_signature(
-                BranchSignature {
-                    k0: point.coordinates().vacuum_angular_wavenumber().value()[()],
-                    k_parallel: point.coordinates().parallel_angular_wavenumber().value()[()],
-                    left: point.exterior_wavevectors().left().value()[()],
-                    right: point.exterior_wavevectors().right().value()[()],
-                },
-                root.provenance(),
-                config,
-            )
-            .map_err(Input)
+            from_signature(BranchSignature::of(&point), root.provenance(), config).map_err(Input)
         })();
         PointDescription {
             root,

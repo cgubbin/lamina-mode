@@ -144,6 +144,11 @@ pub enum ConformalChartError<E> {
 
     #[error("continued coordinate is inconsistent with the squared-coordinate map")]
     InconsistentContinuation,
+
+    #[error(
+        "a stack closed by walls on both sides has no exterior branch: search a direct β domain"
+    )]
+    ClosedStack,
 }
 
 /// One analytic linear-coordinate chart over a validated conformal region.

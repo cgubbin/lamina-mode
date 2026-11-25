@@ -391,10 +391,7 @@ impl ModePoint {
                     <DerivativeJet as SeedJet>::constant(arr0(signature.k0)),
                     <DerivativeJet as SeedJet>::constant(arr0(signature.k_parallel)),
                 );
-                let exterior = ExteriorWavevectors::new(
-                    <DerivativeJet as SeedJet>::constant(arr0(signature.left)),
-                    <DerivativeJet as SeedJet>::constant(arr0(signature.right)),
-                );
+                let exterior = constant_exteriors(&signature);
                 backend
                     .checked_characteristic(
                         canonical,
@@ -452,10 +449,7 @@ impl ModePoint {
                 <DerivativeJet as SeedJet>::constant(arr0(signature.k0)),
                 <DerivativeJet as SeedJet>::constant(arr0(signature.k_parallel)),
             );
-            let exterior = ExteriorWavevectors::new(
-                <DerivativeJet as SeedJet>::constant(arr0(signature.left)),
-                <DerivativeJet as SeedJet>::constant(arr0(signature.right)),
-            );
+            let exterior = constant_exteriors(&signature);
             let result = backend
                 .checked_characteristic(
                     canonical,
@@ -499,10 +493,12 @@ impl ModePoint {
             <DerivativeJet as SeedJet>::constant(arr0(beta))
         };
         let exteriors = [stack.left_exterior(), stack.right_exterior()];
-        let references = [signature.left, signature.right];
-        let mut kappas = Vec::with_capacity(2);
+        let references = signature.exteriors();
+        let mut kappas = [None, None];
         for (side_index, (material, reference)) in exteriors.into_iter().zip(references).enumerate()
         {
+            // A side closed by a wall carries no exterior wavevector.
+            let Some(reference) = reference else { continue };
             let side = if side_index == 0 { "left" } else { "right" };
             let magnitude = reference.norm();
             if !magnitude.is_finite() || magnitude <= settings.exterior_kappa_cutoff {
@@ -545,14 +541,15 @@ impl ModePoint {
             let axis = if k0_variable { k0 } else { beta };
             let axis_jet = if k0_variable { &k0_jet } else { &beta_jet };
             let offset = reference - kappa_prime * axis;
-            kappas.push(
+            kappas[side_index] = Some(
                 axis_jet
                     .scale(kappa_prime)
                     .add(&<DerivativeJet as SeedJet>::constant(arr0(offset))),
             );
         }
         let coords = CanonicalCoordinates::new(k0_jet, beta_jet);
-        let exterior = ExteriorWavevectors::new(kappas[0].clone(), kappas[1].clone());
+        let [left, right] = kappas;
+        let exterior = ExteriorWavevectors::from_options(left, right);
         let result = backend
             .checked_characteristic(
                 canonical,
@@ -578,6 +575,12 @@ impl ModePoint {
             },
         })
     }
+}
+
+/// The accepted exterior wavevectors as constants, none on a closed side.
+fn constant_exteriors(signature: &BranchSignature) -> ExteriorWavevectors<DerivativeJet> {
+    let constant = |kappa| <DerivativeJet as SeedJet>::constant(arr0(kappa));
+    ExteriorWavevectors::from_options(signature.left.map(constant), signature.right.map(constant))
 }
 
 fn finite(value: Complex) -> bool {

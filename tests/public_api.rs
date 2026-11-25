@@ -541,7 +541,7 @@ fn accepted_guided_point_survives_unavailable_interpretation_and_checked_failure
             RadiationReference {
                 native_coordinate: c(z),
                 coordinate: beta,
-                choices: [RadiationChoice::OutgoingOrDecaying; 2],
+                choices: [Some(RadiationChoice::OutgoingOrDecaying); 2],
                 tolerance: RadiationTolerance::default(),
             },
             ConformalChartConfig::default(),
@@ -701,6 +701,7 @@ fn opposite_frequency_branches_keep_separate_public_observations() {
     assert_eq!(report.groups().len(), 2);
     let a = report.observations()[0].signature().unwrap();
     let b = report.observations()[1].signature().unwrap();
-    assert!(a.left.re > 0.0 && b.left.re < 0.0);
-    assert!(a.right.re > 0.0 && b.right.re < 0.0);
+    let ([al, ar], [bl, br]) = (a.open_exteriors().unwrap(), b.open_exteriors().unwrap());
+    assert!(al.re > 0.0 && bl.re < 0.0);
+    assert!(ar.re > 0.0 && br.re < 0.0);
 }

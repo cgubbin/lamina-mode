@@ -65,7 +65,7 @@ impl Green {
             medium(stack.left_exterior()),
             medium(stack.right_exterior()),
         ];
-        let roots = [signature.left, signature.right];
+        let roots = signature.open_exteriors().expect("an open stack");
         let kappa =
             std::array::from_fn(|i| roots[i] * (exterior[i].q / (roots[i] * roots[i])).sqrt());
         let layers: Vec<_> = stack

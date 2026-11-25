@@ -22,8 +22,8 @@ fn independent_cavity_reference_and_positive_source_jump() {
         let sig = BranchSignature {
             k0: k,
             k_parallel: c(0.),
-            left: k,
-            right: k,
+            left: Some(k),
+            right: Some(k),
         };
         let center = Green::new(&stack, sig, true, k, pol);
         assert!(center.wronskian().norm() < 1e-12);
@@ -323,8 +323,8 @@ fn check_scattering_contours(residues: &QnmScatteringResidue) {
                 .solve(
                     &CanonicalCoordinates::new(seed(k), seed(sig.k_parallel)),
                     &ExteriorWavevectors::new(
-                        seed(root(left, sig.left)),
-                        seed(root(right, sig.right)),
+                        seed(root(left, sig.left.unwrap())),
+                        seed(root(right, sig.right.unwrap())),
                     ),
                     pol,
                 )
@@ -702,7 +702,7 @@ fn dispersive_exterior_window_uses_one_outgoing_sheet() {
         assert!(analytic_error < 1e-7);
     }
     let mut opposite = pole.clone();
-    opposite.signature.right = -opposite.signature.right;
+    opposite.signature.right = opposite.signature.right.map(|k| -k);
     assert!(matches!(
         solve(opposite, domain.clone(), None),
         Err(QnmWindowError::ChannelMismatch)

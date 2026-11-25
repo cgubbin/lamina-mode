@@ -173,7 +173,7 @@ impl ModePoint {
         };
         let old = self.signature().map_err(|_| BranchFailure::Exterior)?;
         let stack = provenance.stack();
-        let mut roots = [old.left, old.right];
+        let mut roots = old.open_exteriors().ok_or(BranchFailure::Exterior)?;
         let mut chi = [Complex::default(); 2];
         for ((r, chi), mat) in roots
             .iter_mut()
