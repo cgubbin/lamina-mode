@@ -17,9 +17,18 @@ pub(crate) struct Direction {
 }
 
 pub(crate) fn direction(solved: &Solved, parameter: rec::Parameter) -> Result<Direction, Failure> {
-    use rec::Parameter::*;
     let input = &solved.record.input;
-    let n = input.stack.layers.len();
+    direction_for(&input.stack, k0_cm(&input.request), parameter)
+}
+
+/// A direction on `stack` at vacuum wavenumber `k0_cm` (cm^-1).
+pub(crate) fn direction_for(
+    stack: &rec::Stack,
+    k0_cm: f64,
+    parameter: rec::Parameter,
+) -> Result<Direction, Failure> {
+    use rec::Parameter::*;
+    let n = stack.layers.len();
     let invalid = |what: String| Failure::Invalid(what);
     let mut velocities = vec![0.; n + 1];
     let mut rates = vec![ConstitutiveRate::default(); n + 2];
@@ -66,7 +75,7 @@ pub(crate) fn direction(solved: &Solved, parameter: rec::Parameter) -> Result<Di
         SellmeierConstant { region }
         | SellmeierCoefficient { region, .. }
         | SellmeierPoleWavelength { region, .. } => {
-            let material = crate::solve::regions(&input.stack)
+            let material = crate::solve::regions(stack)
                 .nth(region_ok(region)?)
                 .expect("region checked");
             let rec::Material::Sellmeier(m) = material else {
@@ -75,7 +84,7 @@ pub(crate) fn direction(solved: &Solved, parameter: rec::Parameter) -> Result<Di
                 )));
             };
             let model = crate::solve::sellmeier_model(&m.sellmeier)?;
-            let model_rates = model.permittivity_parameter_rates(k0_cm(&input.request));
+            let model_rates = model.permittivity_parameter_rates(k0_cm);
             let term_ok = |term: usize| {
                 if term < m.sellmeier.terms.len() {
                     Ok(term)
@@ -110,8 +119,7 @@ pub(crate) fn direction(solved: &Solved, parameter: rec::Parameter) -> Result<Di
         }
     };
     // Walls stay fixed in the stack frame, whose origin is the first interface.
-    let walled =
-        !(input.stack.left_termination.is_open() && input.stack.right_termination.is_open());
+    let walled = !(stack.left_termination.is_open() && stack.right_termination.is_open());
     if walled && velocities[0] != 0. {
         return Err(invalid(format!(
             "{name} moves the first interface, and the stack, against its walls"

@@ -467,3 +467,256 @@ pub fn covering(
     };
     Ok(([re, im], covering.extra_area_cm2 / (M_PER_CM * M_PER_CM)))
 }
+
+/// Rows-first real or imaginary parts of an n × n matrix.
+fn rows_of(
+    n: usize,
+    entry: &dyn Fn(usize, usize) -> lamina_mode::Complex,
+    part: fn(lamina_mode::Complex) -> f64,
+    scale: f64,
+) -> Vec<Vec<f64>> {
+    (0..n)
+        .map(|i| (0..n).map(|j| part(entry(i, j) * scale)).collect())
+        .collect()
+}
+
+fn to_m(values_cm: &[f64]) -> Vec<f64> {
+    values_cm.iter().map(|z| z * M_PER_CM + 0.).collect()
+}
+
+/// A projection request on a modal basis, in SI.
+pub struct BasisProjectionRequest<'a> {
+    pub support_m: [f64; 2],
+    pub interfaces_m: &'a [f64],
+    pub origin_m: f64,
+    pub rank_rtol: f64,
+    pub field_id: Option<String>,
+    /// Left and right continuations beyond the support.
+    pub exterior: [Vec<rec::ExteriorWave>; 2],
+}
+
+/// Project a supplied field onto a modal basis. Samples are memoised by
+/// position and side, so each point is evaluated once.
+pub fn project(
+    solved: &SolvedBasis,
+    request: BasisProjectionRequest<'_>,
+    field: &crate::pair::Sample<'_>,
+) -> Result<rec::BasisProjection, crate::pair::ProjectionFailure> {
+    use crate::pair::{Memo, ProjectionFailure};
+    use lamina_mode::{
+        BasisProjectionError, BasisProjectionInput, ExteriorWave, GuidedProjectionInput,
+        ProjectionSide,
+    };
+    let invalid = |m: String| Err(ProjectionFailure::Failure(Failure::Invalid(m)));
+    let [lo, hi] = request.support_m;
+    if !(lo.is_finite() && hi.is_finite() && lo < hi) {
+        return invalid(format!(
+            "support_m must be finite with low < high, got [{lo}, {hi}]"
+        ));
+    }
+    if let Some(x) = request.interfaces_m.iter().find(|&&x| !(lo < x && x < hi)) {
+        return invalid(format!(
+            "interfaces_m must lie strictly inside the support, got {x}"
+        ));
+    }
+    if !request.origin_m.is_finite() {
+        return invalid(format!("origin_m must be finite, got {}", request.origin_m));
+    }
+    if !(0. < request.rank_rtol && request.rank_rtol < 1.) {
+        return invalid(format!(
+            "rank_rtol must lie in (0, 1), got {}",
+            request.rank_rtol
+        ));
+    }
+    let spec = &solved.record.input.stack;
+    for (side, waves) in request.exterior.iter().enumerate() {
+        if waves.is_empty() {
+            continue;
+        }
+        let termination = [&spec.left_termination, &spec.right_termination][side];
+        if !termination.is_open() {
+            return invalid(format!(
+                "an exterior continuation needs an open side; the {} side is closed",
+                ["left", "right"][side]
+            ));
+        }
+    }
+    let waves = request.exterior.clone().map(|side| {
+        side.iter()
+            .map(|w| {
+                let c = |re: [f64; 3], im: [f64; 3], scale: f64| {
+                    [0, 1, 2].map(|k| lamina_mode::Complex::new(re[k], im[k]) * scale)
+                };
+                let (e, h) = (
+                    c(w.electric_real, w.electric_imag, 1.),
+                    c(w.magnetic_real, w.magnetic_imag, Z0_OHM),
+                );
+                ExteriorWave {
+                    kappa_cm: lamina_mode::Complex::new(w.kappa_rad_per_m[0], w.kappa_rad_per_m[1])
+                        * M_PER_CM,
+                    edge: [e[0], e[1], e[2], h[0], h[1], h[2]],
+                }
+            })
+            .collect::<Vec<_>>()
+    });
+    let memo = Memo::new(field, &[lo, hi], request.interfaces_m);
+    let sample = |z_cm: f64, side: ProjectionSide| memo.sample(z_cm, side);
+    let interfaces_cm: Vec<f64> = request.interfaces_m.iter().map(|z| z / M_PER_CM).collect();
+    let input = BasisProjectionInput {
+        field: GuidedProjectionInput {
+            wavelength_cm: solved.record.input.wavelength_m / M_PER_CM,
+            support_cm: [lo / M_PER_CM, hi / M_PER_CM],
+            interfaces_cm: &interfaces_cm,
+            sample: &sample,
+        },
+        exterior: [&waves[0], &waves[1]],
+    };
+    let result = lamina_mode::basis_projection_with(
+        &Scatter2::new(),
+        &solved.basis,
+        request.origin_m / M_PER_CM,
+        input,
+        request.rank_rtol,
+    );
+    let field_sample_count = memo.finish()?;
+    let p = result.map_err(|e| {
+        ProjectionFailure::Failure(match e {
+            BasisProjectionError::InvalidInput => Failure::Invalid(format!(
+                "projection: {e}; a support must stay within the walls, and a continuation \
+                 needs its edge at or beyond the outermost interface"
+            )),
+            BasisProjectionError::NonFiniteField => Failure::Invalid(format!("projection: {e}")),
+            BasisProjectionError::Fields { .. } => Failure::Fields(format!("{e}: {e:?}")),
+            _ => Failure::Integration(e.to_string()),
+        })
+    })?;
+    let solution = p.solution.as_ref();
+    let coefficients = solution.map(|s| s.coefficients.iter().copied().collect::<Vec<_>>());
+    let rhs = &p.right_hand_side;
+    let n = p.modes.len();
+    let gram = |i: usize, j: usize| p.gram[(i, j)];
+    Ok(rec::BasisProjection {
+        schema: rec::BASIS_PROJECTION_SCHEMA.to_owned(),
+        schema_version: rec::SCHEMA_VERSION,
+        conventions: rec::Conventions::current(),
+        definitions: rec::Definitions::current(),
+        definition: rec::BASIS_PROJECTION_DEFINITION.to_owned(),
+        assumption: assumption(spec).to_owned(),
+        input_hash: solved.record.input_hash.clone(),
+        field_id: request.field_id,
+        support_m: [lo + 0., hi + 0.],
+        interfaces_m: request.interfaces_m.iter().map(|z| z + 0.).collect(),
+        origin_m: request.origin_m + 0.,
+        exterior: request.exterior,
+        rank_rtol: request.rank_rtol,
+        modes: p.modes.clone(),
+        gram_real: rows_of(n, &gram, |z| z.re, 1.),
+        gram_imag: rows_of(n, &gram, |z| z.im, 1.),
+        right_hand_side_real: rhs.iter().map(|z| z.re).collect(),
+        right_hand_side_imag: rhs.iter().map(|z| z.im).collect(),
+        rank: p.rank,
+        singular_values_w_per_m: p.singular_values.clone(),
+        gram_defect: p.gram_defect,
+        partition_m: to_m(&p.partition_cm),
+        field_sample_count,
+        sample_count: p.sample_count,
+        quadrature_change_w_per_m: p.quadrature_change_w_per_m,
+        coefficients_real: coefficients
+            .as_ref()
+            .map(|c| c.iter().map(|z| z.re).collect()),
+        coefficients_imag: coefficients
+            .as_ref()
+            .map(|c| c.iter().map(|z| z.im).collect()),
+        condition_number: solution.map(|s| s.condition_number),
+        equation_residual_w_per_m: solution.map(|s| s.equation_residual_w_per_m),
+        field_scale_w_per_m: p.field_scale_w_per_m,
+        residual_scale_w_per_m: solution.map(|s| s.residual_scale_w_per_m),
+        relative_residual: solution.and_then(|s| s.relative_residual),
+        residual_includes_continuum: p.residual_includes_continuum,
+        status: status(p.status),
+        scope: scope(p.scope),
+    })
+}
+
+/// The local coupling of a modal basis along one fixed-wavelength parameter.
+pub fn local_coupling(
+    solved: &SolvedBasis,
+    parameter: rec::Parameter,
+    gap_rad_per_m: Option<f64>,
+) -> Result<rec::BasisLocalCoupling, Failure> {
+    use lamina_mode::BasisCouplingError as E;
+    let invalid = |m: String| Err(Failure::Invalid(m));
+    match parameter {
+        rec::Parameter::Wavelength => {
+            return invalid(
+                "local coupling needs a fixed-wavelength parameter, not the wavelength".into(),
+            );
+        }
+        rec::Parameter::Permeability { .. } => {
+            return invalid(
+                "local coupling takes permittivity rates only; a permeability parameter is \
+                 ineligible"
+                    .into(),
+            );
+        }
+        _ => {}
+    }
+    if let Some(gap) = gap_rad_per_m {
+        if !(gap.is_finite() && gap >= 0.) {
+            return invalid(format!(
+                "gap_rad_per_m must be finite and non-negative, got {gap}"
+            ));
+        }
+    }
+    let input = &solved.record.input;
+    let k0_cm = k0_rad_per_m(input.wavelength_m) * M_PER_CM;
+    let d = crate::sens::direction_for(&input.stack, k0_cm, parameter)?;
+    let coupling = lamina_mode::basis_local_coupling_with(
+        &Scatter2::new(),
+        &solved.basis,
+        &d.perturbation,
+        gap_rad_per_m.map(|g| g * M_PER_CM),
+    )
+    .map_err(|e| match e {
+        E::Fields { .. } => Failure::Fields(format!("{e}: {e:?}")),
+        E::Quadrature | E::TailSingular { .. } => Failure::Integration(e.to_string()),
+        _ => Failure::Invalid(format!("local coupling: {e}")),
+    })?;
+    // K is in cm^-1 per internal unit: to rad/m per SI unit.
+    let matrix_scale = d.per_unit / M_PER_CM;
+    let n = coupling.modes.len();
+    let k = |i: usize, j: usize| coupling.perturbation_matrix[(i, j)];
+    let c = &coupling.coefficients;
+    let part = |f: fn(lamina_mode::Complex) -> f64| -> Vec<Vec<Option<f64>>> {
+        (0..c.nrows())
+            .map(|i| {
+                (0..c.ncols())
+                    .map(|j| c[(i, j)].map(|z| f(z * d.per_unit)))
+                    .collect()
+            })
+            .collect()
+    };
+    Ok(rec::BasisLocalCoupling {
+        schema: rec::BASIS_LOCAL_COUPLING_SCHEMA.to_owned(),
+        schema_version: rec::SCHEMA_VERSION,
+        conventions: rec::Conventions::current(),
+        definitions: rec::Definitions::current(),
+        definition: rec::BASIS_LOCAL_COUPLING_DEFINITION.to_owned(),
+        assumption: assumption(&input.stack).to_owned(),
+        input_hash: solved.record.input_hash.clone(),
+        parameter,
+        parameter_unit: d.unit.to_owned(),
+        gap_rad_per_m: coupling.gap_cm / M_PER_CM + 0.,
+        modes: coupling.modes.clone(),
+        perturbation_matrix_real: rows_of(n, &k, |z| z.re, matrix_scale),
+        perturbation_matrix_imag: rows_of(n, &k, |z| z.im, matrix_scale),
+        coefficients_real: part(|z| z.re),
+        coefficients_imag: part(|z| z.im),
+        groups: coupling.groups.clone(),
+        partition_m: to_m(&coupling.partition_cm),
+        sample_count: coupling.sample_count,
+        quadrature_change_rad_per_m: coupling.quadrature_change_per_cm * matrix_scale,
+        status: status(coupling.status),
+        scope: scope(coupling.scope),
+    })
+}
