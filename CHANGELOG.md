@@ -35,6 +35,8 @@ Changed (breaking):
   `RadiationReference::choices` and `VerifiedRadiationReference::observed`
   hold an `Option` per side, `None` on a walled side; `BranchSignature` gains
   `exteriors` and `open_exteriors`.
+- A side closed by anything other than a wall is refused when the problem is
+  built, with `ConstructionError::UnsupportedTermination` naming the side.
 - `FrequencyProblem` refuses walled stacks (`ConstructionError::ClosedSide`);
   conformal domains of a stack walled on both sides fail with
   `ConformalChartError::ClosedStack`; pairings refuse walled stacks

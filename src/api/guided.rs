@@ -209,7 +209,7 @@ pub(super) fn search_guided_modes(
         medium(stack.left_exterior(), 0)?,
         medium(stack.right_exterior(), stack.len() + 1)?,
     ];
-    let walls = p::walls(&stack);
+    let walls = p::walls(&stack).map_err(|e| EnumerationError::Problem(e.to_string()))?;
     let ends = [0, 1].map(|side| match walls[side] {
         None => End::Open(exteriors[side]),
         Some((kind, _)) => End::Wall {

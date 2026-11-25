@@ -505,6 +505,7 @@ impl<B: Backend<J, ComplexPlane>> FrequencyProblem<B> {
                 WavenumberMapError::InvalidInPlaneWavenumber,
             ));
         }
+        walls(&stack)?;
         if !stack.is_open() {
             return Err(ProblemError::ClosedSide);
         }

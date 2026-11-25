@@ -72,15 +72,12 @@ impl<S: ModeDeterminantSolver<J> + Clone> ModalProblem<ComplexInPlaneMap<J>, S> 
         bounds: ConformalRegion<f64>,
         assumption: AnalyticAssumption,
     ) -> Result<DirectDomain<S>, DirectChartError> {
-        let SearchCoordinate::InPlane { fixed_k0 } = self.context.coordinate else {
-            unreachable!("in-plane problems fix k0");
-        };
         if self.context.open_sides() != [false; 2] {
             return Err(DirectChartError::OpenSide);
         }
         let chart = DirectChart {
             region: bounds,
-            k0: fixed_k0,
+            k0: self.map.k0().value()[()].re,
         };
         let reference = chart.reference();
         let search = SingleChartModalSearch::new(ConformalDispersion::<_, _, C, _>::with_chart(

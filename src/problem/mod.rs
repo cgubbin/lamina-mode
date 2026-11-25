@@ -35,7 +35,7 @@ use crate::{
 use argloc::{ArgumentConfig, FunctionBundle};
 use lamina_core::{
     AnalyticalMaterialHandle, AnalyticalMaterialStack, Backend, ComplexPlane, Layer, ModeJet1,
-    Polarisation, Stack, StackCompileError, Termination, WallKind,
+    Polarisation, Stack, StackCompileError, StackSide, Termination, WallKind,
 };
 use lamina_units::Length;
 pub use material::ConstantExterior;
@@ -96,14 +96,17 @@ impl ProblemContext {
     }
 }
 pub(crate) fn open_sides<M>(stack: &Stack<M, f64>) -> [bool; 2] {
-    walls(stack).map(|wall| wall.is_none())
+    [stack.left_termination(), stack.right_termination()].map(|t| t.is_open())
 }
 /// Each side's wall and its gap from the outermost interface in cm, `None`
 /// when open. The right gap is formed as lamina-core validates it, in the
 /// wall's unit when the layers share it, so a wall on the interface has none.
-pub(crate) fn walls<M>(stack: &Stack<M, f64>) -> [Option<(WallKind, f64)>; 2] {
+/// Any other termination is refused, naming its side.
+pub(crate) fn walls<M>(
+    stack: &Stack<M, f64>,
+) -> Result<[Option<(WallKind, f64)>; 2], ProblemError> {
     let gap = |termination: &Termination<f64>, right: bool| match termination {
-        Termination::Open => None,
+        Termination::Open => Ok(None),
         Termination::Wall(wall) => {
             let position = wall.position();
             let unit = position.unit();
@@ -118,14 +121,20 @@ pub(crate) fn walls<M>(stack: &Stack<M, f64>) -> [Option<(WallKind, f64)>; 2] {
                     .fold(0.0, |t, l| t + l.thickness().as_centimetres());
                 position.as_centimetres() - total
             };
-            Some((wall.kind(), gap.max(0.0)))
+            Ok(Some((wall.kind(), gap.max(0.0))))
         }
-        _ => unimplemented!("a side is open or closed by a wall"),
+        _ => Err(ProblemError::UnsupportedTermination {
+            side: if right {
+                StackSide::Right
+            } else {
+                StackSide::Left
+            },
+        }),
     };
-    [
-        gap(stack.left_termination(), false),
-        gap(stack.right_termination(), true),
-    ]
+    Ok([
+        gap(stack.left_termination(), false)?,
+        gap(stack.right_termination(), true)?,
+    ])
 }
 #[derive(Debug, thiserror::Error)]
 pub enum ProblemError {
@@ -137,6 +146,10 @@ pub enum ProblemError {
     Stack(#[from] StackCompileError<f64>),
     #[error("this strategy needs a stack open on both sides: a wall termination closes one")]
     ClosedSide,
+    #[error(
+        "the {side:?} side is closed by a termination other than a wall, which is not supported"
+    )]
+    UnsupportedTermination { side: StackSide },
 }
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum ExecutionError<E: std::error::Error + 'static> {
@@ -167,6 +180,7 @@ where
         }
         // Only open sides carry a branch: with one open side, both map
         // constants are that side's material (r = 0).
+        walls(&stack)?;
         let open = open_sides(&stack);
         let factors = radiation::exterior_factors(&stack, C::new(fixed_k0, 0.0));
         let [(el, ml), (er, mr)] = match open {

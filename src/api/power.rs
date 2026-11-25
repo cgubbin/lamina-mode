@@ -111,7 +111,8 @@ impl ProfileGrid {
             (phase.is_finite() && phase <= 4096.)
                 .then(|| (width, per_radian * (phase.ceil() as usize).max(min_radians)))
         };
-        let [left, right] = crate::problem::walls(stack);
+        // Accepted points come from problems that validated their walls.
+        let [left, right] = crate::problem::walls(stack).ok()?;
         let gap = |wall: Option<(lamina_core::WallKind, f64)>, material| match wall {
             None => Some(None),
             Some((_, width)) => intervals(material, width).map(Some),
