@@ -252,7 +252,10 @@ original discovery result/error, and optional complete refinement report.
 `geometry()` and `exclusions()` preserve scope limitations. Leaves, multiplicities,
 elapsed time, summaries, termination, and non-accepted outcomes remain available.
 A successful overlapping chart does not erase a failed chart or recover excluded
-seams. There is no unconditional completeness flag.
+seams. `unresolved()` names each failed chart, stopped discovery, unresolved leaf
+and unaccepted estimate with its region and cause; `is_complete()` holds only when
+there are none and reconciliation raised no diagnostic. It speaks for the charts'
+requested regions, not for the exclusions.
 
 Accepted `observations()` retain chart/candidate indices, local evidence, original
 enclosures, and branch signatures. `groups()` references those observations;
