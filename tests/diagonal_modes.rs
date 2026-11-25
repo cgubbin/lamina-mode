@@ -10,6 +10,7 @@ use lamina_materials::{PrincipalAxes, Sellmeier, SellmeierTerm};
 use lamina_mode::*;
 use lamina_units::{Length, VacuumAngularWavenumber};
 use std::f64::consts::TAU;
+mod pml_support;
 
 const TE: Polarisation = Polarisation::TransverseElectric;
 const TM: Polarisation = Polarisation::TransverseMagnetic;
@@ -775,5 +776,105 @@ fn interpretation_follows_the_channel_each_exterior_presents() {
                 Classification::Unsupported(Unsupported::ExteriorMaterial)
             );
         }
+    }
+}
+
+/// The characteristic of a box closed by PEC walls: (ψ, ψ′/t) carried through
+/// regions of entries (t, n, v) and complex lengths, with ψ′/t = 0 (TM) or
+/// ψ = 0 (TE) at both walls.
+fn box_characteristic(
+    pol: Polarisation,
+    regions: &[([f64; 3], Complex)],
+    beta: Complex,
+) -> Complex {
+    let mut state = if pol == TE {
+        [Complex::ZERO, Complex::ONE]
+    } else {
+        [Complex::ONE, Complex::ZERO]
+    };
+    for &([t, n, v], length) in regions {
+        let q = (t / n * (v * n * K0 * K0 - beta * beta)).sqrt();
+        let (c, s) = ((q * length).cos(), (q * length).sin());
+        state = [
+            c * state[0] + t * s / q * state[1],
+            -q * s / t * state[0] + c * state[1],
+        ];
+    }
+    state[usize::from(pol == TM)]
+}
+
+#[test]
+fn pml_closed_uniaxial_bases_match_the_box_characteristic_and_are_bi_orthonormal() {
+    use lamina_core::StackSide;
+    use pml_support::{PROFILE, newton, pml, winding};
+    let (gap, depth, a) = (0.1, 0.75, pml_support::A);
+    let (core, clad) = ((4.0, 6.25), (2.25, 3.0));
+    let window = [1.0 * K0, 2.03 * K0, -0.031 * K0, 1.0 * K0];
+    let registration = GuidedOverlapRegistration {
+        origins_cm: [0.0; 2],
+    };
+    let stack = Stack::builder(uniaxial(clad.0, clad.1, 0), uniaxial(clad.0, clad.1, 0))
+        .layer(uniaxial(core.0, core.1, 0), cm(2.0 * a))
+        .left_termination(pml(
+            StackSide::Left,
+            gap,
+            depth,
+            PROFILE,
+            WallKind::PerfectElectric,
+        ))
+        .right_termination(pml(
+            StackSide::Right,
+            gap,
+            depth,
+            PROFILE,
+            WallKind::PerfectElectric,
+        ))
+        .finalise();
+    for pol in [TE, TM] {
+        let request = ModalBasisRequest::new(
+            cm(1.0),
+            ModeFamily::Polarised(pol),
+            ModalWindow::Wavenumber {
+                re_cm: [window[0], window[1]],
+                im_cm: [window[2], window[3]],
+            },
+        );
+        let basis = modal_basis_in_window_with(&Scatter2::new(), stack.clone(), request).unwrap();
+        assert_eq!(
+            basis.status,
+            BasisStatus::Complete,
+            "{:?}",
+            basis.unresolved
+        );
+        let entries = |(o, e): (f64, f64)| channel(stack_frame(o, e, 0), [1.0; 3], pol);
+        let tau = depth * PROFILE.mean();
+        let regions = [
+            (entries(clad), gap + tau),
+            (entries(core), Complex::new(2.0 * a, 0.0)),
+            (entries(clad), gap + tau),
+        ];
+        let reference = |beta| box_characteristic(pol, &regions, beta);
+        let independent = winding(&reference, window);
+        assert_eq!(basis.expected, Some(independent));
+        assert_eq!(basis.found(), independent);
+        assert!(independent >= 3);
+        let mut worst: f64 = 0.0;
+        for mode in &basis.modes {
+            let beta = mode.point.physical_coordinate();
+            let polished = newton(&reference, beta).unwrap();
+            worst = worst.max((polished - beta).norm());
+        }
+        let pairing = basis_pairing_with(&Scatter2::new(), [&basis, &basis], registration).unwrap();
+        let n = pairing.unconjugated.nrows();
+        let defect = (pairing.unconjugated.clone() - nalgebra::DMatrix::identity(n, n))
+            .iter()
+            .map(|v| v.norm())
+            .fold(0.0, f64::max);
+        println!(
+            "{pol:?} uniaxial PML basis: {independent} modes, largest |Δβ| = {worst:e} cm^-1, \
+             |G − I| = {defect:e}"
+        );
+        assert!(worst < 1e-9 * K0, "{worst:e}");
+        assert!(defect < 1e-8, "{defect:e}");
     }
 }
