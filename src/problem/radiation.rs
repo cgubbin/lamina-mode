@@ -15,7 +15,7 @@ pub struct RadiationReference {
     pub z: C,
     /// Real varying physical coordinate, in cm^-1.
     pub coordinate: f64,
-    /// One choice per open side; `None` exactly on a side closed by a wall.
+    /// One choice per open side; `None` exactly on a side closed by a wall or a PML.
     pub choices: [Option<RadiationChoice>; 2],
     pub tolerance: RadiationTolerance,
 }

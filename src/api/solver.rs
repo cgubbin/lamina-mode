@@ -249,9 +249,11 @@ where
             })
             .map_err(|e| Diagnostic::new(Stage::Domain, e))
     }
-    /// β rectangle in cm^-1 for a stack closed by walls on both sides, whose
-    /// characteristic is entire and even in β: no sheet or radiation reference.
-    /// The declaration covers the characteristic on the whole evaluation halo.
+    /// β rectangle in cm^-1 for a stack closed on both sides, by walls or PMLs,
+    /// whose characteristic is entire and even in β: no sheet or radiation
+    /// reference. The declaration covers the characteristic on the whole
+    /// evaluation halo. A rectangle on which a PML's normalisation scale
+    /// cannot be represented is refused ([`DirectChartError::PmlScale`]).
     pub fn direct_domain(
         &self,
         bounds: ConformalRegion<f64>,

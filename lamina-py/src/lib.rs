@@ -38,6 +38,12 @@ create_exception!(
 );
 create_exception!(
     _native,
+    UnsupportedTermination,
+    InvalidInput,
+    "A side's termination is not supported by the requested operation."
+);
+create_exception!(
+    _native,
     EnumerationFailed,
     LaminaError,
     "Guided-mode enumeration failed."
@@ -64,6 +70,7 @@ create_exception!(
 fn raise(failure: Failure) -> PyErr {
     match failure {
         Failure::Invalid(m) => InvalidInput::new_err(m),
+        Failure::Unsupported(m) => UnsupportedTermination::new_err(m),
         Failure::Enumeration(m) => EnumerationFailed::new_err(m),
         Failure::Fields(m) => FieldsFailed::new_err(m),
         Failure::Derivatives(m) => DerivativesFailed::new_err(m),
@@ -413,6 +420,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("LaminaError", py.get_type::<LaminaError>())?;
     m.add("SchemaError", py.get_type::<SchemaError>())?;
     m.add("InvalidInput", py.get_type::<InvalidInput>())?;
+    m.add(
+        "UnsupportedTermination",
+        py.get_type::<UnsupportedTermination>(),
+    )?;
     m.add("EnumerationFailed", py.get_type::<EnumerationFailed>())?;
     m.add("FieldsFailed", py.get_type::<FieldsFailed>())?;
     m.add("DerivativesFailed", py.get_type::<DerivativesFailed>())?;

@@ -308,6 +308,8 @@ pub enum ModalBasisError {
     InvalidRequest,
     #[error("a wavenumber window needs a stack closed by walls on both sides")]
     OpenSide,
+    #[error("modal bases need walled sides; the {side:?} side is closed by a PML")]
+    Termination { side: lamina_core::StackSide },
     #[error(transparent)]
     Problem(#[from] ConstructionError),
     #[error("field recovery failed for mode {mode}")]
@@ -356,7 +358,8 @@ pub(super) fn solve<B: ModalFieldBackend + Clone>(
     let refinement = crate::refinement::RefinementConfig::from(request.refinement)
         .validate()
         .map_err(|_| InvalidRequest)?;
-    if p::walls(&stack)?.iter().any(Option::is_none) {
+    let walls = p::walls(&stack).map_err(|side| Termination { side })?;
+    if walls.iter().any(Option::is_none) {
         return Err(OpenSide);
     }
     let problem = p::InPlaneProblem::in_plane(stack.clone(), k0, polarisation, Scatter2::new())?;

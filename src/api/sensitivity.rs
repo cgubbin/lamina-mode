@@ -694,6 +694,7 @@ pub enum GuidedPowerSensitivityError {
     SingularPhase,
     IllConditionedPower,
     Quadrature,
+    Termination(super::PmlIntegral),
 }
 
 fn phase_scale(
@@ -760,7 +761,9 @@ impl GuidedBetaSensitivity {
         let stack = provenance.stack();
         let k = self.coordinates.vacuum_angular_wavenumber().value()[()];
         let beta = self.coordinates.parallel_angular_wavenumber().value()[()];
-        let grid = super::power::ProfileGrid::new(stack, k, beta, 2, 4).ok_or(Quadrature)?;
+        let grid = super::power::ProfileGrid::new(stack, k, beta, 2, 4)
+            .map_err(Termination)?
+            .ok_or(Quadrature)?;
         let roots = [self.exterior.left(), self.exterior.right()];
         // Walls stay fixed: the right gap narrows as the layers thicken.
         let width_rates: Vec<_> = std::iter::once(0.0)

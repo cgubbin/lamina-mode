@@ -45,6 +45,8 @@ pub enum GroupIndexError {
     Recovery(#[from] Box<FieldRecoveryFailure>),
     #[error("the stored-energy quadrature did not converge")]
     Quadrature,
+    #[error(transparent)]
+    Termination(#[from] super::PmlIntegral),
     #[error(
         "group index not certified: dβ/dk0 = {derivative}, c W / P = {energy_estimate}, \
          relative discrepancy {relative_discrepancy:e} exceeds {tolerance:e}"
@@ -137,7 +139,7 @@ impl ModePoint {
         // wavenumber, so start at eight intervals per radian. Simpson's error
         // falls as h^4, so each halving is Richardson-extrapolated, and the
         // result is accepted when successive extrapolations agree.
-        let grid = super::power::ProfileGrid::new(stack, k, beta, 8, 2).ok_or(Quadrature)?;
+        let grid = super::power::ProfileGrid::new(stack, k, beta, 8, 2)?.ok_or(Quadrature)?;
         let decay = sig.exteriors().map(|r| r.map(|r| 2. * r.im));
         let mut previous: Option<(f64, f64)> = None;
         let mut previous_estimate: Option<f64> = None;

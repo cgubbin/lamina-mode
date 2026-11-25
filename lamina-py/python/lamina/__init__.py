@@ -33,6 +33,7 @@ from ._native import (
     InvalidInput,
     LaminaError,
     SchemaError,
+    UnsupportedTermination,
 )
 
 __all__ = [
@@ -45,6 +46,7 @@ __all__ = [
     "GroupIndex",
     "Layer",
     "Wall",
+    "Pml",
     "Stack",
     "Refinement",
     "GuidedRequest",
@@ -79,6 +81,7 @@ __all__ = [
     "LaminaError",
     "SchemaError",
     "InvalidInput",
+    "UnsupportedTermination",
     "EnumerationFailed",
     "FieldsFailed",
     "DerivativesFailed",
@@ -285,20 +288,66 @@ class Wall:
         return cls(d["type"], d["z_m"])
 
 
+@dataclass(frozen=True)
+class Pml:
+    """A perfectly matched layer of the exterior material, backed by a `"pec"` or
+    `"pmc"` wall.
+
+    It starts at absolute `start_z_m` in the stack frame and extends outward, away from
+    the layers, by `thickness_m`. With ζ the outward distance into it, the complex
+    stretch is s(ζ) = 1 + strength (ζ/thickness)^order, with order ≥ 0, Re strength ≥ 0
+    and Im strength > 0. Every field is required.
+    """
+
+    start_z_m: float
+    thickness_m: float
+    order: float
+    strength: complex
+    backing: Literal["pec", "pmc"]
+
+    def __post_init__(self) -> None:
+        for name in ("start_z_m", "thickness_m", "order", "strength"):
+            if getattr(self, name) is None:
+                raise InvalidInput(f"Pml {name} is required")
+        object.__setattr__(self, "start_z_m", float(self.start_z_m))
+        object.__setattr__(self, "thickness_m", float(self.thickness_m))
+        object.__setattr__(self, "order", float(self.order))
+        object.__setattr__(self, "strength", complex(self.strength))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": "pml",
+            "start_z_m": self.start_z_m,
+            "thickness_m": self.thickness_m,
+            "profile": {"kind": "polynomial", "order": self.order, "strength": _pair(self.strength)},
+            "backing": self.backing,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> Pml:
+        profile = d["profile"]
+        return cls(d["start_z_m"], d["thickness_m"], profile["order"], _c(profile["strength"]), d["backing"])
+
+
+def _termination_from_dict(d: Mapping[str, Any] | None) -> Wall | Pml | None:
+    """A wall, a PML, or None for an open side."""
+    return Pml.from_dict(d) if d is not None and d.get("kind") == "pml" else Wall.from_dict(d)
+
+
 @dataclass(frozen=True, eq=False)
 class Stack:
     """A planar multilayer: left exterior, finite layers along +z, right exterior.
 
     Materials may be given as a `Material`, a `SellmeierMaterial`, or a relative permittivity.
     Layers may be given as a `Layer` or as a `(material, thickness_m)` pair. Each side is
-    open (None) or closed by a `Wall` on or outside its outermost interface.
+    open (None) or closed by a `Wall` or a `Pml` on or outside its outermost interface.
     """
 
     left: Material
     layers: tuple[Layer, ...]
     right: Material
-    left_termination: Wall | None = None
-    right_termination: Wall | None = None
+    left_termination: Wall | Pml | None = None
+    right_termination: Wall | Pml | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "left", _material(self.left))
@@ -325,9 +374,9 @@ class Stack:
             "right": self.right.to_dict(),
         }
         for side in ("left_termination", "right_termination"):
-            wall = getattr(self, side)
-            if wall is not None:
-                d[side] = wall.to_dict()
+            termination = getattr(self, side)
+            if termination is not None:
+                d[side] = termination.to_dict()
         return d
 
     @classmethod
@@ -336,8 +385,8 @@ class Stack:
             _material_from_dict(d["left"]),
             tuple(Layer.from_dict(l) for l in d["layers"]),
             _material_from_dict(d["right"]),
-            Wall.from_dict(d.get("left_termination")),
-            Wall.from_dict(d.get("right_termination")),
+            _termination_from_dict(d.get("left_termination")),
+            _termination_from_dict(d.get("right_termination")),
         )
 
     def __eq__(self, other: object) -> bool:
@@ -1635,7 +1684,8 @@ def enumerate_guided_modes(stack: Stack, request: GuidedRequest) -> GuidedBasis:
 
     Partial coverage is a result, not an error: read `completeness`,
     `expected`, `found` and `unresolved` together. Invalid inputs raise
-    `InvalidInput`; a failed enumeration raises `EnumerationFailed`.
+    `InvalidInput`, and a stack closed by a `Pml` raises its subclass
+    `UnsupportedTermination`; a failed enumeration raises `EnumerationFailed`.
     """
     resolved = GuidedInput.resolve(stack, request)
     native = _native.enumerate_guided_modes(resolved.to_json())
@@ -2050,7 +2100,8 @@ def modal_basis(
 
     An incomplete basis is a result, not an error: read `status`, `expected`,
     `found` and `unresolved` together. Invalid inputs, including a stack with
-    an open side, raise `InvalidInput`; a self-pairing quadrature over its
+    an open side, raise `InvalidInput`, and a `Pml` side its subclass
+    `UnsupportedTermination`; a self-pairing quadrature over its
     budget raises `IntegrationFailed` and field recovery `FieldsFailed`.
     """
     resolved = ModalBasisInput(

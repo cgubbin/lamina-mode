@@ -96,7 +96,7 @@ pub struct RadiationReference {
     pub native_coordinate: Complex,
     /// Real varying physical wavenumber, cm^-1.
     pub coordinate: f64,
-    /// One choice per open side; `None` exactly on a side closed by a wall.
+    /// One choice per open side; `None` exactly on a side closed by a wall or a PML.
     pub choices: [Option<RadiationChoice>; 2],
     pub tolerance: RadiationTolerance,
 }
@@ -191,6 +191,7 @@ pub use crate::conformal::in_plane::{InPlaneMapError, InPlaneSearchError};
 pub use crate::conformal::wavenumber::region::WavenumberRegionError;
 pub use crate::conformal::wavenumber::{WavenumberMapError, WavenumberSearchError};
 pub use crate::problem::ProblemError as ConstructionError;
+pub use crate::problem::direct::DirectChartError;
 pub use crate::problem::physical::InputError as InterpretationError;
 pub use crate::problem::radiation::RadiationReferenceError;
 pub use crate::refinement::RefinementInputError;

@@ -497,7 +497,7 @@ impl ModePoint {
         let mut kappas = [None, None];
         for (side_index, (material, reference)) in exteriors.into_iter().zip(references).enumerate()
         {
-            // A side closed by a wall carries no exterior wavevector.
+            // A side closed by a wall or a PML carries no exterior wavevector.
             let Some(reference) = reference else { continue };
             let side = if side_index == 0 { "left" } else { "right" };
             let magnitude = reference.norm();

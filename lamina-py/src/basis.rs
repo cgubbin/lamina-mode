@@ -87,6 +87,7 @@ fn basis_failure(e: ModalBasisError) -> Failure {
     match e {
         ModalBasisError::Fields { .. } => Failure::Fields(format!("{e}: {e:?}")),
         ModalBasisError::Quadrature => Failure::Integration(e.to_string()),
+        ModalBasisError::Termination { .. } => Failure::Unsupported(e.to_string()),
         _ => Failure::Invalid(e.to_string()),
     }
 }
@@ -228,7 +229,8 @@ pub fn profile(
         .map(|&z| {
             let outside = |termination: &rec::Termination| match termination {
                 rec::Termination::Open => "exterior",
-                rec::Termination::Wall { .. } => "gap",
+                // Bases refuse PML sides, so a closed side here is a wall.
+                rec::Termination::Wall { .. } | rec::Termination::Pml { .. } => "gap",
             };
             if z < 0. {
                 outside(&spec.left_termination)

@@ -143,6 +143,22 @@ pub enum Termination {
         kind: WallType,
         z_m: f64,
     },
+    /// A wall-backed perfectly matched layer starting at absolute z in the
+    /// stack frame and extending outward by its thickness.
+    Pml {
+        start_z_m: f64,
+        thickness_m: f64,
+        profile: StretchProfile,
+        backing: WallType,
+    },
+}
+
+/// The complex stretch of a PML, s(ζ) = 1 + c (ζ/d)^m. Internally tagged by
+/// `"kind"`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum StretchProfile {
+    Polynomial { order: f64, strength: C2 },
 }
 
 impl Termination {

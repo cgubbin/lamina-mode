@@ -31,7 +31,16 @@ pub enum GuidedPowerError {
     #[error("finite-layer power quadrature exceeded its accuracy or sampling budget")]
     Quadrature,
     #[error(transparent)]
+    Termination(#[from] PmlIntegral),
+    #[error(transparent)]
     Recovery(#[from] Box<FieldRecoveryFailure>),
+}
+/// A transverse integral was requested through a side closed by a PML, where
+/// the fields live on a complex coordinate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("transverse integrals need open or walled sides; the {side:?} side is closed by a PML")]
+pub struct PmlIntegral {
+    pub side: lamina_core::StackSide,
 }
 /// The materials of each region: left exterior, layers, right exterior.
 pub(super) fn region_materials(
@@ -96,13 +105,14 @@ impl Span {
 impl ProfileGrid {
     /// Base intervals are `per_radian` times the region's transverse phase,
     /// rounded up and at least `min_radians`. `None` past 4096 radians.
+    /// A PML side is refused.
     pub(super) fn new(
         stack: &lamina_core::AnalyticalMaterialStack<Complex>,
         k: Complex,
         beta: Complex,
         per_radian: usize,
         min_radians: usize,
-    ) -> Option<Self> {
+    ) -> Result<Option<Self>, PmlIntegral> {
         let at = Scalar(k);
         let intervals = |material: &lamina_core::AnalyticalMaterialHandle<Complex>, width: f64| {
             let e = material.evaluate_relative_permittivity_complex(at);
@@ -111,21 +121,18 @@ impl ProfileGrid {
             (phase.is_finite() && phase <= 4096.)
                 .then(|| (width, per_radian * (phase.ceil() as usize).max(min_radians)))
         };
-        // Accepted points come from problems that validated their walls.
-        let [left, right] = crate::problem::walls(stack).ok()?;
+        let [left, right] = crate::problem::walls(stack).map_err(|side| PmlIntegral { side })?;
         let gap = |wall: Option<(lamina_core::WallKind, f64)>, material| match wall {
             None => Some(None),
             Some((_, width)) => intervals(material, width).map(Some),
         };
-        let mut regions = vec![gap(left, stack.left_exterior())?];
-        for layer in stack.layers_left_to_right() {
-            regions.push(Some(intervals(
-                layer.material(),
-                layer.thickness().as_centimetres(),
-            )?));
-        }
-        regions.push(gap(right, stack.right_exterior())?);
-        Some(Self { regions })
+        let regions = std::iter::once(gap(left, stack.left_exterior()))
+            .chain(stack.layers_left_to_right().iter().map(|layer| {
+                intervals(layer.material(), layer.thickness().as_centimetres()).map(Some)
+            }))
+            .chain(std::iter::once(gap(right, stack.right_exterior())))
+            .collect::<Option<_>>();
+        Ok(regions.map(|regions| Self { regions }))
     }
 
     /// The regions at refinement `level`, each with twice the intervals of the last.
@@ -213,7 +220,7 @@ impl ModePoint {
         if !region_materials(stack).all(lossless) {
             return Err(Ineligible);
         }
-        let grid = ProfileGrid::new(stack, k, beta, 2, 4).ok_or(Quadrature)?;
+        let grid = ProfileGrid::new(stack, k, beta, 2, 4)?.ok_or(Quadrature)?;
         let mut prev = None;
         for level in 0..8 {
             let integration = grid.sampling(level).ok_or(Quadrature)?;

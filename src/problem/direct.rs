@@ -1,7 +1,13 @@
-//! The direct β chart of a stack closed by walls on both sides. With no open
-//! side the characteristic carries no exterior wavevector: it is entire and
-//! even in β at fixed k0, so β itself, in cm^-1, is the native coordinate and
-//! needs no continuation, sheet or radiation reference.
+//! The direct β chart of a stack closed on both sides, by walls or by
+//! wall-backed PMLs. With no open side the characteristic carries no exterior
+//! wavevector: it is entire and even in β at fixed k0, so β itself, in cm^-1,
+//! is the native coordinate and needs no continuation, sheet or radiation
+//! reference.
+//!
+//! A PML side enters the characteristic normalised by exp(iκ_ref τ), with τ
+//! its complex thickness and κ_ref = k0 √(εμ) its material's wavevector at
+//! β = 0, which leaves the scale exp(−Im(κ_ref τ) + |Im(κ τ)|), κ² = εμk0² − β².
+//! A rectangle on which that scale cannot be represented is refused.
 use super::frequency::{contains, halo};
 use super::*;
 use crate::{conformal::ConformalPoint, conformal::in_plane::ComplexInPlaneMap};
@@ -11,12 +17,91 @@ pub type DirectDomain<S> = ProblemDomain<ComplexInPlaneMap<J>, S, DirectChart>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum DirectChartError {
-    #[error("a direct β domain needs a stack closed by walls on both sides")]
+    #[error("a direct β domain needs a stack closed on both sides")]
     OpenSide,
     #[error("β lies outside the chart region")]
     OutsideRegion,
     #[error("cannot construct a finite β evaluation halo")]
     InvalidMargin,
+    #[error(
+        "the {side:?} PML normalisation scale reaches exp({log_magnitude}) on the β rectangle, \
+         outside the representable range"
+    )]
+    PmlScale { side: StackSide, log_magnitude: i64 },
+}
+
+/// Largest accepted magnitude of the log-scale of the characteristic. The
+/// search divides by the characteristic, squaring its magnitude, and doubles
+/// span about e^±709, so the scale stays within e^±300, leaving room for the
+/// rest of the stack.
+const PML_LOG_SCALE_LIMIT: f64 = 300.0;
+/// Samples per edge of the rectangle for the largest PML scale.
+const PML_SCALE_SAMPLES: usize = 256;
+
+/// Refuse a rectangle on which the PML sides' log-scale
+/// Σ [−Im(κ_ref τ) + |Im(κ τ)|] leaves the representable range. |Im(κ τ)|
+/// does not depend on the root and is subharmonic in β, so the largest value
+/// lies on the boundary, sampled here, and the least is at least Σ −Im(κ_ref τ).
+/// The refusal names the side with the largest share.
+fn check_pml_scale(
+    stack: &AnalyticalMaterialStack<C>,
+    k0: f64,
+    region: ConformalRegion<f64>,
+) -> Result<(), DirectChartError> {
+    let factors = radiation::exterior_factors(stack, C::new(k0, 0.0));
+    let pmls: Vec<_> = [StackSide::Left, StackSide::Right]
+        .into_iter()
+        .zip(pmls(stack))
+        .zip(factors)
+        .filter_map(|((side, pml), (epsilon, mu))| {
+            pml.map(|(_, tau)| (side, epsilon * mu * k0 * k0, tau))
+        })
+        .collect();
+    let floor = |chi: C, tau: C| -(chi.sqrt() * tau).im;
+    let (x0, x1) = region.real_bounds();
+    let (y0, y1) = region.imaginary_bounds();
+    let corners = [
+        C::new(x0, y0),
+        C::new(x1, y0),
+        C::new(x1, y1),
+        C::new(x0, y1),
+    ];
+    let boundary = (0..4).flat_map(|edge| {
+        let (a, b) = (corners[edge], corners[(edge + 1) % 4]);
+        (0..PML_SCALE_SAMPLES).map(move |i| a + (b - a) * (i as f64 / PML_SCALE_SAMPLES as f64))
+    });
+    let total = |shares: &[(StackSide, f64)]| shares.iter().map(|share| share.1).sum::<f64>();
+    // Each side's share where the boundary samples peak, then the lower bounds.
+    let peak = boundary
+        .map(|beta| {
+            pmls.iter()
+                .map(|&(side, chi, tau)| {
+                    let growth = ((chi - beta * beta).sqrt() * tau).im.abs();
+                    (side, floor(chi, tau) + growth)
+                })
+                .collect::<Vec<_>>()
+        })
+        .max_by(|a, b| total(a).total_cmp(&total(b)));
+    let lower = pmls
+        .iter()
+        .map(|&(side, chi, tau)| (side, floor(chi, tau)))
+        .collect();
+    for shares in peak.into_iter().chain([lower]) {
+        let log_scale = total(&shares);
+        if let Some(&(side, _)) = shares.iter().max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+            && (!log_scale.is_finite() || log_scale.abs() > PML_LOG_SCALE_LIMIT)
+        {
+            return Err(DirectChartError::PmlScale {
+                side,
+                log_magnitude: if log_scale.is_nan() {
+                    i64::MAX
+                } else {
+                    log_scale.round() as i64
+                },
+            });
+        }
+    }
+    Ok(())
 }
 
 /// A β rectangle in cm^-1 at fixed real k0.
@@ -65,8 +150,10 @@ impl AnalyticChart<J> for DirectChart {
 }
 
 impl<S: ModeDeterminantSolver<J> + Clone> ModalProblem<ComplexInPlaneMap<J>, S> {
-    /// Search a β rectangle (cm^-1) of a stack closed by walls on both sides.
-    /// The declaration covers the characteristic on the whole evaluation halo.
+    /// Search a β rectangle (cm^-1) of a stack closed on both sides, by walls
+    /// or PMLs. The declaration covers the characteristic on the whole
+    /// evaluation halo. A rectangle on which a PML's normalisation scale
+    /// cannot be represented is refused.
     pub fn direct_domain(
         &self,
         bounds: ConformalRegion<f64>,
@@ -80,10 +167,16 @@ impl<S: ModeDeterminantSolver<J> + Clone> ModalProblem<ComplexInPlaneMap<J>, S> 
             k0: self.map.k0().value()[()].re,
         };
         let reference = chart.reference();
+        let k0 = chart.k0;
         let search = SingleChartModalSearch::new(ConformalDispersion::<_, _, C, _>::with_chart(
             self.solver.clone(),
             chart,
         ))?;
+        check_pml_scale(
+            &self.context.stack,
+            k0,
+            *search.dispersion().chart().region(),
+        )?;
         let provenance = DomainProvenance {
             domain_identity: Arc::new(()),
             context: self.context.clone(),
