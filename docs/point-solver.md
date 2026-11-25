@@ -11,15 +11,28 @@ primitives and returns numerical evidence with explicit branch and coverage limi
 | `FrequencyProblem` | Core analytical stack, including dispersive exteriors, and fixed real beta | Physical k0 in cm^-1 |
 
 A core stack may close either side with a perfect electric or perfect magnetic
-wall. Only open sides carry an exterior wavevector, and `PropagationProblem`
-charts them: with both sides open, the two-exterior conformal map; with one,
-the same map built from the open side's material alone; with none,
-`direct_domain` over a β rectangle in cm^-1 (`CoordinateKind::Wavenumber`),
-since the characteristic of a stack walled on both sides is entire and even in
-β and needs no sheet or radiation reference. Conformal domains of such a stack,
-and `FrequencyProblem` on any walled stack, fail with typed errors. A walled
-side is classified `Closed` with no flux; with one open side the mode type
-follows from that side alone, and with none it is `ModeType::Closed`.
+wall, or with a wall-backed PML. Only open sides carry an exterior wavevector,
+and `PropagationProblem` charts them: with both sides open, the two-exterior
+conformal map; with one, the same map built from the open side's material
+alone; with none, `direct_domain` over a β rectangle in cm^-1
+(`CoordinateKind::Wavenumber`), since the characteristic of a stack closed on
+both sides is entire and even in β and needs no sheet or radiation reference.
+Conformal domains of such a stack, and `FrequencyProblem` on any closed stack,
+fail with typed errors. A closed side is classified `Closed` with no flux; with
+one open side the mode type follows from that side alone, and with none it is
+`ModeType::Closed`. With a PML side no gain or loss is inferred from Im β: the
+evolution is `Evolution::PmlTruncation`, carrying the PML's truncation estimate.
+
+A PML side enters the characteristic as a cladding layer of complex thickness
+τ = d (1 + c/(m+1)), normalised by the β-independent exp(iκ_ref τ), which leaves
+the scale exp(−Im(κ_ref τ) + |Im(κτ)|). `direct_domain` refuses a rectangle on
+which the sum of that scale over the PML sides leaves e^±300, with
+`DirectChartError::PmlScale` naming the side with the largest share. Fields are
+sampled through a PML on its stretched coordinate; guided enumeration
+(`EnumerationError::Termination`), modal bases in a β window
+(`ModalBasisError::Termination`), transverse integrals (`PmlIntegral`) and
+pairings refuse PML sides. The [PML convergence report](pml-convergence-report.md)
+compares the closed stack's guided and leaky modes with the open stack's.
 
 For a stack walled on both sides, `modal_basis_in_window_with` returns a complete
 modal basis in a window: every mode in a β rectangle (`ModalWindow::Wavenumber`,

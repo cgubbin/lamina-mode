@@ -18,9 +18,10 @@ provides their fields, normalisation, regional power and overlaps between
 stacks, derivatives of modal quantities with respect to stack, wavelength and
 material parameters, a certified group index, and continuation of modes and
 modal sets along a parameter. Either side of a stack may be open or closed by a
-perfect electric or perfect magnetic wall; a stack closed on both sides has a
-complete modal basis in any window of the complex β plane, with unconjugated
-and conjugated pairings between bases. It builds on `lamina-units`,
+perfect electric or perfect magnetic wall or by a wall-backed perfectly matched
+layer; a stack closed on both sides by walls has a complete modal basis in any
+window of the complex β plane, with unconjugated and conjugated pairings
+between bases. It builds on `lamina-units`,
 `lamina-core` and `argloc`.
 
 Read the [modal transform guide](docs/modal-transform.md) for the
@@ -352,6 +353,8 @@ See [pole normalization](docs/pole-normalization.md) for complete scalar-pole fa
 [Dispersion branches and physical report](docs/modal-branches.md)
 
 [Enumerating a guided basis](docs/guided-basis.md)
+
+[PML convergence report](docs/pml-convergence-report.md): guided and leaky modes of a PML-closed stack against the open stack's.
 
 ## License
 

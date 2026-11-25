@@ -52,6 +52,23 @@ Added:
   optional `left_termination`/`right_termination` in the input record,
   internally tagged by `"kind"` and omitted when open, so every open-stack
   record keeps its hash (docs/decisions/0009).
+- Stacks closed by wall-backed PMLs (lamina-core `Pml`). A PML side counts as
+  closed: it takes no exterior wavevector, classifies as `Closed`, and a stack
+  closed by walls and PMLs is searched on the direct β chart. `direct_domain`
+  refuses a rectangle on which the PML normalisation scale leaves e^±300
+  (`DirectChartError::PmlScale`, naming the side). Fields are sampled through a
+  PML on its stretched coordinate. The convergence of guided and leaky modes to
+  the open stack's is in docs/pml-convergence-report.md.
+- A mode of a stack with a PML side infers no gain or loss from Im β:
+  `Evolution::PmlTruncation { truncation }` carries the largest
+  |exp(2iκ̃(g + τ))| over the PML sides instead. Beside an open side the type
+  follows from that side's exterior and flux alone (guided when decaying,
+  leaky when growing outward). `Evolution` is no longer `Eq`.
+- lamina-py: `lamina.Pml` with every field required, and the `"pml"` record
+  variant `{"kind": "pml", "start_z_m", "thickness_m", "profile": {"kind":
+  "polynomial", "order", "strength"}, "backing"}`; walled and open records keep
+  their hashes. Enumerating a PML-terminated stack raises
+  `UnsupportedTermination`, an `InvalidInput`.
 
 Fixed:
 
@@ -69,8 +86,17 @@ Changed (breaking):
   `RadiationReference::choices` and `VerifiedRadiationReference::observed`
   hold an `Option` per side, `None` on a walled side; `BranchSignature` gains
   `exteriors` and `open_exteriors`.
-- A side closed by anything other than a wall is refused when the problem is
-  built, with `ConstructionError::UnsupportedTermination` naming the side.
+- A side closed by a termination other than a wall or a PML is refused when
+  the problem is built, with `ConstructionError::UnsupportedTermination`
+  naming the side.
+- Guided enumeration refuses PML sides with `EnumerationError::Termination`,
+  and unit-power profiles, the group index and power tangents refuse them with
+  `GuidedPowerError::Termination`, `GroupIndexError::Termination` and
+  `GuidedPowerSensitivityError::Termination` (`PmlIntegral`, naming the side).
+- `FrequencyProblem` and guided-mode pairings refuse PML-closed stacks as they
+  refuse walled ones. Modal bases in a β window refuse PML sides with
+  `ModalBasisError::Termination`, and modal and basis pairings with
+  `PairingError::Pml` (`PmlIntegral`), each naming the side.
 - `FrequencyProblem` refuses walled stacks (`ConstructionError::ClosedSide`);
   conformal domains of a stack walled on both sides fail with
   `ConformalChartError::ClosedStack`; pairings refuse walled stacks
