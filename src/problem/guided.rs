@@ -240,7 +240,11 @@ fn separable(tensors: &[Tensor; 2]) -> bool {
 /// One open exterior.
 #[derive(Clone, Debug)]
 enum Exterior {
-    Separable { te: Quadratic, tm: Quadratic },
+    Separable {
+        te: Quadratic,
+        tm: Quadratic,
+        tensors: Box<[Tensor; 2]>,
+    },
     General(Box<[Tensor; 2]>),
 }
 
@@ -258,6 +262,7 @@ impl Exterior {
             Self::Separable {
                 te: Quadratic::of(&tensors, Polarisation::TransverseElectric),
                 tm: Quadratic::of(&tensors, Polarisation::TransverseMagnetic),
+                tensors: Box::new(tensors),
             }
         } else {
             Self::General(Box::new(tensors))
@@ -267,7 +272,7 @@ impl Exterior {
     /// The waves of `channel` at ξ on the side with outward `sign`.
     fn waves(&self, xi: C, sign: f64, channel: Channel) -> Option<Waves> {
         match self {
-            Self::Separable { te, tm } => {
+            Self::Separable { te, tm, .. } => {
                 let quadratics: Vec<&Quadratic> = match channel {
                     Channel::TransverseElectric => vec![te],
                     Channel::TransverseMagnetic => vec![tm],
@@ -319,10 +324,16 @@ impl Exterior {
         }
     }
 
+    fn tensors(&self) -> &[Tensor; 2] {
+        match self {
+            Self::Separable { tensors, .. } | Self::General(tensors) => tensors,
+        }
+    }
+
     /// ξ² of each channel's branch point, for a separable exterior.
     fn lines(&self, channel: Channel) -> Option<Vec<C>> {
         match self {
-            Self::Separable { te, tm } => Some(match channel {
+            Self::Separable { te, tm, .. } => Some(match channel {
                 Channel::TransverseElectric => vec![te.line_squared()],
                 Channel::TransverseMagnetic => vec![tm.line_squared()],
                 Channel::Coupled => vec![te.line_squared(), tm.line_squared()],
@@ -368,6 +379,25 @@ fn gauge(tensors: &[Tensor; 2], xi: C, incoming: [C; 2], scale: f64) -> f64 {
         s.min() / s.max()
     }
 }
+
+/// The six-component fields `(E, Z₀H)` spanning the null space of the
+/// Maxwell matrix at an eigenvalue `n`: `dimension` right singular vectors.
+fn null_fields(tensors: &[Tensor; 2], xi: C, n: C, dimension: usize) -> Vec<[C; 6]> {
+    let svd = maxwell(tensors, xi, n).svd(false, true);
+    let Some(v_t) = svd.v_t else {
+        return vec![];
+    };
+    let mut order: Vec<usize> = (0..6).collect();
+    order.sort_by(|&a, &b| svd.singular_values[a].total_cmp(&svd.singular_values[b]));
+    order[..dimension]
+        .iter()
+        .map(|&row| std::array::from_fn(|k| v_t[(row, k)].conj()))
+        .collect()
+}
+
+/// One exterior field as outgoing waves: each wave's outward wavenumber
+/// (cm⁻¹) and its field per unit amplitude at the interface.
+pub(crate) type OutgoingWaves = Vec<(C, [C; 6])>;
 
 /// Outward wavenumbers of one side with their β-rates.
 type Waves2 = Vec<(C, C)>;
@@ -440,6 +470,113 @@ impl GuidedExteriors {
             })
         });
         Ok(ExteriorWavevectors::from_branches(left, right))
+    }
+
+    /// The field `f` at an open side's interface (side 0 left, 1 right)
+    /// as a sum of the outgoing waves at β; `None` if it does not lie in
+    /// their span to `1e-6` of its size.
+    pub(crate) fn outgoing(&self, side: usize, beta: C, f: &[C; 6]) -> Option<OutgoingWaves> {
+        let exterior = self.sides.get(side)?.as_ref()?;
+        let xi = beta / self.k0;
+        let waves = exterior.waves(xi, SIGNS[side], Channel::Coupled)?;
+        let tensors = exterior.tensors();
+        let outward: Vec<C> = waves.outgoing.iter().map(|(n, _)| *n).collect();
+        let scale = root_scale(tensors, xi);
+        let basis: Vec<(C, [C; 6])> = if (outward[0] - outward[1]).norm() <= DOUBLE_ROOT * scale {
+            let n = 0.5 * (outward[0] + outward[1]);
+            null_fields(tensors, xi, SIGNS[side] * n, 2)
+                .into_iter()
+                .map(|v| (self.k0 * n, v))
+                .collect()
+        } else {
+            outward
+                .iter()
+                .flat_map(|&n| {
+                    null_fields(tensors, xi, SIGNS[side] * n, 1)
+                        .into_iter()
+                        .map(move |v| (n, v))
+                })
+                .map(|(n, v)| (self.k0 * n, v))
+                .collect()
+        };
+        if basis.len() != 2 {
+            return None;
+        }
+        let matrix = nalgebra::SMatrix::<C, 6, 2>::from_fn(|r, c| basis[c].1[r]);
+        let target = nalgebra::SVector::<C, 6>::from_fn(|r, _| f[r]);
+        let a = matrix.svd(true, true).solve(&target, 1e-12).ok()?;
+        let defect = (matrix * a - target).norm();
+        if defect.is_nan() || defect > 1e-6 * target.norm() {
+            return None;
+        }
+        Some(
+            basis
+                .iter()
+                .enumerate()
+                .map(|(i, (kappa, v))| (*kappa, v.map(|x| x * a[i])))
+                .collect(),
+        )
+    }
+
+    /// The β-rate of each open side's outward wavenumbers along a direction
+    /// in which k0 changes at `k0_rate`, β at `beta_rate` and the exterior
+    /// tensors at `rates` ([ε', μ'] per side), from a Cauchy integral of the
+    /// continued roots; a double root enters through its mean.
+    pub(crate) fn rates(
+        &self,
+        beta: C,
+        k0_rate: f64,
+        beta_rate: C,
+        rates: [[Tensor; 2]; 2],
+    ) -> Option<[Option<[C; 2]>; 2]> {
+        let mut out = [None, None];
+        for side in 0..2 {
+            let Some(exterior) = &self.sides[side] else {
+                continue;
+            };
+            let base = exterior.tensors();
+            let values = |t: C| -> Option<Vec<C>> {
+                let k0 = self.k0 + t * k0_rate;
+                let tensors = std::array::from_fn(|m| {
+                    std::array::from_fn(|r| {
+                        std::array::from_fn(|c| base[m][r][c] + t * rates[side][m][r][c])
+                    })
+                });
+                let waves = Exterior::new(tensors).waves(
+                    (beta + t * beta_rate) / k0,
+                    SIGNS[side],
+                    self.channel,
+                )?;
+                Some(waves.outgoing.iter().map(|(n, _)| k0 * n).collect())
+            };
+            let centre = values(C::ZERO)?;
+            let count = centre.len();
+            let scale = centre.iter().map(|v| v.norm()).fold(self.k0, f64::max);
+            let double = count == 2 && (centre[0] - centre[1]).norm() <= DOUBLE_ROOT * scale;
+            let r = 1e-4;
+            // The roots at t, ordered as at the centre.
+            let at = |t: C, which: usize| -> C {
+                let Some(v) = values(t) else {
+                    return C::new(f64::NAN, 0.0);
+                };
+                if v.len() != count {
+                    return C::new(f64::NAN, 0.0);
+                }
+                if double {
+                    return 0.5 * (v[0] + v[1]);
+                }
+                let near = |x: &C| (x - centre[which]).norm();
+                *v.iter()
+                    .min_by(|a, b| near(a).total_cmp(&near(b)))
+                    .unwrap_or(&v[0])
+            };
+            let rate = [0, 1].map(|which| taylor(|t| at(t, which.min(count - 1)), r)[1]);
+            if rate.iter().any(|v| !v.re.is_finite() || !v.im.is_finite()) {
+                return None;
+            }
+            out[side] = Some(rate);
+        }
+        Some(out)
     }
 
     /// The outward exterior wavenumbers at real or complex β, left then

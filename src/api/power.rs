@@ -107,10 +107,54 @@ impl ProfileGrid {
         min_radians: usize,
     ) -> Result<Option<Self>, PmlIntegral> {
         let layers = stack.len();
+        Self::with_wavenumbers(
+            stack,
+            |index, region| {
+                let tensors =
+                    material::tensors(material::region_id(index, layers), region, k).ok()?;
+                let kappa_squared = Channel::of(&tensors, polarisation).kappa_squared(k, beta);
+                Some(kappa_squared.norm().sqrt())
+            },
+            per_radian,
+            min_radians,
+        )
+    }
+
+    /// As [`Self::new`] for any channel: each region's transverse
+    /// wavenumber is bounded by `√(|β|² + k0² ‖ε‖ ‖μ‖)` (Frobenius norms).
+    pub(super) fn coupled(
+        stack: &ModeStack,
+        k: Complex,
+        beta: Complex,
+        per_radian: usize,
+        min_radians: usize,
+    ) -> Result<Option<Self>, PmlIntegral> {
+        let layers = stack.len();
+        Self::with_wavenumbers(
+            stack,
+            |index, region| {
+                let [[epsilon, mu], _] =
+                    material::full_tensors(material::region_id(index, layers), region, k).ok()?;
+                let norm = |t: &material::Tensor| {
+                    t.iter().flatten().map(|v| v.norm_sqr()).sum::<f64>().sqrt()
+                };
+                Some((beta.norm_sqr() + k.norm_sqr() * norm(&epsilon) * norm(&mu)).sqrt())
+            },
+            per_radian,
+            min_radians,
+        )
+    }
+
+    /// Base intervals from each region's transverse wavenumber `kappa`.
+    fn with_wavenumbers(
+        stack: &ModeStack,
+        kappa: impl Fn(usize, &Region) -> Option<f64>,
+        per_radian: usize,
+        min_radians: usize,
+    ) -> Result<Option<Self>, PmlIntegral> {
+        let layers = stack.len();
         let intervals = |index: usize, region: &Region, width: f64| {
-            let tensors = material::tensors(material::region_id(index, layers), region, k).ok()?;
-            let kappa_squared = Channel::of(&tensors, polarisation).kappa_squared(k, beta);
-            let phase = width * kappa_squared.norm().sqrt();
+            let phase = width * kappa(index, region)?;
             (phase.is_finite() && phase <= 4096.)
                 .then(|| (width, per_radian * (phase.ceil() as usize).max(min_radians)))
         };
