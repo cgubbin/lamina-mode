@@ -301,6 +301,10 @@ fn public_frequency_errors_keep_exclusions_and_side_work() {
     assert!(report.observations().is_empty());
     assert!(report.charts()[0].candidates.is_none());
     assert!(!report.exclusions().is_empty());
+    assert!(!report.is_complete());
+    let unresolved = report.unresolved();
+    assert_eq!(unresolved.len(), 1);
+    assert!(matches!(unresolved[0].cause, UnresolvedCause::Discovery(_)));
 }
 #[test]
 fn frequency_owned_coverage_keeps_overlapping_failure_and_all_outcomes() {
@@ -341,6 +345,14 @@ fn frequency_owned_coverage_keeps_overlapping_failure_and_all_outcomes() {
     ));
     assert!(report.charts()[0].candidates.is_some());
     assert!(report.charts()[1].candidates.is_none());
+    assert!(!report.is_complete());
+    let failed: Vec<_> = report
+        .unresolved()
+        .into_iter()
+        .filter(|region| matches!(region.cause, UnresolvedCause::Discovery(_)))
+        .map(|region| region.chart)
+        .collect();
+    assert_eq!(failed, [1]);
     assert_eq!(report.groups()[0].members(), &[0]);
     let candidate = &report.charts()[0].candidates.as_ref().unwrap()[0];
     assert!(candidate.work.evaluations > 0);
@@ -432,6 +444,19 @@ fn canonical_plans_and_budget_clusters_keep_public_diagnostics() {
             .iter()
             .any(|o| matches!(o.status, CandidateStatus::UnresolvedCluster))
     );
+    let unresolved = report.unresolved();
+    assert!(!report.is_complete());
+    assert!(unresolved.iter().any(|r| matches!(
+        r.cause,
+        UnresolvedCause::Stopped(Termination::ExceededMaxIterations)
+    )));
+    assert!(unresolved.iter().any(|r| matches!(
+        r.cause,
+        UnresolvedCause::Candidate {
+            status: CandidateStatus::UnresolvedCluster,
+            ..
+        }
+    )));
 }
 // Interior mutability is used only to inject post-acceptance failures. Real
 // callers must keep analytical material behaviour stable for a problem's lifetime.
@@ -662,6 +687,7 @@ fn public_backend_failure_retains_original_core_source() {
             MatchConfig::default(),
         )
         .unwrap();
+    assert!(!report.is_complete());
     let error = report.discovery().entries().next().unwrap().unwrap_err();
     assert_eq!(error.optical_failure(), Some(OpticalFailure::Backend));
     assert!(
