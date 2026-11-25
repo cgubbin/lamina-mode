@@ -21,6 +21,10 @@ Added:
   ε_ii + k0 ∂ε_ii/∂k0 and μ_ii + k0 ∂μ_ii/∂k0, and local coupling weighs each
   field component by its own permittivity rate, with ε_xx and ε_yy in the
   tangential and ε_zz in the normal interface terms.
+- Modal bases in a β window and their pairings accept diagonal regions,
+  through walls and PMLs: the PML normalisation scale, its near-zero and
+  residual limits and the PML quadrature split use each exterior's channel,
+  κ² = s (χ k0² − β²).
 - Eligibility of guided enumeration: the entries a polarisation sees must be
   real and positive, so a hyperbolic or lossy entry is refused with
   `EnumerationError::Material { region, entry }` (`TensorEntry`); entries it
