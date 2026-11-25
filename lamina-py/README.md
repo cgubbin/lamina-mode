@@ -110,6 +110,35 @@ and a fixed-wavelength parameter; modes within `gap_rad_per_m` (default 1e-6 k0)
 group without mutual coefficients. The supplied field must vanish outside its support and is sampled one point at
 a time, once per position and side; an exception it raises propagates. Decision note 0008 has the details.
 
+## Modal bases
+
+A stack closed by walls on both sides has a discrete spectrum. `modal_basis` returns every mode in a window of the
+complex β plane, guided, radiation-like, evanescent and complex, as a complete modal basis in that window:
+
+```python
+stack = lamina.Stack(2.25, [(4.0, 0.7e-6)], 2.25, lamina.Wall("pec", -0.45e-6), lamina.Wall("pec", 1.15e-6))
+k0 = 2 * math.pi / 1e-6
+window = lamina.BetaWindow.forward(2.1 * k0, 3.0 * k0, 0.05 * k0)  # Re β ∈ [−m, β_max], Im β ∈ [−m, decay_max]
+basis = lamina.modal_basis(stack, 1e-6, "TE", window)
+basis.status, basis.expected, basis.found  # "complete", 11, 11
+basis.beta_rad_per_m                       # real β first, then evanescent by increasing decay
+
+profile = basis.profile(0, np.linspace(-0.45e-6, 1.15e-6, 201))
+profile.region                             # "gap" or "layer" per sample
+
+p = lamina.basis_pairing(basis, basis)
+p.unconjugated_w_per_m                     # the identity, to the quadrature tolerance
+```
+
+`expected` counts the zeros in the window from the argument principle over its boundary, independently of the
+search; `unresolved` lists every region that did not end as accepted modes, with its cause, and an incomplete basis
+is a result. Each mode has unit unconjugated self-pairing ⟨f, f⟩ = ¼ ∫ (E × H + E × H) · x dz = 1 W/m, a sign
+fixed at the first interface, and the order of `definitions["ordering"]`; modes within `degeneracy_gap_rad_per_m`
+(default 1e-6 k0) of each other form a group with an unconjugated Löwdin basis. `basis_pairing` gives both pairing
+matrices between two bases at one wavelength whose walls coincide once `origins_m` places each first interface,
+with singular values, the condition number of every leading block and each basis's own Gram defect. Every record
+carries the fixed `definitions`; decision note 0011 has the details.
+
 ## Scope
 
 lamina-py presents lamina-mode's results in Python: SI quantities with the unit in every field name, typed

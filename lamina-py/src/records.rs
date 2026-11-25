@@ -20,6 +20,10 @@ pub const OVERLAP_SENSITIVITY_SCHEMA: &str = "lamina.guided_overlap_sensitivity"
 pub const RECIPROCITY_SCHEMA: &str = "lamina.guided_reciprocity";
 pub const LOCAL_COUPLING_SCHEMA: &str = "lamina.guided_local_coupling";
 pub const PROJECTION_SCHEMA: &str = "lamina.guided_projection";
+pub const MODAL_BASIS_INPUT_SCHEMA: &str = "lamina.modal_basis_input";
+pub const MODAL_BASIS_SCHEMA: &str = "lamina.modal_basis";
+pub const MODAL_PROFILE_SCHEMA: &str = "lamina.modal_profile";
+pub const BASIS_PAIRING_SCHEMA: &str = "lamina.basis_pairing";
 
 /// The pairing each record kind evaluates. A record's `definition` must equal
 /// its kind's, as its conventions must equal the current ones.
@@ -554,6 +558,181 @@ pub struct FieldProjection {
     pub residual_w_per_m: Option<f64>,
 }
 
+/// The definitions every modal basis, profile and basis pairing carries.
+/// Parsing rejects any other text (docs/decisions/0011).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Definitions {
+    pub unconjugated_pairing: String,
+    pub conjugated_pairing: String,
+    pub normalisation: String,
+    pub sign_rule: String,
+    pub ordering: String,
+    pub degenerate_basis: String,
+}
+
+impl Definitions {
+    pub fn current() -> Self {
+        let s = |v: &str| v.to_owned();
+        Self {
+            unconjugated_pairing: s("(1/4) ∫ (E1 × H2 + E2 × H1) · x dz̃; dz̃ = s dz in a PML; \
+                 open tails by analytic continuation"),
+            conjugated_pairing: s("(1/4) ∫ (E1 × H2* + E2* × H1) · x dz, real coordinate, \
+                 PML equivalent-medium fields"),
+            normalisation: s("unit unconjugated self-pairing, 1 W/m"),
+            sign_rule: s(
+                "Re(Ey + Z0 Hy) > 0 at the first interface; at a wall on it \
+                 Re(Ey + Z0 Hy + i(Z0 Hx − Ex)) > 0; ties by Im",
+            ),
+            ordering: s("decreasing Re β², then decreasing Im β², then decreasing Re β"),
+            degenerate_basis: s(
+                "unconjugated Löwdin within groups, principal G^(-1/2), then the sign rule",
+            ),
+        }
+    }
+}
+
+/// A window of the complex β plane. Internally tagged by `"kind"`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Window {
+    /// A β rectangle on the direct chart: ascending real and imaginary bounds.
+    Wavenumber {
+        re_rad_per_m: [f64; 2],
+        im_rad_per_m: [f64; 2],
+    },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ModalBasisInput {
+    pub schema: String,
+    pub schema_version: u32,
+    pub stack: Stack,
+    pub wavelength_m: f64,
+    pub polarisation: Polarisation,
+    pub window: Window,
+    /// Resolved on validation: 1e-6 k0 when not given.
+    pub degeneracy_gap_rad_per_m: Option<f64>,
+    pub self_pairing_rtol: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BasisStatus {
+    Complete,
+    Incomplete,
+    CountFailed,
+}
+
+/// A rectangle as `[[re_low, re_high], [im_low, im_high]]`.
+pub type Rect2 = [[f64; 2]; 2];
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct UnresolvedRegion {
+    /// In the chart's coordinate: rad/m on the wavenumber chart.
+    pub bounds: Rect2,
+    pub beta_image_rad_per_m: Rect2,
+    pub count: Option<usize>,
+    pub cause: String,
+    pub detail: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BasisMode {
+    pub index: usize,
+    pub beta_rad_per_m: C2,
+    pub n_eff: C2,
+    pub mode_type: String,
+    pub direction: Direction,
+    /// Per side: the sheet of an open side, null for a closed one.
+    pub sheet: [Option<String>; 2],
+    /// |characteristic| at the accepted root.
+    pub residual: f64,
+    pub self_pairing_raw_w_per_m: C2,
+    /// "unit" or "ill_conditioned".
+    pub normalisation: String,
+    /// |⟨u, u⟩| over the bounded-region field scale.
+    pub self_pairing_ratio: f64,
+    /// "first_interface" or "wall_on_first_interface".
+    pub sign_reference: String,
+    pub sign_margin: Option<f64>,
+    pub sign_ambiguous: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ModalBasis {
+    pub schema: String,
+    pub schema_version: u32,
+    pub conventions: Conventions,
+    pub definitions: Definitions,
+    pub assumption: String,
+    pub input: ModalBasisInput,
+    pub input_hash: String,
+    pub k0_rad_per_m: f64,
+    pub chart: String,
+    pub window_beta_image_rad_per_m: Rect2,
+    pub scope: String,
+    pub status: BasisStatus,
+    pub expected: Option<usize>,
+    pub found: usize,
+    pub unresolved: Vec<UnresolvedRegion>,
+    /// Near-degenerate groups of two or more modes.
+    pub groups: Vec<Vec<usize>>,
+    pub modes: Vec<BasisMode>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ModalProfile {
+    pub schema: String,
+    pub schema_version: u32,
+    pub conventions: Conventions,
+    pub definitions: Definitions,
+    pub input_hash: String,
+    pub mode_index: usize,
+    pub beta_rad_per_m: C2,
+    pub z_m: Vec<f64>,
+    /// Per sample: "layer", "gap" or "exterior".
+    pub region: Vec<String>,
+    pub electric_real: Vec<[f64; 3]>,
+    pub electric_imag: Vec<[f64; 3]>,
+    pub magnetic_real: Vec<[f64; 3]>,
+    pub magnetic_imag: Vec<[f64; 3]>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BasisPairing {
+    pub schema: String,
+    pub schema_version: u32,
+    pub conventions: Conventions,
+    pub definitions: Definitions,
+    pub first_input_hash: String,
+    pub second_input_hash: String,
+    pub origins_m: [f64; 2],
+    /// Mode indices of the rows (first basis) and columns (second basis).
+    pub rows: Vec<usize>,
+    pub columns: Vec<usize>,
+    /// Rows first, in W/m.
+    pub unconjugated_real: Vec<Vec<f64>>,
+    pub unconjugated_imag: Vec<Vec<f64>>,
+    /// Rows first, in W/m; null where the entry is absent, with its cause.
+    pub conjugated_real: Vec<Vec<Option<f64>>>,
+    pub conjugated_imag: Vec<Vec<Option<f64>>>,
+    pub conjugated_absent: Vec<Vec<Option<String>>>,
+    pub singular_values_w_per_m: Vec<f64>,
+    pub leading_condition_numbers: Vec<f64>,
+    pub self_defects: [f64; 2],
+    pub sample_count: usize,
+    pub quadrature_change_w_per_m: f64,
+    pub status: [BasisStatus; 2],
+    pub scope: [String; 2],
+}
+
 /// Records with a schema identity that can be checked after deserialisation.
 pub trait Record: Serialize + for<'de> Deserialize<'de> {
     const SCHEMA: &'static str;
@@ -647,6 +826,61 @@ pairing_record!(
     LOCAL_COUPLING_DEFINITION
 );
 pairing_record!(FieldProjection, PROJECTION_SCHEMA, PROJECTION_DEFINITION);
+
+impl Record for ModalBasisInput {
+    const SCHEMA: &'static str = MODAL_BASIS_INPUT_SCHEMA;
+    fn identity(&self) -> (&str, u32) {
+        (&self.schema, self.schema_version)
+    }
+}
+
+fn check_definitions(definitions: &Definitions, schema: &str) -> Result<(), String> {
+    if *definitions != Definitions::current() {
+        return Err(format!("definitions differ from {schema}'s"));
+    }
+    Ok(())
+}
+
+impl Record for ModalBasis {
+    const SCHEMA: &'static str = MODAL_BASIS_SCHEMA;
+    fn identity(&self) -> (&str, u32) {
+        (&self.schema, self.schema_version)
+    }
+    fn conventions(&self) -> Option<&Conventions> {
+        Some(&self.conventions)
+    }
+    fn check(&self) -> Result<(), String> {
+        check_definitions(&self.definitions, Self::SCHEMA)?;
+        check_identity(&self.input)?;
+        if self.input_hash != digest(&self.input)? {
+            return Err("input_hash does not match the input".into());
+        }
+        if self.found != self.modes.len() {
+            return Err("found does not match the number of modes".into());
+        }
+        Ok(())
+    }
+}
+
+macro_rules! defined_record {
+    ($ty:ty, $schema:expr) => {
+        impl Record for $ty {
+            const SCHEMA: &'static str = $schema;
+            fn identity(&self) -> (&str, u32) {
+                (&self.schema, self.schema_version)
+            }
+            fn conventions(&self) -> Option<&Conventions> {
+                Some(&self.conventions)
+            }
+            fn check(&self) -> Result<(), String> {
+                check_definitions(&self.definitions, Self::SCHEMA)
+            }
+        }
+    };
+}
+
+defined_record!(ModalProfile, MODAL_PROFILE_SCHEMA);
+defined_record!(BasisPairing, BASIS_PAIRING_SCHEMA);
 
 pub fn check_identity<R: Record>(record: &R) -> Result<(), String> {
     let (schema, version) = record.identity();
