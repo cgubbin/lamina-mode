@@ -59,15 +59,21 @@ impl Layout {
     }
 
     /// The union of the interfaces of `layouts` and their wall planes,
-    /// ascending. Walls of compatible layouts coincide; the first one's are used.
+    /// ascending. Walls of compatible layouts coincide to round-off; the
+    /// outermost of each side is used, whatever the order of `layouts`.
     pub fn partition(layouts: &[&Layout]) -> Vec<f64> {
         let mut partition: Vec<_> = layouts
             .iter()
             .flat_map(|layout| layout.interfaces.iter().copied())
             .collect();
-        if let Some(first) = layouts.first() {
-            partition.extend(first.walls.iter().flatten().map(|&(_, z)| z));
-        }
+        let walls = |side: usize| {
+            layouts
+                .iter()
+                .filter_map(move |l| l.walls[side])
+                .map(|(_, z)| z)
+        };
+        partition.extend(walls(0).reduce(f64::min));
+        partition.extend(walls(1).reduce(f64::max));
         partition.sort_by(f64::total_cmp);
         partition.dedup();
         partition
@@ -186,6 +192,15 @@ pub(super) fn intervals(
         .collect()
 }
 
+/// Composite Simpson of `value` over the whole partition.
+pub(super) fn integral(
+    partition: &[f64],
+    panels: usize,
+    value: impl Fn(usize) -> Complex,
+) -> Complex {
+    intervals(partition, panels, value).into_iter().sum()
+}
+
 /// A converged set of quadrature estimates.
 pub(super) struct Converged<T> {
     pub entries: Vec<Complex>,
@@ -234,4 +249,20 @@ pub(super) fn converge<T, E>(
 pub(super) fn conjugated(a: &Sample, b: &Sample) -> Complex {
     (a[1] * b[5].conj() - a[2] * b[4].conj() + b[1].conj() * a[5] - b[2].conj() * a[4])
         * (0.25 * super::power::CM_TO_M_OVER_Z0)
+}
+
+/// Unconjugated symmetric pairing density ¼ (E_a × H_b + E_b × H_a) · x̂, W/m per cm.
+/// Exchanging the modes exchanges two terms of one sum, so the result is
+/// bit for bit symmetric.
+pub(super) fn unconjugated(a: &Sample, b: &Sample) -> Complex {
+    let (ab, ba) = (a[1] * b[5] - a[2] * b[4], b[1] * a[5] - b[2] * a[4]);
+    (ab + ba) * (0.25 * super::power::CM_TO_M_OVER_Z0)
+}
+
+/// Field-scale density ¼ (|E|² + |Z0 H|²) / Z0, W/m per cm.
+pub(super) fn field_scale(a: &Sample) -> Complex {
+    Complex::new(
+        a.iter().map(|v| v.norm_sqr()).sum::<f64>() * (0.25 * super::power::CM_TO_M_OVER_Z0),
+        0.0,
+    )
 }
