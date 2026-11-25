@@ -133,8 +133,66 @@ in thick PMLs; their self-pairing ratio falls below the 1e-8 threshold there, so
 and the window, the caller's choice, decides whether the basis is complete. Profiles name `pml` samples and carry
 `stretched_z_m` and `stretch`, with the fixed statement of what the fields are there.
 
+### Open exteriors
+
+**Chart and window.** A stack with one or two open sides is searched on the conformal chart of its open exteriors:
+with two, β² = k0² [s + e^{2z} + r² e^{−2z}], κ_L = i k0 (e^z − r e^{−z}), κ_R = i k0 (e^z + r e^{−z}),
+r = (χ_L − χ_R)/4, s = (χ_L + χ_R)/2; with one (the other a wall or a PML), r = 0 and s = χ of the open side, so
+κ = i k0 e^z. An open side's exterior field is exp(iκζ) at outward distance ζ: guided modes lie on the proper sheet,
+Im κ > 0, leaky ones on the improper sheet, Im κ < 0. z ↦ (β², κ) uniformises the Riemann surface of the exterior
+wavevectors with period 2πi, and the characteristic composed with it is entire in z, so the winding around a chart
+rectangle counts zeros, with no poles and no mirror double count. The window is therefore `ModalWindow::Chart`, a
+rectangle in z less than one period tall (`WindowError::Period` otherwise); a wavenumber window on such a stack is
+refused (`OpenSide`), and so is a chart window holding a zero of β², a branch point of β
+(`CoordinateBranchPoint`). β is continued from its principal root at the window's centre, and every cell's chart
+continues it from there. Each mode records its sheet per open side. Open exteriors must be isotropic, so that
+their channel is unscaled and χ = εμ in either polarisation; an anisotropic open exterior is refused
+(`AnisotropicExterior`, naming the region); diagonal layers and closed sides are handled as before.
+
+**Covering a β rectangle.** A β rectangle on the improper sheet near the real axis below a light line meets the
+cut exactly where leaky modes live, while a chart rectangle reaches them continuously. `ModalWindow::covering` maps
+a β rectangle on stated sheets (one per open side) to the bounding box of its boundary's image in z, padded by half
+the largest sample step, and reports the extra area of the covering's β image (by the shoelace formula of its
+boundary) over the rectangle's. A rectangle that meets a stated sheet's cut, κ² ∈ [0, ∞), is refused naming the
+side; along each edge Im κ² is linear, so the test is exact. Equal exteriors (r = 0) need equal sheets.
+
+**Branch points.** z is a local coordinate at the branch points too, so a zero there counts once; but the exterior
+field is flat and the self-pairing tail i/(2κ) diverges. A root with |κ| ≤ 1e-4 k0 on an open side is unresolved
+with cause `BranchPoint`, naming the side; with one open side, or equal exteriors, κ = 0 lies at Re z → −∞.
+
+**Scope.** With an open side the transverse operator has a continuous spectrum, bounded non-normalisable radiation
+solutions for every real κ ≥ 0, and a field's expansion is a sum over guided modes plus an integral over that
+continuum. Deforming the integral into the improper sheet collects leaky poles but always leaves an integral along
+the deformed cut. A basis of an open stack therefore has scope `DiscreteWithoutContinuum`: its guided and leaky
+modes never span the fields, and "complete" means only that no discrete mode in the window is missing.
+
+**Tails.** Beyond the partition, with each mode's κ on its own sheet and v₀ the density at the outermost sample,
+
+| pairing | open tail |
+| --- | --- |
+| unconjugated | i v₀/(κ_a + κ_b), by analytic continuation, for guided and leaky modes alike |
+| conjugated | i v₀/(κ_a − κ_b*) when Im κ_a + Im κ_b > 0; otherwise absent, `Unbounded`, naming the side |
+
+For guided modes, κ = iα, both are the decaying tail v₀/(α_a + α_b): the conjugated pairings of open-slab guided
+modes equal the guided power overlaps to 3e-11 W/m. For leaky modes the unconjugated tail is the integral along a
+rotated ray on which both fields decay, the exterior regularisation of pole normalisation; it is what makes the
+Lorentz boundary terms vanish, so guided and leaky modes of one open stack are bi-orthogonal under ⟨·,·⟩. A
+divergent conjugated tail is never replaced by a regularised number. |κ_a + κ_b| (or |κ_a − κ_b*|) below 1e-8 k0
+is singular (`TailSingular`). The field scale of the ill-conditioning test adds |F(edge)|²/(4 Z0 |κ|) per open side,
+finite for leaky modes. Two stacks pair when a side is open in both; their exterior materials may differ; open
+against closed is `Terminations`.
+
+**Checks.** On a symmetric slab (core ε = 4, half-width 0.35 λ, cladding 2.25) in the window
+Re z ∈ [−3, 0.35], Im z ∈ [−2.9, 0.4], TE and TM, the basis holds two guided modes and one leaky one, equal to the
+even and odd ladders solved by Newton in z on their sheets to |Δz| ≤ 7e-15, with counts equal to an independent
+argument-principle count; a slab on a PEC or PMC wall holds the odd or even modes of the mirror-doubled slab,
+leaky ones included; the unconjugated Gram is the identity to 1e-11; positive-power guided modes equal the
+signed-unit-power profiles to 2e-11; leaky conjugated self-products are absent. A slab with one open side and a
+PML on the other counts and pairs likewise (6 TE, 7 TM modes). The covering of a β rectangle round the TE leaky mode
+holds it on the improper sheet, and a rectangle across the real axis below the light line is refused.
+
 ## Consequences
 
-Bases are formed for stacks closed by walls or PMLs on both sides; a wavenumber window on a stack with an open side
-is refused. Fields are not projected onto a modal basis here, local coupling is not formed on one, and nothing is
+Bases are formed for stacks closed by walls or PMLs on both sides in a β window, and for stacks with open sides in
+a chart window, without the radiation continuum. Fields are not projected onto a modal basis here, local coupling is not formed on one, and nothing is
 differentiated with respect to a wall position or a PML's thickness, profile or position.

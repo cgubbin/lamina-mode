@@ -363,6 +363,9 @@ impl<M, S, H> ProblemDomain<M, S, H> {
     pub fn provenance(&self) -> &DomainProvenance {
         &self.provenance
     }
+    pub(crate) fn chart(&self) -> &H {
+        self.search.dispersion().chart()
+    }
 }
 #[derive(Debug)]
 pub struct ProblemSearchResult {
