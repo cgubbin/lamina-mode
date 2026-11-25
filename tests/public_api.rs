@@ -626,10 +626,18 @@ fn accepted_guided_point_survives_unavailable_interpretation_and_checked_failure
             FieldRecoverySettings::default(),
         )
         .unwrap_err();
-    assert!(matches!(
-        field_failure.cause,
-        FieldRecoveryError::Core(lamina_core::UnscaledFieldError::InvalidInput)
-    ));
+    // The NaN right exterior is refused by name before any field is built.
+    let FieldRecoveryError::Core(lamina_core::UnscaledFieldError::Backend(source)) =
+        &field_failure.cause
+    else {
+        panic!("unexpected cause {:?}", field_failure.cause)
+    };
+    assert_eq!(
+        source.downcast_ref::<lamina_core::ConstitutiveError>(),
+        Some(&lamina_core::ConstitutiveError::NonFinite {
+            region: lamina_core::StackRegion::RightExterior
+        })
+    );
     assert_eq!(
         field_failure.point.physical_coordinate(),
         point.physical_coordinate()
@@ -644,7 +652,16 @@ fn accepted_guided_point_survives_unavailable_interpretation_and_checked_failure
     assert_eq!(report.observations().len(), 1);
     assert_eq!(report.groups().len(), 1);
     let error = p.evaluate(&d, c(z)).unwrap_err();
-    assert_eq!(error.optical_failure(), Some(OpticalFailure::Output));
+    let refused = lamina_core::backend::Scatter2Error::Constitutive(
+        lamina_core::ConstitutiveError::NonFinite {
+            region: lamina_core::StackRegion::RightExterior,
+        },
+    );
+    assert_eq!(error.optical_failure(), Some(OpticalFailure::Backend));
+    assert_eq!(
+        error.find_source::<lamina_core::backend::Scatter2Error>(),
+        Some(&refused)
+    );
     // Refinement errors keep discovery and do not revoke previous acceptance.
     let failed = plan
         .refine(
@@ -655,7 +672,7 @@ fn accepted_guided_point_survives_unavailable_interpretation_and_checked_failure
         .unwrap();
     assert!(failed.observations().is_empty());
     assert!(
-        matches!(&failed.charts()[0].candidates.as_ref().unwrap()[0].status,CandidateStatus::EvaluationFailed(e) if e.optical_failure()==Some(OpticalFailure::Output))
+        matches!(&failed.charts()[0].candidates.as_ref().unwrap()[0].status,CandidateStatus::EvaluationFailed(e) if e.optical_failure()==Some(OpticalFailure::Backend) && e.find_source::<lamina_core::backend::Scatter2Error>()==Some(&refused))
     );
 }
 #[test]
