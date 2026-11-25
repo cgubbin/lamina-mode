@@ -92,6 +92,30 @@ Added:
   `TailSingular` near κ_a + κ_b = 0. Pairings accept sides open in both
   stacks. Open exteriors must be isotropic; an anisotropic one is refused
   with `WindowError::AnisotropicExterior`, naming the region.
+- `basis_projection_with`: a supplied field F expanded in the normalised
+  modes of a `ModalBasis` by solving G a = b, G_mn = ⟨f_m, f_n⟩ and
+  b_m = ⟨f_m, F⟩ unconjugated, on the basis's partition with dz̃ in a PML and
+  continued tails on open sides, all at one refinement level
+  (`BasisProjectionInput`, `BasisFieldProjection`). Inside a PML F is the
+  continued field, as modal profiles give it; on an open side the field
+  beyond the support may be stated as `ExteriorWave`s, whose pairings are
+  closed-form tails. The result has G's singular values, condition number
+  and defect, the equation residual, and the field scale of
+  F − Σ a_m f_m over the bounded partition, absolute and relative to F's;
+  `residual_includes_continuum` states that with an open side it holds F's
+  radiation content, which no discrete mode represents.
+- `basis_local_coupling_with`: the complex-symmetric perturbation matrix
+  K_mn = (ω ε0/4) [∫ Ẽ_m · ∂ε/∂p · E_n dz̃ + interface terms] of a modal
+  basis, Ẽ = (−E_x, E_y, E_z) the mirrored field, with one-sided fields at
+  moving interfaces, the stretch in a PML and continued tails on open sides;
+  its diagonal is each mode's dβ/dp, and C_mn = K_mn/(β_n − β_m) is the rate
+  of the pairing of mode m with the moving mode n. Modes within the gap
+  (default the basis's degeneracy gap) form groups with absent mutual
+  coefficients. Wavelength and permeability directions, moving jumps in μ and
+  interfaces moving against walls or PMLs are refused (`BasisCouplingError`).
+- lamina-py: `ModalBasis.project_field` and `ModalBasis.local_coupling`, with
+  the record kinds `lamina.basis_projection` and
+  `lamina.basis_local_coupling` at schema version 1.
 - Breaking: `ModalPairing::conjugated_w_per_m` is a
   `Result<Complex, Absent>` and `BasisPairing::conjugated` a
   `DMatrix<Result<Complex, Absent>>`.
