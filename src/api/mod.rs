@@ -22,6 +22,7 @@ mod diagnostic;
 mod fields;
 mod group;
 mod guided;
+mod integration;
 mod normalization;
 mod overlap;
 mod power;

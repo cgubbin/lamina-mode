@@ -66,7 +66,8 @@ pub fn project_guided_field(
     rank_rtol: f64,
     settings: FieldRecoverySettings,
 ) -> Result<GuidedFieldProjection, GuidedProjectionError> {
-    use super::overlap::{interface_positions, pairing, sample_grid_with_exterior};
+    use super::integration::{conjugated, samples};
+    use super::overlap::interface_positions;
     use GuidedProjectionError::*;
     let [lo, hi] = input.support_cm;
     let wavelength = basis.request.wavelength.as_centimetres();
@@ -103,13 +104,8 @@ pub fn project_guided_field(
             gram[(i, j)] = overlap;
             gram[(j, i)] = overlap.conj();
         }
-        let edges = interface_positions(mode, origin_cm)?;
-        let widths: Vec<_> = mode
-            .provenance()
-            .stack()
-            .iter()
-            .map(|layer| layer.thickness().as_centimetres())
-            .collect();
+        let layout = interface_positions(mode, origin_cm)?;
+        let edges = &layout.interfaces;
         let signature = mode.signature().map_err(|_| InvalidInput)?;
         let [left_root, right_root] = signature.open_exteriors().ok_or(InvalidInput)?;
         let first_edge = edges[0];
@@ -135,12 +131,10 @@ pub fn project_guided_field(
             }
             let profile = mode.guided_power_profile_with(
                 backend,
-                &sample_grid_with_exterior(&edges, &widths, &grid, panels, true),
+                &layout.sampling(&grid, panels, true),
                 settings,
             )?;
-            let fields = profile.fields.quantity();
-            let e = fields.electric();
-            let h = fields.magnetic();
+            let modal = samples(&profile.fields);
             let mut total = Complex::ZERO;
             for (interval, edge) in grid.windows(2).enumerate() {
                 let [left, right] = [edge[0], edge[1]];
@@ -175,9 +169,7 @@ pub fn project_guided_field(
                     } else {
                         Complex::ONE
                     };
-                    let modal = [e.x()[p], e.y()[p], e.z()[p], h.x()[p], h.y()[p], h.z()[p]]
-                        .map(|v| phase * v);
-                    sum += weight * pairing(supplied, modal);
+                    sum += weight * conjugated(&supplied, &modal[p].map(|v| phase * v));
                 }
                 total += sum * ((right - left) / (3.0 * panels as f64));
             }

@@ -1,10 +1,8 @@
 //! Registered electromagnetic pairing of guided planar modes.
 
+use super::integration::{Layout, Sample, conjugated, converge, intervals, samples};
 use super::*;
-use lamina_core::{
-    ExteriorSampling, FieldSampling, LayerSampling, ModalFieldBackend, OwnedModeFields,
-};
-use lamina_units::Length;
+use lamina_core::ModalFieldBackend;
 
 /// Positions of the two leftmost interfaces in a common transverse frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -45,100 +43,16 @@ pub enum GuidedOverlapError {
 pub(super) fn interface_positions(
     point: &ModePoint,
     origin: f64,
-) -> Result<Vec<f64>, GuidedOverlapError> {
-    if !origin.is_finite() {
-        return Err(GuidedOverlapError::Registration);
-    }
+) -> Result<Layout, GuidedOverlapError> {
     if !point.provenance().stack().is_open() {
         return Err(GuidedOverlapError::ClosedStack);
     }
-    let mut positions = vec![origin];
-    for layer in point.provenance().stack().iter() {
-        let left = *positions.last().expect("initial interface");
-        let right = left + layer.thickness().as_centimetres();
-        if !right.is_finite() || right <= left {
-            return Err(GuidedOverlapError::Registration);
-        }
-        positions.push(right);
-    }
-    Ok(positions)
+    Layout::new(point.provenance().stack(), origin).ok_or(GuidedOverlapError::Registration)
 }
 
-fn sample_grid(
-    interfaces: &[f64],
-    widths: &[f64],
-    partition: &[f64],
-    panels: usize,
-) -> FieldSampling<f64> {
-    sample_grid_with_exterior(interfaces, widths, partition, panels, false)
-}
-
-pub(super) fn sample_grid_with_exterior(
-    interfaces: &[f64],
-    widths: &[f64],
-    partition: &[f64],
-    panels: usize,
-    exterior_at_interface: bool,
-) -> FieldSampling<f64> {
-    let distance = |d| Length::centimetres(if exterior_at_interface { 0.0 } else { d });
-    let last = interfaces.len() - 1;
-    let mut sampling = FieldSampling::new().left_exterior(ExteriorSampling::point(distance(
-        interfaces[0] - partition[0],
-    )));
-    for interval in partition.windows(2) {
-        let left = interval[0];
-        let right = interval[1];
-        // The left boundary belongs to the region immediately to its right.
-        let region = interfaces.partition_point(|&edge| edge <= left);
-        let coordinates = (0..=panels).map(|i| {
-            if i == panels {
-                right
-            } else {
-                left + (right - left) * (i as f64 / panels as f64)
-            }
-        });
-        sampling = if region == 0 {
-            sampling.left_exterior(ExteriorSampling::distances(
-                coordinates.map(|z| distance(interfaces[0] - z)),
-            ))
-        } else if region > last {
-            sampling.right_exterior(ExteriorSampling::distances(
-                coordinates.map(|z| distance(z - interfaces[last])),
-            ))
-        } else {
-            let width = widths[region - 1];
-            sampling.layer(
-                region - 1,
-                LayerSampling::offsets(coordinates.map(|z| {
-                    let offset = if z == interfaces[region] {
-                        width
-                    } else {
-                        (z - interfaces[region - 1]).clamp(0.0, width)
-                    };
-                    Length::centimetres(offset)
-                })),
-            )
-        };
-    }
-    sampling.right_exterior(ExteriorSampling::point(distance(
-        partition[partition.len() - 1] - interfaces[last],
-    )))
-}
-
-fn integrand(a: &OwnedModeFields, b: &OwnedModeFields, i: usize, flux: FluxPairing) -> Complex {
-    let components = |fields: &OwnedModeFields| {
-        let e = fields.quantity().electric();
-        let h = fields.quantity().magnetic();
-        [e.x()[i], e.y()[i], e.z()[i], h.x()[i], h.y()[i], h.z()[i]]
-    };
-    let a = components(a);
-    let b = components(b);
-    match flux {
-        FluxPairing::Power => pairing(a, b),
-        FluxPairing::Reciprocity => {
-            (a[1] * b[5] - a[2] * b[4] - b[1] * a[5] + b[2] * a[4]) * super::power::CM_TO_M_OVER_Z0
-        }
-    }
+/// Antisymmetric flux density (E_a × H_b − E_b × H_a) · x̂, W/m per cm.
+fn reciprocity(a: &Sample, b: &Sample) -> Complex {
+    (a[1] * b[5] - a[2] * b[4] - b[1] * a[5] + b[2] * a[4]) * super::power::CM_TO_M_OVER_Z0
 }
 
 /// Evaluate the power pairing on the union of both structures' interfaces.
@@ -148,7 +62,7 @@ pub fn guided_power_overlap_with<B: ModalFieldBackend + Clone>(
     registration: GuidedOverlapRegistration,
     settings: FieldRecoverySettings,
 ) -> Result<GuidedOverlap, GuidedOverlapError> {
-    integrate_guided_flux(backend, modes, registration, settings, FluxPairing::Power)
+    integrate_guided_flux(backend, modes, registration, settings, conjugated)
 }
 
 /// Bilinear longitudinal Lorentz flux of two normalized guided modes.
@@ -170,13 +84,7 @@ pub fn guided_reciprocity_with<B: ModalFieldBackend + Clone>(
     registration: GuidedOverlapRegistration,
     settings: FieldRecoverySettings,
 ) -> Result<GuidedReciprocity, GuidedOverlapError> {
-    let result = integrate_guided_flux(
-        backend,
-        modes,
-        registration,
-        settings,
-        FluxPairing::Reciprocity,
-    )?;
+    let result = integrate_guided_flux(backend, modes, registration, settings, reciprocity)?;
     Ok(GuidedReciprocity {
         registration,
         flux_w_per_m: result.power_w_per_m,
@@ -187,18 +95,12 @@ pub fn guided_reciprocity_with<B: ModalFieldBackend + Clone>(
     })
 }
 
-#[derive(Clone, Copy)]
-enum FluxPairing {
-    Power,
-    Reciprocity,
-}
-
-fn integrate_guided_flux<B: ModalFieldBackend + Clone>(
+pub(super) fn integrate_guided_flux<B: ModalFieldBackend + Clone>(
     backend: &B,
     modes: [&ModePoint; 2],
     registration: GuidedOverlapRegistration,
     settings: FieldRecoverySettings,
-    flux: FluxPairing,
+    density: fn(&Sample, &Sample) -> Complex,
 ) -> Result<GuidedOverlap, GuidedOverlapError> {
     use GuidedOverlapError::*;
     let [a, b] = modes;
@@ -211,76 +113,57 @@ fn integrate_guided_flux<B: ModalFieldBackend + Clone>(
     {
         return Err(IncompatibleWavelength);
     }
-    let interfaces = [
+    let layouts = [
         interface_positions(a, registration.origins_cm[0])?,
         interface_positions(b, registration.origins_cm[1])?,
     ];
-    let widths = modes.map(|mode| {
-        mode.provenance()
-            .stack()
-            .iter()
-            .map(|layer| layer.thickness().as_centimetres())
-            .collect::<Vec<_>>()
+    let partition = Layout::partition(&[&layouts[0], &layouts[1]]);
+    let roots = [a, b].map(|point| {
+        point
+            .signature()
+            .ok()
+            .and_then(|sig| sig.open_exteriors())
+            .map(|r| r.map(|r| r.im))
     });
-    let mut partition: Vec<_> = interfaces.iter().flatten().copied().collect();
-    partition.sort_by(f64::total_cmp);
-    partition.dedup();
-    let roots = modes.map(|point| {
-        let sig = point.signature().expect("accepted signature");
-        sig.open_exteriors().expect("an open stack").map(|r| r.im)
-    });
-    let mut previous: Option<Complex> = None;
-    for level in 0..11 {
-        let panels = 8 << level;
-        let intervals = partition.len() - 1;
-        let sample_count = intervals
-            .checked_mul(panels + 1)
-            .and_then(|n| n.checked_add(2))
-            .ok_or(Quadrature)?;
-        if sample_count > 131072 {
-            return Err(Quadrature);
-        }
-        let recover = |mode: usize| {
-            modes[mode]
-                .guided_power_profile_with(
-                    backend.clone(),
-                    &sample_grid(&interfaces[mode], &widths[mode], &partition, panels),
-                    settings,
-                )
-                .map_err(|source| Field { mode, source })
-        };
-        let a = recover(0)?;
-        let b = recover(1)?;
-        let value = |i| integrand(&a.fields, &b.fields, i, flux);
-        let tails = [
-            value(0) / (roots[0][0] + roots[1][0]),
-            value(sample_count - 1) / (roots[0][1] + roots[1][1]),
-        ];
-        let mut total = tails[0] + tails[1];
-        for (i, edges) in partition.windows(2).enumerate() {
-            let offset = 1 + i * (panels + 1);
-            let mut sum = value(offset) + value(offset + panels);
-            for j in 1..panels {
-                sum += value(offset + j) * if j % 2 == 1 { 4.0 } else { 2.0 };
-            }
-            total += sum * ((edges[1] - edges[0]) / (3.0 * panels as f64));
-        }
-        if let Some(previous) = previous {
-            let change = (total - previous).norm();
-            if change <= 1e-9 * total.norm().max(1.0) {
-                return Ok(GuidedOverlap {
-                    registration,
-                    power_w_per_m: total,
-                    exterior_power_w_per_m: tails,
-                    partition_cm: partition,
-                    sample_count,
-                    quadrature_change_w_per_m: change,
-                });
-            }
-        }
-        previous = Some(total);
-    }
-    Err(Quadrature)
+    let [Some(left_roots), Some(right_roots)] = roots else {
+        return Err(ClosedStack);
+    };
+    let roots = [left_roots, right_roots];
+    let result = converge(
+        &partition,
+        || Quadrature,
+        |panels, sample_count| {
+            let recover = |mode: usize| {
+                modes[mode]
+                    .guided_power_profile_with(
+                        backend.clone(),
+                        &layouts[mode].sampling(&partition, panels, false),
+                        settings,
+                    )
+                    .map(|profile| samples(&profile.fields))
+                    .map_err(|source| Field { mode, source })
+            };
+            let a = recover(0)?;
+            let b = recover(1)?;
+            let value = |i: usize| density(&a[i], &b[i]);
+            let tails = [
+                value(0) / (roots[0][0] + roots[1][0]),
+                value(sample_count - 1) / (roots[0][1] + roots[1][1]),
+            ];
+            let total = intervals(&partition, panels, value)
+                .into_iter()
+                .fold(tails[0] + tails[1], |total, region| total + region);
+            Ok((vec![total], tails))
+        },
+    )?;
+    Ok(GuidedOverlap {
+        registration,
+        power_w_per_m: result.entries[0],
+        exterior_power_w_per_m: result.extra,
+        partition_cm: partition,
+        sample_count: result.sample_count,
+        quadrature_change_w_per_m: result.change,
+    })
 }
 
 /// Base pairing and the outcome of differentiating it along a shared parameter.
@@ -349,7 +232,7 @@ fn differentiate_overlap<B: lamina_core::ModalDerivativeBackend>(
     {
         return Err(IncompatibleDirection);
     }
-    let interfaces = [
+    let layouts = [
         interface_positions(modes[0], base.registration.origins_cm[0]).map_err(|_| Quadrature)?,
         interface_positions(modes[1], base.registration.origins_cm[1]).map_err(|_| Quadrature)?,
     ];
@@ -358,7 +241,8 @@ fn differentiate_overlap<B: lamina_core::ModalDerivativeBackend>(
         .iter()
         .map(|edge| {
             let speed = |mode: usize| {
-                interfaces[mode]
+                layouts[mode]
+                    .interfaces
                     .iter()
                     .position(|z| z == edge)
                     .map(|i| directions[mode].interface_velocities()[i])
@@ -391,13 +275,6 @@ fn differentiate_overlap<B: lamina_core::ModalDerivativeBackend>(
     let decay_rate = sensitivities
         .each_ref()
         .map(GuidedBetaSensitivity::exterior_decay_rates);
-    let widths = modes.map(|mode| {
-        mode.provenance()
-            .stack()
-            .iter()
-            .map(|layer| layer.thickness().as_centimetres())
-            .collect::<Vec<_>>()
-    });
     let intervals = partition.len() - 1;
     let mut panels = (base.sample_count - 2) / intervals.max(1);
     panels = panels.saturating_sub(1).max(8);
@@ -426,7 +303,7 @@ fn differentiate_overlap<B: lamina_core::ModalDerivativeBackend>(
             sensitivities[mode]
                 .power_field_tangent_on_mesh(
                     backend,
-                    &sample_grid(&interfaces[mode], &widths[mode], partition, panels),
+                    &layouts[mode].sampling(partition, panels, false),
                     GuidedObservationFrame::MaterialAttached,
                     amplitude,
                     Some(&mesh),
@@ -441,8 +318,8 @@ fn differentiate_overlap<B: lamina_core::ModalDerivativeBackend>(
             let da = a.tangent.map_err(Observation)?;
             let db = b.tangent.map_err(Observation)?;
             Ok((
-                pairing(a.field, b.field),
-                pairing(da, b.field) + pairing(a.field, db),
+                conjugated(&a.field, &b.field),
+                conjugated(&da, &b.field) + conjugated(&a.field, &db),
             ))
         };
         let tail = |side: usize, sample: usize| {
@@ -492,9 +369,4 @@ fn differentiate_overlap<B: lamina_core::ModalDerivativeBackend>(
         previous = Some((integral, rate));
         panels = panels.checked_mul(2).ok_or(Quadrature)?;
     }
-}
-
-pub(super) fn pairing(a: [Complex; 6], b: [Complex; 6]) -> Complex {
-    (a[1] * b[5].conj() - a[2] * b[4].conj() + b[1].conj() * a[5] - b[2].conj() * a[4])
-        * (0.25 * super::power::CM_TO_M_OVER_Z0)
 }

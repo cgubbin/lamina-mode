@@ -97,7 +97,8 @@ pub fn guided_local_coupling_with<B: ModalFieldBackend + Clone>(
         .iter()
         .map(|layer| layer.thickness().as_centimetres())
         .collect();
-    let interfaces = super::overlap::interface_positions(&modes[0], 0.0).map_err(|_| Ineligible)?;
+    let layout = super::overlap::interface_positions(&modes[0], 0.0).map_err(|_| Ineligible)?;
+    let interfaces = &layout.interfaces;
     let betas: Vec<_> = modes
         .iter()
         .map(|mode| mode.physical_coordinate().re)
@@ -120,13 +121,7 @@ pub fn guided_local_coupling_with<B: ModalFieldBackend + Clone>(
         if count.saturating_mul(n) > 262144 {
             return Err(Quadrature);
         }
-        let sampling = super::overlap::sample_grid_with_exterior(
-            &interfaces,
-            &widths,
-            &interfaces,
-            panels,
-            true,
-        );
+        let sampling = layout.sampling(interfaces, panels, true);
         let fields = modes
             .iter()
             .enumerate()
@@ -152,10 +147,7 @@ pub fn guided_local_coupling_with<B: ModalFieldBackend + Clone>(
                     let offset = 1 + layer * (panels + 1);
                     let rate = rates[layer + 1].relative_permittivity;
                     if rate != 0.0 {
-                        let mut sum = product(offset) + product(offset + panels);
-                        for p in 1..panels {
-                            sum += product(offset + p) * if p % 2 == 1 { 4.0 } else { 2.0 };
-                        }
+                        let sum = super::integration::simpson_sum(offset, panels, product);
                         value += rate * width / (3.0 * panels as f64) * sum;
                     }
                 }
