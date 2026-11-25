@@ -1,7 +1,10 @@
-//! Local perturbation matrix for nonmagnetic guided planar modes.
+//! Local perturbation matrix for nonmagnetic guided planar modes. Regions are
+//! isotropic or diagonal in the stack frame; each field component is weighted
+//! by its own permittivity entry.
 
 use super::*;
-use lamina_core::{EvaluateMeromorphicMaterial, ModalFieldBackend, Scalar};
+use crate::problem::material::{self, Principal};
+use lamina_core::ModalFieldBackend;
 use nalgebra::DMatrix;
 
 #[derive(Debug)]
@@ -38,7 +41,7 @@ pub enum GuidedCouplingError {
 
 /// Form local coupling coefficients with the positive-left-primary phase rule.
 /// `gap_atol_cm` is an absolute separation in inverse centimetres.
-pub fn guided_local_coupling_with<B: ModalFieldBackend + Clone>(
+pub fn guided_local_coupling_with<B: ModalFieldBackend<Region> + Clone>(
     backend: &B,
     basis: &GuidedBasis,
     direction: &GuidedPerturbation,
@@ -73,24 +76,25 @@ pub fn guided_local_coupling_with<B: ModalFieldBackend + Clone>(
     {
         return Err(Ineligible);
     }
-    let rates = direction.regional_rates();
-    let epsilon = std::iter::once(stack.left_exterior())
-        .chain(stack.iter().map(|layer| layer.material()))
-        .chain(std::iter::once(stack.right_exterior()))
-        .zip(rates)
-        .map(|(material, rate)| {
-            let coordinate = Scalar(Complex::new(k.re, 0.0));
-            let e = material.evaluate_relative_permittivity_complex(coordinate);
-            let m = material.evaluate_relative_permeability_complex(coordinate);
-            if m != Complex::ONE
-                || rate.relative_permeability != 0.0
-                || e.im != 0.0
-                || e.re <= 0.0
-                || !e.re.is_finite()
+    let rates: Vec<_> = direction
+        .regional_rates()
+        .iter()
+        .map(|rate| rate.tensors()[0])
+        .collect();
+    let epsilon = material::regions(stack)
+        .zip(direction.regional_rates())
+        .map(|((region, material), rate)| {
+            let coordinate = Complex::new(k.re, 0.0);
+            let [e, m] = material::tensors(region, material, coordinate).map_err(|_| Ineligible)?;
+            if m.entries() != [Complex::ONE; 3]
+                || rate.tensors()[1].entries() != [0.0; 3]
+                || e.entries()
+                    .iter()
+                    .any(|e| e.im != 0.0 || e.re <= 0.0 || !e.re.is_finite())
             {
                 return Err(Ineligible);
             }
-            Ok(e.re)
+            Ok(e.map(|e| e.re))
         })
         .collect::<Result<Vec<_>, _>>()?;
     let widths: Vec<_> = stack
@@ -136,19 +140,32 @@ pub fn guided_local_coupling_with<B: ModalFieldBackend + Clone>(
             let a = fields[i].fields.quantity().electric();
             for j in i..n {
                 let b = fields[j].fields.quantity().electric();
+                let components = |p: usize| {
+                    [
+                        a.x()[p].conj() * b.x()[p],
+                        a.y()[p].conj() * b.y()[p],
+                        a.z()[p].conj() * b.z()[p],
+                    ]
+                };
                 let tangential = |p| a.x()[p].conj() * b.x()[p] + a.y()[p].conj() * b.y()[p];
                 let normal = |p| a.z()[p].conj() * b.z()[p];
-                let product = |p| tangential(p) + normal(p);
-                let mut value = rates[0].relative_permittivity * product(0)
-                    / (decay[i][0] + decay[j][0])
-                    + rates[rates.len() - 1].relative_permittivity * product(count - 1)
+                let mut value = rates[0].weigh(components(0)) / (decay[i][0] + decay[j][0])
+                    + rates[rates.len() - 1].weigh(components(count - 1))
                         / (decay[i][1] + decay[j][1]);
                 for (layer, width) in widths.iter().enumerate() {
                     let offset = 1 + layer * (panels + 1);
-                    let rate = rates[layer + 1].relative_permittivity;
-                    if rate != 0.0 {
-                        let sum = super::integration::simpson_sum(offset, panels, product);
-                        value += rate * width / (3.0 * panels as f64) * sum;
+                    match rates[layer + 1] {
+                        Principal::Isotropic(0.0) => {}
+                        Principal::Isotropic(rate) => {
+                            let product = |p| tangential(p) + normal(p);
+                            let sum = super::integration::simpson_sum(offset, panels, product);
+                            value += rate * width / (3.0 * panels as f64) * sum;
+                        }
+                        rate => {
+                            let product = |p| rate.weigh(components(p));
+                            let sum = super::integration::simpson_sum(offset, panels, product);
+                            value += width / (3.0 * panels as f64) * sum;
+                        }
                     }
                 }
                 for (interface, &velocity) in direction.interface_velocities().iter().enumerate() {
@@ -158,10 +175,19 @@ pub fn guided_local_coupling_with<B: ModalFieldBackend + Clone>(
                     } else {
                         interface * (panels + 1)
                     };
-                    let left = epsilon[interface];
-                    let right = epsilon[interface + 1];
-                    let jump = (left - right) * tangential(p)
-                        - (left.recip() - right.recip()) * left * left * normal(p);
+                    // Tangential E and normal D = ε_zz E_z are continuous.
+                    let jump = match (epsilon[interface], epsilon[interface + 1]) {
+                        (Principal::Isotropic(left), Principal::Isotropic(right)) => {
+                            (left - right) * tangential(p)
+                                - (left.recip() - right.recip()) * left * left * normal(p)
+                        }
+                        (left, right) => {
+                            let (l, r) = (left.entries(), right.entries());
+                            let [x, y, z] = components(p);
+                            (l[0] - r[0]) * x + (l[1] - r[1]) * y
+                                - (l[2].recip() - r[2].recip()) * l[2] * l[2] * z
+                        }
+                    };
                     value += velocity * jump;
                 }
                 let value = prefactor * value;

@@ -80,9 +80,9 @@ use crate::analytic::AnalyticChart;
 use crate::conformal::{ValidateConformalRegion, chart::LinearCoordinateMap};
 use lamina_core::{
     Backend, CanonicalCoordinates, ComplexPlane, ComplexPlaneEvaluator, ComplexScalar,
-    ConstitutiveEvaluator, DeterminantEvaluationError, ExteriorWavevectors, Jet, ModeJet1,
-    PlaneWaveDeterminant, Polarisation, ProjectPlaneWaveModeDeterminant, ScalarAlgebra, SeedJet,
-    Stack, StackCompileError, StackThicknessJet, TensorConstitutiveLift,
+    DeterminantEvaluationError, ExteriorWavevectors, Jet, ModeJet1, PlaneWaveDeterminant,
+    Polarisation, ProjectPlaneWaveModeDeterminant, ScalarAlgebra, SeedJet, Stack,
+    StackCompileError, StackThicknessJet, TensorConstitutiveLift,
 };
 
 use argloc::FunctionBundle;
@@ -308,7 +308,6 @@ where
     J: ScalarAlgebra<Dimension = Ix0> + TensorConstitutiveLift<ComplexPlane, M>,
     J::Scalar: ComplexScalar,
     M: Clone,
-    ComplexPlane: ConstitutiveEvaluator<J::Scalar, Ix0, M>,
     B: Backend<J, ComplexPlane>,
     <B as Backend<J, ComplexPlane>>::Entries:
         ProjectPlaneWaveModeDeterminant<Determinant = PlaneWaveDeterminant<J>>,

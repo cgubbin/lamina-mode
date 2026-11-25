@@ -61,7 +61,7 @@ pub struct ModeFields {
 impl ModePoint {
     /// Recover fields at the stored physical point with core sampling conventions.
     /// No discovery, refinement, principal-root replacement or QNM normalization.
-    pub fn recover_fields_with<B: ModalFieldBackend>(
+    pub fn recover_fields_with<B: ModalFieldBackend<Region>>(
         &self,
         backend: B,
         sampling: &FieldSampling<f64>,

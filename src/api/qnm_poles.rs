@@ -1,7 +1,7 @@
 //! Finite-region discovery and checked local correspondence of scattering poles.
 
 use super::*;
-use lamina_core::{AnalyticalMaterialStack, Polarisation, Scatter2};
+use lamina_core::{Polarisation, Scatter2};
 
 #[derive(Clone, Debug)]
 pub struct QnmPoleRequest {
@@ -57,7 +57,7 @@ pub enum QnmPoleSearchError {
 }
 
 fn setup(
-    stack: AnalyticalMaterialStack<Complex>,
+    stack: ModeStack,
     request: &QnmPoleRequest,
 ) -> Result<(FrequencyProblem, Domain), QnmPoleSearchError> {
     let bounds = request.domain.bounds.bounds();
@@ -119,10 +119,10 @@ fn sort_poles(poles: &mut [QnmScatteringResidue]) {
 }
 
 pub fn select_qnm_poles(
-    stack: AnalyticalMaterialStack<Complex>,
+    stack: impl Into<ModeStack>,
     request: QnmPoleRequest,
 ) -> Result<QnmPoleSet, QnmPoleSearchError> {
-    let (problem, domain) = setup(stack, &request)?;
+    let (problem, domain) = setup(stack.into(), &request)?;
     discover(problem, domain, request)
 }
 
@@ -210,7 +210,7 @@ pub struct QnmPoleTrack {
 /// Correct the previous poles locally or refresh the destination with discovery.
 pub fn track_qnm_poles(
     source: &QnmPoleSet,
-    stack: AnalyticalMaterialStack<Complex>,
+    stack: impl Into<ModeStack>,
     request: QnmPoleRequest,
     settings: QnmPoleTrackingSettings,
 ) -> Result<QnmPoleTrack, QnmPoleSearchError> {
@@ -222,7 +222,7 @@ pub fn track_qnm_poles(
     {
         return Err(QnmPoleSearchError::InvalidRequest);
     }
-    let (problem, domain) = setup(stack, &request)?;
+    let (problem, domain) = setup(stack.into(), &request)?;
     let distinct_seeds = source.poles.iter().enumerate().all(|(i, a)| {
         source.poles[..i]
             .iter()

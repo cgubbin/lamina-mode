@@ -230,6 +230,10 @@ where
     sqrt_chi_right: A,
 
     branch_roots: [A::Scalar; 2],
+
+    // √s per side for an exterior whose wavevector is κ = √s κ_χ, with
+    // s = t/n of the polarisation's channel; absent when s = 1.
+    root_scales: [Option<A::Scalar>; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -300,7 +304,15 @@ where
             sqrt_chi_right: A::lift_constant(arr0(chi_right.sqrt())),
 
             branch_roots,
+            root_scales: [None; 2],
         })
+    }
+
+    /// Scale each side's exterior wavevector by the principal `√s`, for
+    /// `κ² = s (χ k0² − kx²)`. The branch points, at `kx² = χ k0²`, do not move.
+    pub(crate) fn with_exterior_scales(mut self, scales: [Option<A::Scalar>; 2]) -> Self {
+        self.root_scales = scales.map(|s| s.map(|s| s.sqrt()));
+        self
     }
 
     fn kx_scalar(&self) -> A::Scalar {
@@ -438,6 +450,13 @@ where
             .add(&r_exp_minus_z)
             .multiply(&self.sqrt_chi_right)
             .scale(i);
+
+        let scaled = |kappa: A, root: Option<A::Scalar>| match root {
+            Some(root) => kappa.scale(root),
+            None => kappa,
+        };
+        let kappa_left = scaled(kappa_left, self.root_scales[0]);
+        let kappa_right = scaled(kappa_right, self.root_scales[1]);
 
         ConformalPoint::new(
             CanonicalCoordinates::new(k0, self.kx.clone()),

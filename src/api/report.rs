@@ -59,7 +59,7 @@ impl Provenance {
     pub fn polarisation(&self) -> lamina_core::Polarisation {
         self.inner.problem().polarisation()
     }
-    pub fn stack(&self) -> &lamina_core::AnalyticalMaterialStack<Complex> {
+    pub fn stack(&self) -> &ModeStack {
         self.inner.problem().stack()
     }
 }

@@ -1,11 +1,11 @@
 //! Prediction, counted correction and overlap matching for guided bases.
 
 use super::*;
-use lamina_core::{AnalyticalMaterialStack, Scatter2};
+use lamina_core::Scatter2;
 
 /// One parameter step at fixed vacuum wavelength and polarization.
 pub struct GuidedTrackingStep {
-    pub stack: AnalyticalMaterialStack<Complex>,
+    pub stack: ModeStack,
     pub window: GuidedWindow,
     pub perturbation: GuidedPerturbation,
     /// Signed increment of the parameter named by the perturbation.
@@ -113,8 +113,12 @@ pub fn track_guided_basis(
                 .collect::<Option<Vec<_>>>()
         })
         .flatten();
-    let (basis, used_local_correction) =
-        super::guided::search_guided_modes(step.stack, step.window, seeds.as_deref())?;
+    let (basis, used_local_correction) = super::guided::search_guided_modes(
+        lamina_core::Scatter2::new(),
+        step.stack,
+        step.window,
+        seeds.as_deref(),
+    )?;
     let n = previous.modes.len();
     let m = basis.modes.len();
     let mut row_best = vec![0.0_f64; n];

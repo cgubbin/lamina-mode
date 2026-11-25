@@ -56,7 +56,7 @@ fn reciprocity(a: &Sample, b: &Sample) -> Complex {
 }
 
 /// Evaluate the power pairing on the union of both structures' interfaces.
-pub fn guided_power_overlap_with<B: ModalFieldBackend + Clone>(
+pub fn guided_power_overlap_with<B: ModalFieldBackend<Region> + Clone>(
     backend: &B,
     modes: [&ModePoint; 2],
     registration: GuidedOverlapRegistration,
@@ -78,7 +78,7 @@ pub struct GuidedReciprocity {
 }
 
 /// Evaluate the unconjugated, antisymmetric flux using signed unit-power modes.
-pub fn guided_reciprocity_with<B: ModalFieldBackend + Clone>(
+pub fn guided_reciprocity_with<B: ModalFieldBackend<Region> + Clone>(
     backend: &B,
     modes: [&ModePoint; 2],
     registration: GuidedOverlapRegistration,
@@ -95,7 +95,7 @@ pub fn guided_reciprocity_with<B: ModalFieldBackend + Clone>(
     })
 }
 
-pub(super) fn integrate_guided_flux<B: ModalFieldBackend + Clone>(
+pub(super) fn integrate_guided_flux<B: ModalFieldBackend<Region> + Clone>(
     backend: &B,
     modes: [&ModePoint; 2],
     registration: GuidedOverlapRegistration,
@@ -204,7 +204,7 @@ pub enum GuidedOverlapDerivativeError {
 /// Differentiate the registered power pairing. Both directions use the same
 /// parameter unit, and their first interface velocities move the origins.
 pub fn guided_power_overlap_sensitivity_with<
-    B: ModalFieldBackend + lamina_core::ModalDerivativeBackend,
+    B: ModalFieldBackend<Region> + lamina_core::ModalDerivativeBackend,
 >(
     backend: &B,
     modes: [&ModePoint; 2],

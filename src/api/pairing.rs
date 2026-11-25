@@ -22,7 +22,7 @@ use super::integration::{
     Layout, Sample, conjugated, converge, equivalent, integral, intervals, split_pmls, unconjugated,
 };
 use super::*;
-use lamina_core::{AnalyticalMaterialStack, ModalFieldBackend, StackSide};
+use lamina_core::{ModalFieldBackend, StackSide};
 use nalgebra::DMatrix;
 
 #[derive(Clone, Debug)]
@@ -84,7 +84,7 @@ pub enum PairingError {
 
 /// Both stacks' layouts, when their wavelengths, walls and PMLs agree.
 fn compatible(
-    stacks: [&AnalyticalMaterialStack<Complex>; 2],
+    stacks: [&ModeStack; 2],
     k0: [f64; 2],
     registration: GuidedOverlapRegistration,
 ) -> Result<[Layout; 2], PairingError> {
@@ -121,7 +121,7 @@ fn compatible(
 }
 
 /// Both pairings of two normalised basis modes in a registered frame.
-pub fn modal_pairing_with<B: ModalFieldBackend + Clone>(
+pub fn modal_pairing_with<B: ModalFieldBackend<Region> + Clone>(
     backend: &B,
     modes: [&BasisMode; 2],
     registration: GuidedOverlapRegistration,
@@ -135,7 +135,13 @@ pub fn modal_pairing_with<B: ModalFieldBackend + Clone>(
     let layouts = compatible([&stacks[0], &stacks[1]], k0, registration)?;
     let partition = split_pmls(
         Layout::partition(&[&layouts[0], &layouts[1]]),
-        &[(&layouts[0], &stacks[0]), (&layouts[1], &stacks[1])],
+        &[0, 1].map(|i| {
+            (
+                &layouts[i],
+                &stacks[i],
+                modes[i].point.provenance().polarisation(),
+            )
+        }),
         k0[0],
         &modes.map(|m| m.point.physical_coordinate()),
     );
@@ -176,7 +182,7 @@ pub fn modal_pairing_with<B: ModalFieldBackend + Clone>(
     })
 }
 
-fn sampled<B: ModalFieldBackend + Clone>(
+fn sampled<B: ModalFieldBackend<Region> + Clone>(
     backend: &B,
     mode: &BasisMode,
     operand: usize,
@@ -199,7 +205,7 @@ fn sampled<B: ModalFieldBackend + Clone>(
 /// Both pairing matrices between the normalised modes of two bases, with
 /// conditioning and each basis's own Gram defect, all from one shared grid
 /// at one refinement level. Incomplete bases are accepted.
-pub fn basis_pairing_with<B: ModalFieldBackend + Clone>(
+pub fn basis_pairing_with<B: ModalFieldBackend<Region> + Clone>(
     backend: &B,
     bases: [&ModalBasis; 2],
     registration: GuidedOverlapRegistration,
@@ -223,10 +229,10 @@ pub fn basis_pairing_with<B: ModalFieldBackend + Clone>(
         .collect();
     let partition = split_pmls(
         Layout::partition(&[&layouts[0], &layouts[1]]),
-        &[
-            (&layouts[0], &bases[0].stack),
-            (&layouts[1], &bases[1].stack),
-        ],
+        &[0, 1].map(|i| {
+            let ModeFamily::Polarised(polarisation) = bases[i].request.family;
+            (&layouts[i], &bases[i].stack, polarisation)
+        }),
         bases[0].request.k0_cm(),
         &betas,
     );

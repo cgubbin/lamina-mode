@@ -5,7 +5,7 @@
 use super::radiation::{RadiationChoice, RadiationProvenance, RadiationTolerance, finite};
 use super::*;
 use crate::conformal::ConformalPoint;
-use lamina_core::SeedJet;
+use lamina_core::{AnalyticalMaterialHandle, SeedJet};
 use lamina_core::{CanonicalCoordinates, ConstitutiveLift, ExteriorWavevectors, ScalarAlgebra};
 use ndarray::arr0;
 use std::convert::Infallible;
@@ -138,6 +138,8 @@ pub enum ExteriorFailure {
     InconsistentValue,
     #[error("exterior jet derivative is inconsistent with continuation")]
     InconsistentDerivative,
+    #[error("exterior is not isotropic")]
+    Anisotropic,
 }
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 pub enum FrequencyError {
@@ -495,11 +497,12 @@ pub(super) fn halo(region: ConformalRegion<f64>) -> Option<ConformalRegion<f64>>
 impl<B: Backend<J, ComplexPlane>> FrequencyProblem<B> {
     /// Reuse a complete core analytical stack. No sampled exterior replacement.
     pub fn frequency(
-        stack: AnalyticalMaterialStack<C>,
+        stack: impl Into<ModeStack>,
         beta: f64,
         pol: Polarisation,
         backend: B,
     ) -> Result<Self, ProblemError> {
+        let stack = stack.into();
         if !beta.is_finite() {
             return Err(ProblemError::Spectral(
                 WavenumberMapError::InvalidInPlaneWavenumber,
@@ -509,6 +512,8 @@ impl<B: Backend<J, ComplexPlane>> FrequencyProblem<B> {
         if !stack.is_open() {
             return Err(ProblemError::ClosedSide);
         }
+        material::check_regions(&stack)?;
+        material::isotropic_exteriors(&stack)?;
         let solver = Compiled::compile(&stack, backend, pol)?;
         Ok(Self {
             context: Arc::new(ProblemContext {
@@ -573,10 +578,19 @@ impl<S: ModeDeterminantSolver<J> + Clone> ModalProblem<(), S> {
         };
         let chart = FrequencyChart {
             region: r,
-            materials: [
-                self.context.stack.left_exterior().clone(),
-                self.context.stack.right_exterior().clone(),
-            ],
+            materials: material::isotropic_exteriors(&self.context.stack).map_err(|e| {
+                FrequencyError::Exterior {
+                    side: usize::from(matches!(
+                        e,
+                        lamina_core::ConstitutiveError::Unsupported {
+                            region: lamina_core::StackRegion::RightExterior,
+                            ..
+                        }
+                    )),
+                    source: ExteriorFailure::Anisotropic,
+                    evaluations: 0,
+                }
+            })?,
             beta,
             evidence: FrequencyEvidence {
                 reference,

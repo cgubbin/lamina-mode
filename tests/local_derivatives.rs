@@ -93,7 +93,7 @@ fn propagation_root_at(
     k0: f64,
     beta_guess: Complex,
 ) -> Result<ModePoint, Box<dyn std::error::Error>> {
-    let stack = source.provenance().stack().clone();
+    let stack = reference::scalar_stack(source.provenance().stack());
     let old = *source.signature().map_err(|error| format!("{error:?}"))?;
     let exteriors = [stack.left_exterior(), stack.right_exterior()];
     let branches = exteriors.map(|material| {
@@ -144,7 +144,7 @@ fn temporal_root_at_beta(
     beta: Complex,
     k0_guess: Complex,
 ) -> Result<Complex, Box<dyn std::error::Error>> {
-    let stack = source.provenance().stack().clone();
+    let stack = reference::scalar_stack(source.provenance().stack());
     let old = *source.signature().map_err(|error| format!("{error:?}"))?;
     let mut root = k0_guess;
     for _ in 0..30 {
@@ -242,7 +242,7 @@ fn physical_coordinate_partials_match_branch_anchored_finite_differences() {
     ] {
         let signature = *point.signature().unwrap();
         let provenance = point.provenance();
-        let stack = provenance.stack();
+        let stack = &reference::scalar_stack(provenance.stack());
         let pol = provenance.polarisation();
         let report = local(&point, &[PhysicalParameter::K0, PhysicalParameter::Beta]);
         let accepted_value = report.characteristic.as_ref().unwrap();
@@ -350,7 +350,7 @@ fn plasmon_and_film_physical_partials_match_independent_finite_differences() {
         let signature = *point.signature().unwrap();
         let provenance = point.provenance();
         let pol = provenance.polarisation();
-        let stack = provenance.stack();
+        let stack = &reference::scalar_stack(provenance.stack());
         let report = local(&point, &[PhysicalParameter::K0, PhysicalParameter::Beta]);
         for (parameter, error) in [(PhysicalParameter::K0, 0), (PhysicalParameter::Beta, 1)] {
             let h = 0.01;
@@ -464,7 +464,7 @@ fn thickness_partial_matches_fixed_coordinate_finite_difference_and_slope_is_gua
     let point = fixtures::cavity(Polarisation::TransverseMagnetic, true).unwrap();
     let signature = *point.signature().unwrap();
     let provenance = point.provenance();
-    let stack = provenance.stack();
+    let stack = &reference::scalar_stack(provenance.stack());
     let layer = stack.layers_left_to_right().first().unwrap();
     let thickness = layer.thickness().as_centimetres();
     let h = 1e-6;
@@ -798,7 +798,9 @@ fn guided_rates_combine_dispersion_and_explicit_index_variation() {
         vec![explicit, ConstitutiveRate::default()],
     )
     .unwrap();
-    let rates = direction.total_regional_rates(&stack, TAU).unwrap();
+    let rates = direction
+        .total_regional_rates(&ModeStack::from(stack.clone()), TAU)
+        .unwrap();
     assert!((explicit.relative_permittivity - 0.6).abs() < 1e-14);
     assert!((direction.k0_rate(TAU).unwrap() + TAU * wavelength_rate).abs() < 1e-14);
     let h = 1e-5;

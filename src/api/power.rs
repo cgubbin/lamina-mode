@@ -1,8 +1,8 @@
 //! Longitudinal power per metre of invariant width for a lossless dielectric guide.
 use super::*;
+use crate::problem::material::{self, Channel};
 use lamina_core::{
-    EvaluateMeromorphicMaterial, ExteriorSampling, FieldSampling, LayerSampling, ModalFieldBackend,
-    Polarisation, Scalar,
+    ExteriorSampling, FieldSampling, LayerSampling, ModalFieldBackend, Polarisation,
 };
 use lamina_units::Length;
 
@@ -42,15 +42,6 @@ pub enum GuidedPowerError {
 pub struct PmlIntegral {
     pub side: lamina_core::StackSide,
 }
-/// The materials of each region: left exterior, layers, right exterior.
-pub(super) fn region_materials(
-    stack: &lamina_core::AnalyticalMaterialStack<Complex>,
-) -> impl Iterator<Item = &lamina_core::AnalyticalMaterialHandle<Complex>> {
-    std::iter::once(stack.left_exterior())
-        .chain(stack.iter().map(|layer| layer.material()))
-        .chain(std::iter::once(stack.right_exterior()))
-}
-
 /// A composite-Simpson grid over the transverse profile of a guided mode,
 /// region by region from the left exterior to the right. Each finite layer
 /// and each wall gap is sampled uniformly with both ends, its intervals set by
@@ -103,34 +94,47 @@ impl Span {
 }
 
 impl ProfileGrid {
-    /// Base intervals are `per_radian` times the region's transverse phase,
-    /// rounded up and at least `min_radians`. `None` past 4096 radians.
-    /// A PML side is refused.
+    /// Base intervals are `per_radian` times the region's transverse phase
+    /// for `polarisation`, rounded up and at least `min_radians`. `None` past
+    /// 4096 radians or for a region that cannot be evaluated. A PML side is
+    /// refused.
     pub(super) fn new(
-        stack: &lamina_core::AnalyticalMaterialStack<Complex>,
+        stack: &ModeStack,
+        polarisation: Polarisation,
         k: Complex,
         beta: Complex,
         per_radian: usize,
         min_radians: usize,
     ) -> Result<Option<Self>, PmlIntegral> {
-        let at = Scalar(k);
-        let intervals = |material: &lamina_core::AnalyticalMaterialHandle<Complex>, width: f64| {
-            let e = material.evaluate_relative_permittivity_complex(at);
-            let m = material.evaluate_relative_permeability_complex(at);
-            let phase = width * (e * m * k * k - beta * beta).norm().sqrt();
+        let layers = stack.len();
+        let intervals = |index: usize, region: &Region, width: f64| {
+            let tensors = material::tensors(material::region_id(index, layers), region, k).ok()?;
+            let kappa_squared = Channel::of(&tensors, polarisation).kappa_squared(k, beta);
+            let phase = width * kappa_squared.norm().sqrt();
             (phase.is_finite() && phase <= 4096.)
                 .then(|| (width, per_radian * (phase.ceil() as usize).max(min_radians)))
         };
         let [left, right] = crate::problem::walls(stack).map_err(|side| PmlIntegral { side })?;
-        let gap = |wall: Option<(lamina_core::WallKind, f64)>, material| match wall {
+        let gap = |wall: Option<(lamina_core::WallKind, f64)>, index, material| match wall {
             None => Some(None),
-            Some((_, width)) => intervals(material, width).map(Some),
+            Some((_, width)) => intervals(index, material, width).map(Some),
         };
-        let regions = std::iter::once(gap(left, stack.left_exterior()))
-            .chain(stack.layers_left_to_right().iter().map(|layer| {
-                intervals(layer.material(), layer.thickness().as_centimetres()).map(Some)
-            }))
-            .chain(std::iter::once(gap(right, stack.right_exterior())))
+        let regions = std::iter::once(gap(left, 0, stack.left_exterior()))
+            .chain(
+                stack
+                    .layers_left_to_right()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, layer)| {
+                        intervals(i + 1, layer.material(), layer.thickness().as_centimetres())
+                            .map(Some)
+                    }),
+            )
+            .chain(std::iter::once(gap(
+                right,
+                layers + 1,
+                stack.right_exterior(),
+            )))
             .collect::<Option<_>>();
         Ok(regions.map(|regions| Self { regions }))
     }
@@ -185,7 +189,7 @@ impl ModePoint {
     /// Set the magnitude of longitudinal power to one W/m and the left
     /// interface Ey (TE) or Z0 Hy (TM) to positive real. The input sampling
     /// controls only the returned profile, independently of power integration.
-    pub fn guided_power_profile_with<B: ModalFieldBackend + Clone>(
+    pub fn guided_power_profile_with<B: ModalFieldBackend<Region> + Clone>(
         &self,
         backend: B,
         sampling: &FieldSampling<f64>,
@@ -209,18 +213,21 @@ impl ModePoint {
         }
         let prov = self.provenance();
         let stack = prov.stack();
-        let at = Scalar(Complex::new(k.re, 0.));
-        let lossless = |mat: &lamina_core::AnalyticalMaterialHandle<Complex>| {
-            let e = mat.evaluate_relative_permittivity_complex(at);
-            let m = mat.evaluate_relative_permeability_complex(at);
-            [e, m]
-                .iter()
-                .all(|v| v.re.is_finite() && v.re > 0. && v.im == 0.)
+        let at = Complex::new(k.re, 0.);
+        // Lossless in the entries this polarisation sees.
+        let lossless = |(region, m): (lamina_core::StackRegion, &Region)| {
+            material::tensors(region, m, at).is_ok_and(|tensors| {
+                Channel::of(&tensors, prov.polarisation())
+                    .entries()
+                    .iter()
+                    .all(|v| v.re.is_finite() && v.re > 0. && v.im == 0.)
+            })
         };
-        if !region_materials(stack).all(lossless) {
+        if !material::regions(stack).all(lossless) {
             return Err(Ineligible);
         }
-        let grid = ProfileGrid::new(stack, k, beta, 2, 4)?.ok_or(Quadrature)?;
+        let grid =
+            ProfileGrid::new(stack, prov.polarisation(), k, beta, 2, 4)?.ok_or(Quadrature)?;
         let mut prev = None;
         for level in 0..8 {
             let integration = grid.sampling(level).ok_or(Quadrature)?;

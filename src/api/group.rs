@@ -5,16 +5,15 @@
 //! - as the total derivative of β along the root as the vacuum wavelength
 //!   changes, with every material's dispersion included;
 //! - as the energy velocity ratio `c W / P`, from the time-averaged stored
-//!   energy per unit length `W`, with the dispersive weights `ε + k₀ ∂ε/∂k₀`
-//!   and `μ + k₀ ∂μ/∂k₀`, and the longitudinal power `P`.
+//!   energy per unit length `W`, with the dispersive weights `ε_ii + k₀ ∂ε_ii/∂k₀`
+//!   and `μ_ii + k₀ ∂μ_ii/∂k₀` of each field component, and the longitudinal
+//!   power `P`.
 //!
 //! For a lossless guided mode the two agree; the result is certified only if
 //! they do, within a stated tolerance, and the derivative is real. The value
 //! is signed like β: positive for forward modes.
 use super::*;
-use lamina_core::{
-    DerivativeOrder, EvaluateDifferentiableMeromorphicMaterial, EvaluateMeromorphicMaterial, Scalar,
-};
+use crate::problem::material::{self, Channel, Principal};
 
 /// A group index and the evidence that certifies it.
 #[derive(Clone, Debug)]
@@ -71,7 +70,7 @@ impl ModePoint {
         tolerance: f64,
     ) -> Result<GroupIndex, GroupIndexError>
     where
-        B: lamina_core::ModalDerivativeBackend + lamina_core::ModalFieldBackend + Clone,
+        B: lamina_core::ModalDerivativeBackend + lamina_core::ModalFieldBackend<Region> + Clone,
     {
         use GroupIndexError::*;
         if !tolerance.is_finite() || tolerance <= 0. {
@@ -115,22 +114,30 @@ impl ModePoint {
         let k0_rate = direction.k0_rate(k.re).map_err(|_| Ineligible)?;
         let derivative = sensitivity.beta_rate / k0_rate;
 
-        // Dispersive energy weights per region: left exterior, layers, right exterior.
-        let at = Scalar(Complex::new(k.re, 0.));
-        let weights = super::power::region_materials(stack)
-            .map(|m| {
-                let e = m.evaluate_relative_permittivity_complex(at);
-                let mu = m.evaluate_relative_permeability_complex(at);
-                let de =
-                    m.evaluate_relative_permittivity_complex_derivative(at, DerivativeOrder::First);
-                let dmu =
-                    m.evaluate_relative_permeability_complex_derivative(at, DerivativeOrder::First);
-                let (we, wm) = (e + k.re * de, mu + k.re * dmu);
-                let real = |z: Complex| z.re.is_finite() && z.im == 0.;
-                if !(real(e) && real(mu) && real(we) && real(wm)) {
+        // Dispersive energy weights per region and component: left exterior,
+        // layers, right exterior. The entries the polarisation sees must be real.
+        let polarisation = provenance.polarisation();
+        let at = Complex::new(k.re, 0.);
+        let dispersive = |value: Principal<Complex>, rate: Principal<Complex>| match (value, rate) {
+            (Principal::Isotropic(v), Principal::Isotropic(d)) => {
+                Principal::Isotropic(v + k.re * d)
+            }
+            _ => {
+                let (v, d) = (value.entries(), rate.entries());
+                Principal::Diagonal(std::array::from_fn(|i| v[i] + k.re * d[i]))
+            }
+        };
+        let weights = material::regions(stack)
+            .map(|(region, m)| {
+                let [values, rates] =
+                    material::tensors_and_rates(region, m, at).map_err(|_| Ineligible)?;
+                let weights = [0, 1].map(|i| dispersive(values[i], rates[i]));
+                let real = |z: &Complex| z.re.is_finite() && z.im == 0.;
+                let seen = [values, weights].map(|t| Channel::of(&t, polarisation).entries());
+                if !seen.iter().flatten().all(real) {
                     return Err(Ineligible);
                 }
-                Ok((we.re, wm.re, e.re * mu.re))
+                Ok(weights.map(|w| w.map(|z| z.re)))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -139,7 +146,8 @@ impl ModePoint {
         // wavenumber, so start at eight intervals per radian. Simpson's error
         // falls as h^4, so each halving is Richardson-extrapolated, and the
         // result is accepted when successive extrapolations agree.
-        let grid = super::power::ProfileGrid::new(stack, k, beta, 8, 2)?.ok_or(Quadrature)?;
+        let grid = super::power::ProfileGrid::new(stack, polarisation, k, beta, 8, 2)?
+            .ok_or(Quadrature)?;
         let decay = sig.exteriors().map(|r| r.map(|r| 2. * r.im));
         let mut previous: Option<(f64, f64)> = None;
         let mut previous_estimate: Option<f64> = None;
@@ -150,10 +158,18 @@ impl ModePoint {
             let (e, h) = (fields.electric(), fields.magnetic());
             let flux =
                 |i: usize| 0.5 * (e.y()[i] * h.z()[i].conj() - e.z()[i] * h.y()[i].conj()).re;
-            let energy = |i: usize, (we, wm, _): (f64, f64, f64)| {
-                let e2 = e.x()[i].norm_sqr() + e.y()[i].norm_sqr() + e.z()[i].norm_sqr();
-                let h2 = h.x()[i].norm_sqr() + h.y()[i].norm_sqr() + h.z()[i].norm_sqr();
-                0.25 * (we * e2 + wm * h2)
+            let energy = |i: usize, [we, wm]: [Principal<f64>; 2]| {
+                let e2 = [
+                    e.x()[i].norm_sqr(),
+                    e.y()[i].norm_sqr(),
+                    e.z()[i].norm_sqr(),
+                ];
+                let h2 = [
+                    h.x()[i].norm_sqr(),
+                    h.y()[i].norm_sqr(),
+                    h.z()[i].norm_sqr(),
+                ];
+                0.25 * (we.weigh(e2) + wm.weigh(h2))
             };
             let (mut power, mut stored) = (0., 0.);
             for span in grid.spans(level) {

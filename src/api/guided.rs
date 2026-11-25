@@ -1,11 +1,18 @@
 //! Counted enumeration on the real guided sheet. Counts refer to open |β| windows.
 //! On a stack walled on both sides every real-β mode in the window is counted,
 //! including those below the exterior light lines.
+//!
+//! Each region presents the polarisation its channel (t, n, v): μ_xx, μ_zz,
+//! ε_yy for TE and ε_xx, ε_zz, μ_yy for TM. The primary field obeys
+//! −(ψ′/t)′ + (β²/n) ψ = k0² v ψ, a Sturm–Liouville problem in β² when t, n
+//! and v are positive, with q² = s (line² − β²), line = k0 √(v n), s = t/n.
 use super::*;
 use crate::problem as p;
+use crate::problem::J;
+use crate::problem::material::{self as m, Channel};
 use lamina_core::{
-    AnalyticalMaterialHandle, AnalyticalMaterialStack, EvaluateMeromorphicMaterial, Polarisation,
-    Scalar, Scatter2, WallKind,
+    Backend, ComplexPlane, ConstitutiveError, PlaneWaveDeterminant, Polarisation,
+    ProjectPlaneWaveModeDeterminant, Scatter2, WallKind,
 };
 use lamina_units::Length;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
@@ -32,14 +39,50 @@ pub struct GuidedWindow {
     pub refinement: RefinementConfig,
     pub assumption: AnalyticAssumption,
 }
+/// A diagonal entry of ε or μ in the stack frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TensorEntry {
+    EpsilonXx,
+    EpsilonYy,
+    EpsilonZz,
+    MuXx,
+    MuYy,
+    MuZz,
+}
+impl std::fmt::Display for TensorEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::EpsilonXx => "ε_xx",
+            Self::EpsilonYy => "ε_yy",
+            Self::EpsilonZz => "ε_zz",
+            Self::MuXx => "μ_xx",
+            Self::MuYy => "μ_yy",
+            Self::MuZz => "μ_zz",
+        })
+    }
+}
+impl TensorEntry {
+    /// The entries `[t, n, v]` a polarisation sees.
+    pub(crate) fn seen_by(polarisation: Polarisation) -> [Self; 3] {
+        match polarisation {
+            Polarisation::TransverseElectric => [Self::MuXx, Self::MuZz, Self::EpsilonYy],
+            Polarisation::TransverseMagnetic => [Self::EpsilonXx, Self::EpsilonZz, Self::MuYy],
+        }
+    }
+}
 #[derive(Debug, thiserror::Error)]
 pub enum EnumerationError {
     #[error("invalid guided interval or numerical controls")]
     InvalidRequest,
+    /// An entry the polarisation sees is not real and positive, so the
+    /// oscillation count is not monotone (a hyperbolic or lossy region).
     #[error(
-        "ineligible material in region {0} (left exterior = 0, then layers, then right exterior)"
+        "{entry} of region {region} (left exterior = 0, then layers, then right exterior) \
+         is not real and positive"
     )]
-    Material(usize),
+    Material { region: usize, entry: TensorEntry },
+    #[error(transparent)]
+    Constitutive(#[from] ConstitutiveError),
     #[error("invalid finite-layer thickness at index {0}")]
     Thickness(usize),
     #[error("physical propagation problem: {0}")]
@@ -77,9 +120,13 @@ impl GuidedBasis {
         self.expected == Some(self.modes.len()) && self.unresolved.is_empty()
     }
 }
+/// One region's channel on the real guided sheet.
 #[derive(Clone, Copy)]
 struct Medium {
     line: f64,
+    /// s = t/n: q² = s (line² − β²).
+    scale: f64,
+    /// t, weighting the normal derivative of the primary field.
     weight: f64,
 }
 /// The condition at one end of the counted interval.
@@ -105,7 +152,7 @@ impl Counter {
     // the crossing index decreases, counting one state per crossing: the
     // separated end conditions keep the phase monotone (Sturm–Liouville).
     fn index(&self, b: f64) -> Option<i64> {
-        let alpha = |m: Medium| ((b - m.line) * (b + m.line)).sqrt();
+        let alpha = |m: Medium| m.scale.sqrt() * ((b - m.line) * (b + m.line)).sqrt();
         let (mut y, mut v) = match self.ends[0] {
             End::Open(m) => (1.0_f64, alpha(m) / (m.weight * self.k)),
             End::Wall { dirichlet: true } => (0., 1.),
@@ -114,7 +161,7 @@ impl Counter {
         let mut phase = y.atan2(v);
         let mut work = phase.abs();
         for &(m, d) in &self.layers {
-            let q2 = (m.line - b) * (m.line + b);
+            let q2 = (m.line - b) * (m.line + b) * m.scale;
             let q = q2.abs().sqrt();
             let t = q * d;
             let w = m.weight * self.k;
@@ -161,17 +208,36 @@ impl Counter {
 }
 /// Enumerate one polarization and direction using the checked Scatter2 characteristic.
 pub fn enumerate_guided_modes(
-    stack: AnalyticalMaterialStack<Complex>,
+    stack: impl Into<ModeStack>,
     req: GuidedWindow,
 ) -> Result<GuidedBasis, EnumerationError> {
-    search_guided_modes(stack, req, None).map(|(basis, _)| basis)
+    enumerate_guided_modes_with(Scatter2::new(), stack, req)
 }
 
-pub(super) fn search_guided_modes(
-    stack: AnalyticalMaterialStack<Complex>,
+/// Enumerate one polarization and direction, correcting roots with the
+/// characteristic of `backend`.
+pub fn enumerate_guided_modes_with<B, E>(
+    backend: B,
+    stack: impl Into<ModeStack>,
+    req: GuidedWindow,
+) -> Result<GuidedBasis, EnumerationError>
+where
+    B: Backend<J, ComplexPlane, Entries = E> + Clone,
+    E: ProjectPlaneWaveModeDeterminant<Determinant = PlaneWaveDeterminant<J>>,
+{
+    search_guided_modes(backend, stack.into(), req, None).map(|(basis, _)| basis)
+}
+
+pub(super) fn search_guided_modes<B, E>(
+    backend: B,
+    stack: ModeStack,
     req: GuidedWindow,
     predictions: Option<&[f64]>,
-) -> Result<(GuidedBasis, bool), EnumerationError> {
+) -> Result<(GuidedBasis, bool), EnumerationError>
+where
+    B: Backend<J, ComplexPlane, Entries = E> + Clone,
+    E: ProjectPlaneWaveModeDeterminant<Determinant = PlaneWaveDeterminant<J>>,
+{
     let k = TAU / req.wavelength.as_centimetres();
     let [lo, hi] = req.abs_beta;
     if !(k.is_finite()
@@ -190,21 +256,33 @@ pub(super) fn search_guided_modes(
     let cfg = crate::refinement::RefinementConfig::from(req.refinement)
         .validate()
         .map_err(|_| EnumerationError::InvalidRequest)?;
-    let medium = |mat: &AnalyticalMaterialHandle<Complex>, region| {
-        let at = Scalar(k.into());
-        let e = mat.evaluate_relative_permittivity_complex(at);
-        let mu = mat.evaluate_relative_permeability_complex(at);
-        let line = k * (e.re * mu.re).sqrt();
-        if !line.is_finite() || line <= 0. || e.im != 0. || mu.im != 0. || e.re <= 0. || mu.re <= 0.
-        {
-            return Err(EnumerationError::Material(region));
+    // Only the entries the polarisation sees are inspected; they must be
+    // real and positive for the count to be monotone.
+    m::check_regions(&stack)?;
+    let entries = TensorEntry::seen_by(req.polarisation);
+    let medium = |material: &Region, region: usize| {
+        let id = m::region_id(region, stack.len());
+        let tensors = m::tensors(id, material, k.into())?;
+        let channel = Channel::of(&tensors, req.polarisation);
+        let seen = channel.entries();
+        let positive = |v: Complex| v.im == 0. && v.re > 0.;
+        if let Some(i) = (0..3).find(|&i| !positive(seen[i])) {
+            return Err(EnumerationError::Material {
+                region,
+                entry: entries[i],
+            });
+        }
+        let line = k * (channel.invariant.re * channel.normal.re).sqrt();
+        if !line.is_finite() || line <= 0. {
+            return Err(EnumerationError::Material {
+                region,
+                entry: entries[2],
+            });
         }
         Ok(Medium {
             line,
-            weight: match req.polarisation {
-                Polarisation::TransverseElectric => mu.re,
-                Polarisation::TransverseMagnetic => e.re,
-            },
+            scale: channel.transverse.re / channel.normal.re,
+            weight: channel.transverse.re,
         })
     };
     let exteriors = [
@@ -289,7 +367,7 @@ pub(super) fn search_guided_modes(
     if low == high {
         return Ok((report, false));
     }
-    let problem = p::InPlaneProblem::in_plane(stack, k, req.polarisation, Scatter2::new())
+    let problem = p::InPlaneProblem::in_plane(stack, k, req.polarisation, backend)
         .map_err(|e| EnumerationError::Problem(e.to_string()))?;
     let correct = |l: f64, h: f64| {
         let mid = l + 0.5 * (h - l);
@@ -347,7 +425,7 @@ pub(super) fn search_guided_modes(
                     enclosure,
                     chart: 0,
                     candidate: 0,
-                    backend: std::any::type_name::<Scatter2>(),
+                    backend: std::any::type_name::<B>(),
                 })
             }
             Ok(_) => Err(GuidedLimit::OutsideBracket),

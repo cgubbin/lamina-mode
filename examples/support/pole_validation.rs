@@ -112,7 +112,7 @@ fn run_inner(out: &Path, full: bool) -> Result<(), Error> {
             let point = point?;
             let sig = *point.signature().map_err(Clone::clone)?;
             let provenance = point.provenance();
-            let stack = provenance.stack();
+            let stack = &reference::scalar_stack(provenance.stack());
             let pol = provenance.polarisation();
             let spectral = matches!(provenance.direction(), SearchCoordinate::Spectral { .. });
             let variable = if spectral {
