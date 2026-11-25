@@ -617,6 +617,9 @@ pub enum Window {
         re_rad_per_m: [f64; 2],
         im_rad_per_m: [f64; 2],
     },
+    /// A rectangle in the dimensionless conformal coordinate z of a stack
+    /// with an open side, less than one period, 2π, tall.
+    Chart { re: [f64; 2], im: [f64; 2] },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -647,7 +650,8 @@ pub type Rect2 = [[f64; 2]; 2];
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct UnresolvedRegion {
-    /// In the chart's coordinate: rad/m on the wavenumber chart.
+    /// In the chart's coordinate: rad/m on the wavenumber chart,
+    /// dimensionless z on a conformal chart.
     pub bounds: Rect2,
     pub beta_image_rad_per_m: Rect2,
     pub count: Option<usize>,

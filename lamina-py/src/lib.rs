@@ -260,6 +260,20 @@ fn basis_pairing(
     json(&record)
 }
 
+/// The chart window covering a β rectangle on stated sheets, as
+/// `([re, im], extra_area_rad2_per_m2)`.
+#[pyfunction]
+fn chart_window_covering(
+    stack_json: &str,
+    wavelength_m: f64,
+    beta_rect_rad_per_m: [[f64; 2]; 2],
+    sheets: [Option<String>; 2],
+) -> PyResult<([[f64; 2]; 2], f64)> {
+    let spec: rec::Stack =
+        serde_json::from_str(stack_json).map_err(|e| SchemaError::new_err(e.to_string()))?;
+    basis::covering(spec, wavelength_m, beta_rect_rad_per_m, sheets).map_err(raise)
+}
+
 /// Validate and normalise a serialised modal basis input without solving it.
 #[pyfunction]
 fn normalise_modal_basis_input(input_json: &str) -> PyResult<String> {
@@ -433,6 +447,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(modal_basis, m)?)?;
     m.add_function(wrap_pyfunction!(basis_pairing, m)?)?;
     m.add_function(wrap_pyfunction!(normalise_modal_basis_input, m)?)?;
+    m.add_function(wrap_pyfunction!(chart_window_covering, m)?)?;
     m.add_function(wrap_pyfunction!(enumerate_guided_modes, m)?)?;
     m.add_function(wrap_pyfunction!(power_overlap, m)?)?;
     m.add_function(wrap_pyfunction!(power_overlap_sensitivity, m)?)?;

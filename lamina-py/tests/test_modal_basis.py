@@ -77,9 +77,9 @@ def test_invalid_requests_are_refused(change):
         lamina.modal_basis(walled(), WAVELENGTH, "TE", change.pop("window", WINDOW), **change)
 
 
-def test_an_open_side_is_refused():
+def test_an_open_side_needs_a_chart_window():
     stack = lamina.Stack(2.25, [(4.0, 2 * A)], 2.25, lamina.Wall("pec", -GAP), None)
-    with pytest.raises(lamina.InvalidInput):
+    with pytest.raises(lamina.InvalidInput, match="ChartWindow"):
         lamina.modal_basis(stack, WAVELENGTH, "TE", WINDOW)
 
 

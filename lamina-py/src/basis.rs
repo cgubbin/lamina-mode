@@ -3,8 +3,9 @@ use crate::records::{self as rec, Rect2};
 use crate::solve::{Failure, M_PER_CM, Z0_OHM, assumption, c2, finite_positive, normalise_stack};
 use lamina_core::{Polarisation, Scatter2};
 use lamina_mode::{
-    BasisFieldError, BasisLimit, GuidedOverlapRegistration, ModalBasisError, ModalBasisRequest,
-    ModalWindow, ModeFamily, Normalisation, PairingError, Rect, SignReference,
+    Absent, BasisFieldError, BasisLimit, BasisScope, ExteriorSheet, GuidedOverlapRegistration,
+    ModalBasisError, ModalBasisRequest, ModalWindow, ModeFamily, Normalisation, PairingError, Rect,
+    SignReference, WindowError,
 };
 use lamina_units::Length;
 use std::f64::consts::TAU;
@@ -25,15 +26,18 @@ pub fn normalise(mut input: rec::ModalBasisInput) -> Result<rec::ModalBasisInput
     rec::check_identity(&input).map_err(Failure::Invalid)?;
     normalise_stack(&mut input.stack, input.wavelength_m)?;
     finite_positive("wavelength_m", input.wavelength_m)?;
-    let rec::Window::Wavenumber {
-        re_rad_per_m,
-        im_rad_per_m,
-    } = &mut input.window;
-    for (name, bounds) in [("re", re_rad_per_m), ("im", im_rad_per_m)] {
+    let (bounds, unit) = match &mut input.window {
+        rec::Window::Wavenumber {
+            re_rad_per_m,
+            im_rad_per_m,
+        } => ([re_rad_per_m, im_rad_per_m], "_rad_per_m"),
+        rec::Window::Chart { re, im } => ([re, im], ""),
+    };
+    for (name, bounds) in ["re", "im"].into_iter().zip(bounds) {
         let [lo, hi] = *bounds;
         if !(lo.is_finite() && hi.is_finite() && lo < hi) {
             return Err(Failure::Invalid(format!(
-                "window {name}_rad_per_m must be finite and ascending, got [{lo}, {hi}]"
+                "window {name}{unit} must be finite and ascending, got [{lo}, {hi}]"
             )));
         }
         *bounds = [lo + 0., hi + 0.];
@@ -56,11 +60,40 @@ pub fn normalise(mut input: rec::ModalBasisInput) -> Result<rec::ModalBasisInput
     Ok(input)
 }
 
-fn rect(r: Rect<f64>) -> Rect2 {
+/// A rectangle in cm^-1 as rad/m, or in the dimensionless z when `per_cm`
+/// is one.
+fn rect_in(r: Rect<f64>, per_cm: f64) -> Rect2 {
     [
-        [r.x_min / M_PER_CM, r.x_max / M_PER_CM],
-        [r.y_min / M_PER_CM, r.y_max / M_PER_CM],
+        [r.x_min / per_cm, r.x_max / per_cm],
+        [r.y_min / per_cm, r.y_max / per_cm],
     ]
+}
+
+fn rect(r: Rect<f64>) -> Rect2 {
+    rect_in(r, M_PER_CM)
+}
+
+fn sheet(sheet: ExteriorSheet) -> &'static str {
+    match sheet {
+        ExteriorSheet::Proper => "proper",
+        ExteriorSheet::Improper => "improper",
+    }
+}
+
+fn scope(scope: BasisScope) -> String {
+    match scope {
+        BasisScope::Discrete => "discrete",
+        _ => "discrete_without_continuum",
+    }
+    .into()
+}
+
+fn window_failure(e: WindowError) -> Failure {
+    Failure::Invalid(match e {
+        WindowError::Period => "a ChartWindow's imaginary extent must stay below 2π".into(),
+        WindowError::ClosedStack => "a ChartWindow needs a stack with an open side".into(),
+        _ => e.to_string(),
+    })
 }
 
 fn cause(cause: &BasisLimit) -> (&'static str, Option<String>) {
@@ -78,6 +111,7 @@ fn cause(cause: &BasisLimit) -> (&'static str, Option<String>) {
             "scale",
             Some(format!("{side:?} PML scale exp({log_magnitude})")),
         ),
+        BasisLimit::BranchPoint { side } => ("branch_point", Some(format!("{side:?}"))),
         _ => ("other", Some(format!("{cause:?}"))),
     }
 }
@@ -93,7 +127,13 @@ fn status(status: lamina_mode::BasisStatus) -> rec::BasisStatus {
 fn basis_failure(e: ModalBasisError) -> Failure {
     match e {
         ModalBasisError::Fields { .. } => Failure::Fields(format!("{e}: {e:?}")),
-        ModalBasisError::Quadrature => Failure::Integration(e.to_string()),
+        ModalBasisError::Quadrature | ModalBasisError::TailSingular { .. } => {
+            Failure::Integration(e.to_string())
+        }
+        ModalBasisError::OpenSide => {
+            Failure::Invalid("a stack with an open side needs a ChartWindow".into())
+        }
+        ModalBasisError::Window(e) => window_failure(e),
         _ => Failure::Invalid(e.to_string()),
     }
 }
@@ -101,13 +141,18 @@ fn basis_failure(e: ModalBasisError) -> Failure {
 pub fn solve(input: rec::ModalBasisInput) -> Result<SolvedBasis, Failure> {
     let input = normalise(input)?;
     let k0_cm = k0_rad_per_m(input.wavelength_m) * M_PER_CM;
-    let rec::Window::Wavenumber {
-        re_rad_per_m,
-        im_rad_per_m,
-    } = input.window;
-    let window = ModalWindow::Wavenumber {
-        re_cm: re_rad_per_m.map(|b| b * M_PER_CM),
-        im_cm: im_rad_per_m.map(|b| b * M_PER_CM),
+    let (window, per_cm) = match input.window {
+        rec::Window::Wavenumber {
+            re_rad_per_m,
+            im_rad_per_m,
+        } => (
+            ModalWindow::Wavenumber {
+                re_cm: re_rad_per_m.map(|b| b * M_PER_CM),
+                im_cm: im_rad_per_m.map(|b| b * M_PER_CM),
+            },
+            M_PER_CM,
+        ),
+        rec::Window::Chart { re, im } => (ModalWindow::Chart { re, im }, 1.),
     };
     let polarisation = match input.polarisation {
         rec::Polarisation::Te => Polarisation::TransverseElectric,
@@ -126,6 +171,13 @@ pub fn solve(input: rec::ModalBasisInput) -> Result<SolvedBasis, Failure> {
         request,
     )
     .map_err(basis_failure)?;
+    let open_sides = [
+        &input.stack.left_termination,
+        &input.stack.right_termination,
+    ]
+    .iter()
+    .filter(|t| matches!(t, rec::Termination::Open))
+    .count();
     let modes = basis
         .modes
         .iter()
@@ -142,17 +194,22 @@ pub fn solve(input: rec::ModalBasisInput) -> Result<SolvedBasis, Failure> {
             } else {
                 beta.im > 0.
             };
+            let mode_type = match mode.sheets {
+                [None, None] => "closed",
+                sheets if sheets.contains(&Some(ExteriorSheet::Improper)) => "leaky",
+                _ => "guided",
+            };
             rec::BasisMode {
                 index,
                 beta_rad_per_m: c2(beta / M_PER_CM),
                 n_eff: c2(beta / k0_cm),
-                mode_type: "closed".into(),
+                mode_type: mode_type.into(),
                 direction: if forward {
                     rec::Direction::Forward
                 } else {
                     rec::Direction::Backward
                 },
-                sheet: [None, None],
+                sheet: mode.sheets.map(|s| s.map(|s| sheet(s).to_owned())),
                 residual: mode.point.evidence().value.norm(),
                 self_pairing_raw_w_per_m: c2(mode.self_pairing_raw_w_per_m),
                 normalisation: normalisation.into(),
@@ -175,9 +232,14 @@ pub fn solve(input: rec::ModalBasisInput) -> Result<SolvedBasis, Failure> {
         assumption: assumption(&input.stack).to_owned(),
         input_hash: rec::digest(&input).map_err(Failure::Invalid)?,
         k0_rad_per_m: k0_rad_per_m(input.wavelength_m),
-        chart: "wavenumber".into(),
+        chart: match open_sides {
+            0 => "wavenumber",
+            1 => "one_exterior",
+            _ => "two_exterior",
+        }
+        .into(),
         window_beta_image_rad_per_m: rect(basis.window_beta_image),
-        scope: "discrete".into(),
+        scope: scope(basis.scope),
         status: status(basis.status),
         expected: basis.expected,
         found: modes.len(),
@@ -187,7 +249,7 @@ pub fn solve(input: rec::ModalBasisInput) -> Result<SolvedBasis, Failure> {
             .map(|r| {
                 let (cause, detail) = cause(&r.cause);
                 rec::UnresolvedRegion {
-                    bounds: rect(r.bounds),
+                    bounds: rect_in(r.bounds, per_cm),
                     beta_image_rad_per_m: rect(r.beta_image),
                     count: r.count,
                     cause: cause.into(),
@@ -301,7 +363,9 @@ pub fn profile(
 fn pairing_failure(e: PairingError) -> Failure {
     match e {
         PairingError::Fields { .. } => Failure::Fields(format!("{e}: {e:?}")),
-        PairingError::Quadrature => Failure::Integration(e.to_string()),
+        PairingError::Quadrature | PairingError::TailSingular { .. } => {
+            Failure::Integration(e.to_string())
+        }
         _ => Failure::Invalid(e.to_string()),
     }
 }
@@ -328,12 +392,12 @@ pub fn pairing(
             .map(|i| (0..m).map(|j| entry(i, j)).collect())
             .collect::<Vec<Vec<f64>>>()
     };
-    let present = |v: Vec<Vec<f64>>| {
-        v.into_iter()
-            .map(|row| row.into_iter().map(Some).collect())
+    let (u, c) = (&result.unconjugated, &result.conjugated);
+    let conjugated = |part: fn(lamina_mode::Complex) -> f64| {
+        (0..n)
+            .map(|i| (0..m).map(|j| c[(i, j)].ok().map(part)).collect())
             .collect()
     };
-    let (u, c) = (&result.unconjugated, &result.conjugated);
     Ok(rec::BasisPairing {
         schema: rec::BASIS_PAIRING_SCHEMA.to_owned(),
         schema_version: rec::SCHEMA_VERSION,
@@ -346,15 +410,60 @@ pub fn pairing(
         columns: result.modes[1].clone(),
         unconjugated_real: rows(&|i, j| u[(i, j)].re),
         unconjugated_imag: rows(&|i, j| u[(i, j)].im),
-        conjugated_real: present(rows(&|i, j| c[(i, j)].re)),
-        conjugated_imag: present(rows(&|i, j| c[(i, j)].im)),
-        conjugated_absent: vec![vec![None; m]; n],
+        conjugated_real: conjugated(|v| v.re),
+        conjugated_imag: conjugated(|v| v.im),
+        conjugated_absent: (0..n)
+            .map(|i| {
+                (0..m)
+                    .map(|j| match c[(i, j)] {
+                        Err(Absent::Unbounded { .. }) => Some("unbounded".to_owned()),
+                        Ok(_) => None,
+                    })
+                    .collect()
+            })
+            .collect(),
         singular_values_w_per_m: result.singular_values,
         leading_condition_numbers: result.leading_condition_numbers,
         self_defects: result.self_defects,
         sample_count: result.sample_count,
         quadrature_change_w_per_m: result.quadrature_change_w_per_m,
         status: result.status.map(status),
-        scope: ["discrete".into(), "discrete".into()],
+        scope: result.scope.map(scope),
     })
+}
+
+/// The chart window covering a β rectangle (rad/m) on stated sheets, one per
+/// side ("proper", "improper", or none for a closed side), and the extra
+/// area of its β image, rad²/m².
+pub fn covering(
+    mut spec: rec::Stack,
+    wavelength_m: f64,
+    beta_rect_rad_per_m: Rect2,
+    sheets: [Option<String>; 2],
+) -> Result<(Rect2, f64), Failure> {
+    finite_positive("wavelength_m", wavelength_m)?;
+    normalise_stack(&mut spec, wavelength_m)?;
+    let sheets = sheets.map(|s| match s.as_deref() {
+        None => Ok(None),
+        Some("proper") => Ok(Some(ExteriorSheet::Proper)),
+        Some("improper") => Ok(Some(ExteriorSheet::Improper)),
+        Some(other) => Err(Failure::Invalid(format!(
+            "a sheet is \"proper\", \"improper\" or None, got {other:?}"
+        ))),
+    });
+    let [left, right] = sheets;
+    let covering = ModalWindow::covering(
+        crate::solve::stack(&spec)?,
+        Length::centimetres(wavelength_m / M_PER_CM),
+        beta_rect_rad_per_m[0].map(|b| b * M_PER_CM),
+        beta_rect_rad_per_m[1].map(|b| b * M_PER_CM),
+        [left?, right?],
+    )
+    .map_err(window_failure)?;
+    let ModalWindow::Chart { re, im } = covering.window else {
+        return Err(Failure::Invalid(
+            "the covering is not a chart window".into(),
+        ));
+    };
+    Ok(([re, im], covering.extra_area_cm2 / (M_PER_CM * M_PER_CM)))
 }
