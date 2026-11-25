@@ -195,6 +195,28 @@ stack raises `InvalidInput` naming `ChartWindow`. Pairings continue the unconjug
 analytically; a conjugated entry whose tail diverges (Im κ_a + Im κ_b ≤ 0, as between leaky modes) is nan with
 cause `"unbounded"`. A root within 1e-4 k0 of a branch point (κ = 0) is unresolved with cause `"branch_point"`.
 
+A supplied field F expands in a basis's normalised modes, and the modes couple along a parameter:
+
+```python
+p = basis.project_field(field, support_m=(-0.4e-6, 1.1e-6), exterior=(left_waves, right_waves))
+p.coefficients, p.condition_number, p.gram_defect
+p.relative_residual, p.residual_includes_continuum
+
+c = basis.local_coupling(lamina.Parameter.thickness(0))
+c.perturbation_matrix_rad_per_m.diagonal()  # each mode's dβ/dp
+c.coefficients, c.groups                   # K[m, n] / (β_n − β_m); near-degenerate modes as groups
+```
+
+`project_field` solves G a = b with G[m, n] = ⟨f_m, f_n⟩ and b[m] = ⟨f_m, F⟩, unconjugated, on the basis's own
+partition: along z̃ in a PML, where F is the continued field as `profile` gives it, and with continued tails on open
+sides. F vanishes outside its support, which stays within the walls; on an open side the field beyond the support
+may be stated as `ExteriorWave`s (κ, and E and H at the edge), as a field built from leaky modes needs. The record
+has the reconstruction residual over the bounded partition. A basis of a stack with an open side never includes
+the radiation continuum, so there the residual includes F's radiation content: it is physical, not numerical, and
+`residual_includes_continuum` says so. `local_coupling` uses the mirrored field (−E_x, E_y, E_z) in place of a
+conjugate, one-sided fields at moving interfaces, z̃ in a PML and continued tails; a wavelength or permeability
+parameter, or one moving an interface against a wall or PML, raises `InvalidInput`.
+
 ## Scope
 
 lamina-py presents lamina-mode's results in Python: SI quantities with the unit in every field name, typed

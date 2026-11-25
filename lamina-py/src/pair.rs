@@ -482,6 +482,80 @@ impl From<Failure> for ProjectionFailure {
     }
 }
 
+/// A supplied-field sampler for lamina-mode: positions in cm, fields as
+/// [E, Z0 H], each distinct (position, side) evaluated once. The first
+/// failure stops sampling; later samples are non-finite, so the quadrature
+/// stops, and `finish` returns the failure.
+pub struct Memo<'a, 'f> {
+    field: &'a Sample<'f>,
+    /// The positions the caller gave, keyed by their cm bits, map back to
+    /// their exact values.
+    given: HashMap<u64, f64>,
+    memo: RefCell<HashMap<(u64, u8), [Complex; 6]>>,
+    stopped: RefCell<Option<SampleError>>,
+}
+
+impl<'a, 'f> Memo<'a, 'f> {
+    pub fn new(field: &'a Sample<'f>, support_m: &[f64], interfaces_m: &[f64]) -> Self {
+        let given = support_m
+            .iter()
+            .chain(interfaces_m)
+            .map(|&z| ((z / M_PER_CM).to_bits(), z))
+            .collect();
+        Self {
+            field,
+            given,
+            memo: RefCell::default(),
+            stopped: RefCell::default(),
+        }
+    }
+
+    pub fn sample(&self, z_cm: f64, side: ProjectionSide) -> [Complex; 6] {
+        let nan = [Complex::new(f64::NAN, f64::NAN); 6];
+        if self.stopped.borrow().is_some() {
+            return nan;
+        }
+        let (code, name) = match side {
+            ProjectionSide::Left => (0, "left"),
+            ProjectionSide::Right => (1, "right"),
+            ProjectionSide::Interior => (2, "interior"),
+        };
+        let key = (z_cm.to_bits(), code);
+        if let Some(v) = self.memo.borrow().get(&key) {
+            return *v;
+        }
+        let z_m = self.given.get(&key.0).copied().unwrap_or(z_cm * M_PER_CM);
+        match (self.field)(z_m, name) {
+            Ok(mut v) => {
+                if v.iter().any(|c| !(c.re.is_finite() && c.im.is_finite())) {
+                    *self.stopped.borrow_mut() = Some(SampleError::Invalid(format!(
+                        "the supplied field is not finite at z = {z_m} m ({name})"
+                    )));
+                    return nan;
+                }
+                for h in &mut v[3..] {
+                    *h *= Z0_OHM;
+                }
+                self.memo.borrow_mut().insert(key, v);
+                v
+            }
+            Err(e) => {
+                *self.stopped.borrow_mut() = Some(e);
+                nan
+            }
+        }
+    }
+
+    /// The number of distinct samples, or the failure that stopped sampling.
+    pub fn finish(self) -> Result<usize, ProjectionFailure> {
+        match self.stopped.into_inner() {
+            Some(SampleError::Invalid(m)) => Err(ProjectionFailure::Failure(Failure::Invalid(m))),
+            Some(SampleError::Raised(e)) => Err(ProjectionFailure::Raised(e)),
+            None => Ok(self.memo.into_inner().len()),
+        }
+    }
+}
+
 pub struct ProjectionRequest<'a> {
     pub support_m: [f64; 2],
     pub interfaces_m: &'a [f64],
@@ -522,49 +596,8 @@ pub fn project(
             request.rank_rtol
         ));
     }
-    // The positions the caller gave map back to their exact values.
-    let given: HashMap<u64, f64> = [lo, hi]
-        .iter()
-        .chain(request.interfaces_m)
-        .map(|&z| ((z / M_PER_CM).to_bits(), z))
-        .collect();
-    let memo: RefCell<HashMap<(u64, u8), [Complex; 6]>> = RefCell::default();
-    let stopped: RefCell<Option<SampleError>> = RefCell::default();
-    let nan = [Complex::new(f64::NAN, f64::NAN); 6];
-    let sample = |z_cm: f64, side: ProjectionSide| -> [Complex; 6] {
-        if stopped.borrow().is_some() {
-            return nan;
-        }
-        let (code, name) = match side {
-            ProjectionSide::Left => (0, "left"),
-            ProjectionSide::Right => (1, "right"),
-            ProjectionSide::Interior => (2, "interior"),
-        };
-        let key = (z_cm.to_bits(), code);
-        if let Some(v) = memo.borrow().get(&key) {
-            return *v;
-        }
-        let z_m = given.get(&key.0).copied().unwrap_or(z_cm * M_PER_CM);
-        match field(z_m, name) {
-            Ok(mut v) => {
-                if v.iter().any(|c| !(c.re.is_finite() && c.im.is_finite())) {
-                    *stopped.borrow_mut() = Some(SampleError::Invalid(format!(
-                        "the supplied field is not finite at z = {z_m} m ({name})"
-                    )));
-                    return nan;
-                }
-                for h in &mut v[3..] {
-                    *h *= Z0_OHM;
-                }
-                memo.borrow_mut().insert(key, v);
-                v
-            }
-            Err(e) => {
-                *stopped.borrow_mut() = Some(e);
-                nan
-            }
-        }
-    };
+    let memo = Memo::new(field, &[lo, hi], request.interfaces_m);
+    let sample = |z_cm: f64, side: ProjectionSide| memo.sample(z_cm, side);
     let interfaces_cm: Vec<f64> = request.interfaces_m.iter().map(|z| z / M_PER_CM).collect();
     let input = GuidedProjectionInput {
         wavelength_cm: record.input.request.wavelength_m / M_PER_CM,
@@ -579,12 +612,7 @@ pub fn project(
         request.rank_rtol,
         recovery_settings(&record.input.request),
     );
-    if let Some(stop) = stopped.into_inner() {
-        return Err(match stop {
-            SampleError::Invalid(m) => ProjectionFailure::Failure(Failure::Invalid(m)),
-            SampleError::Raised(e) => ProjectionFailure::Raised(e),
-        });
-    }
+    let field_sample_count = memo.finish()?;
     let projection = result.map_err(|e| {
         ProjectionFailure::Failure(match e {
             GuidedProjectionError::InvalidInput | GuidedProjectionError::NonFiniteField => {
@@ -618,7 +646,7 @@ pub fn project(
         right_hand_side_imag: rhs.iter().map(|z| z.im).collect(),
         rank: projection.rank,
         singular_values_w_per_m: projection.singular_values.clone(),
-        field_sample_count: memo.into_inner().len(),
+        field_sample_count,
         quadrature_change_w_per_m: projection.quadrature_change_w_per_m,
         coefficients_real: coefficients
             .as_ref()

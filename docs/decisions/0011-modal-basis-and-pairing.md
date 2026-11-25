@@ -191,8 +191,67 @@ signed-unit-power profiles to 2e-11; leaky conjugated self-products are absent. 
 PML on the other counts and pairs likewise (6 TE, 7 TM modes). The covering of a β rectangle round the TE leaky mode
 holds it on the improper sheet, and a rectangle across the real axis below the light line is refused.
 
+### Projection and local coupling
+
+**Projection.** A supplied field F is expanded in a basis's normalised modes by solving G a = b with
+G_mn = ⟨f_m, f_n⟩ and b_m = ⟨f_m, F⟩, both unconjugated and both on one grid at one refinement level: the basis's
+partition with the support ends and the field's discontinuities, PML intervals split as for pairings, dz̃ in a PML
+and continued tails on open sides. G is the identity in theory; solving through it keeps its quadrature defect and
+the accuracy of Löwdin groups out of the coefficients. Below full rank under `rank_rtol` there are no coefficients.
+Inside a PML F is the continued field, as profiles give it (a field computed in the equivalent medium has its
+normal components divided by s first). A support beyond a wall is refused. On an open side whose support edge lies
+in the exterior, the field beyond it may be stated as exterior waves F_j exp(iκ_j ζ), each adding the continued
+tail i ⟨⟨f_m(edge), F_j⟩⟩/(κ_m + κ_j) to b_m; without them F vanishes beyond its support. A field built from leaky
+modes needs them: dropping the tails changed the coefficients of the tests' open-slab combination by more than
+1e-3.
+
+**Residual.** The result reports the field scale of F and of R = F − Σ a_m f_m over the bounded partition, their
+ratio √(N(R)/N(F)), the equation residual |G a − b| and `residual_includes_continuum`. Between walls and PMLs the
+residual is the content of F in modes outside the window plus numerical error. With an open side it also holds the
+part of F on the radiation continuum, which no discrete basis represents: it is physical, not numerical. The
+coefficients are still the discrete part of the expansion (the residues of the poles in the window), and
+⟨f_m, R⟩ = 0 for every mode. The discrete part can be larger than F on a wide window: leaky terms grow outward and
+only the continuum cancels them. A Gaussian of width 0.3 λ on the open test slab, over a support reaching 0.75 λ
+into the cladding, leaves a relative residual of 5.0.
+
+**Local coupling.** Lorentz reciprocity between the mirrored base mode M f_m and the mode f_n′ at p + δp, whose
+boundary terms vanish at walls, behind PMLs and on open sides by continuation, gives
+
+| quantity | value |
+| --- | --- |
+| K_mn | (ω ε0/4) [∫ Ẽ_m · ∂ε/∂p · E_n dz̃ + Σ_k v_k ((ε⁻ − ε⁺)_xx Ẽ_x E_x + (ε⁻ − ε⁺)_yy E_y E_y − (1/ε⁻_zz − 1/ε⁺_zz)(ε⁻_zz)² E_z E_z)] |
+| dβ_n/dp | K_nn |
+| C_mn = ⟨f_m, ∂f_n/∂p⟩ | K_mn / (β_n − β_m), row m receiving, column n differentiated |
+
+with Ẽ = (−E_x, E_y, E_z) the electric part of M f, left-side limits at interface k moving at v_k, s Ẽ · δε E in a
+PML (dz̃) and i v₀/(κ_m + κ_n) on an open side whose exterior rate is non-zero. For a lossless guided mode under the
+guided phase rule E_x is imaginary and E_y, E_z real, so Ẽ_m · E_n = E_m* · E_n and the guided coupling of 0008 is
+the special case; for evanescent, complex, PML and leaky modes only Ẽ is reciprocal. K is complex symmetric. The
+self coefficient ½ ∂⟨f_n, f_n⟩ vanishes and is absent, as are coefficients between modes within the gap (default:
+the basis's degeneracy gap), reported as groups whose block of K holds their first-order splitting. A direction
+varying the wavelength or μ, or moving an interface across a jump in μ, is refused, as is one moving the first
+interface of a stack with a wall or PML (walls are fixed in the stack frame) or an interface lying on a wall or PML
+start.
+
+**Checks.** Fields built from known coefficients (|c| ~ 1) are recovered within 1.1e-13 between walls (TE and TM, PEC and
+PMC, 11–12 modes with real, imaginary and complex β), through PMLs and on the open slab with its leaky mode and
+continuation, with Gram defects 5e-12 to 6e-11. The diagonal of K equals the implicit slope of the characteristic
+along the core thickness to 6e-11 for every mode (walls, PMLs, open, and a lossy Drude core with complex modes),
+the guided sensitivity along the core permittivity to 4e-11, and central differences of re-solved β along the core
+and cladding permittivities to 4e-9. Central differences of `basis_pairing_with` between the basis and bases of
+neighbouring stacks agree with C, relative to the largest coefficient, to 2e-8 along the permittivities between
+walls and PMLs and 2e-6 on the open slab (h = 1e-4), and to 7e-6 (TE) and 5e-5 (TM) along the thickness at
+h = 1e-4 t, falling with h as h² (TE) and as h (TM, where E_z jumps at the moving interface and the pairing is C¹
+with a curvature jump at the base thickness). Two identical cores 2.15 λ apart
+form one group whose block along one core's permittivity is ½ dβ/dε of a single core in every entry.
+
+**Records.** `lamina.basis_projection` and `lamina.basis_local_coupling` are new kinds at schema version 1. They
+carry the `definitions` above and a fixed kind `definition` (as in 0008), both checked on parsing; matrices
+serialise rows first as `_real` and `_imag` arrays, absent coefficients as `null`.
+
 ## Consequences
 
 Bases are formed for stacks closed by walls or PMLs on both sides in a β window, and for stacks with open sides in
-a chart window, without the radiation continuum. Fields are not projected onto a modal basis here, local coupling is not formed on one, and nothing is
-differentiated with respect to a wall position or a PML's thickness, profile or position.
+a chart window, without the radiation continuum. Supplied fields are expanded in a basis, with a residual whose
+meaning the result states, and local coupling coefficients are formed between its modes. Nothing is differentiated
+with respect to a wall position or a PML's thickness, profile or position, and magnetic rates are not coupled.

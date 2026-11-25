@@ -24,6 +24,8 @@ pub const MODAL_BASIS_INPUT_SCHEMA: &str = "lamina.modal_basis_input";
 pub const MODAL_BASIS_SCHEMA: &str = "lamina.modal_basis";
 pub const MODAL_PROFILE_SCHEMA: &str = "lamina.modal_profile";
 pub const BASIS_PAIRING_SCHEMA: &str = "lamina.basis_pairing";
+pub const BASIS_PROJECTION_SCHEMA: &str = "lamina.basis_projection";
+pub const BASIS_LOCAL_COUPLING_SCHEMA: &str = "lamina.basis_local_coupling";
 
 /// The pairing each record kind evaluates. A record's `definition` must equal
 /// its kind's, as its conventions must equal the current ones.
@@ -36,6 +38,13 @@ pub const LOCAL_COUPLING_DEFINITION: &str = "K_ij = (ω ε0 / 4) [∫ (∂ε/∂
      + Σ_k v_k ((ε_k− − ε_k+) E_i,t* · E_j,t − (1/ε_k− − 1/ε_k+) D_i,z* D_j,z / ε0²)], \
      v_k the velocity of interface k; C_ij = s K_ij / (β_j − β_i), s = +1 forward and −1 backward; \
      row i the receiving mode, column j the differentiated mode";
+pub const BASIS_PROJECTION_DEFINITION: &str = "G a = b with G_mn = ⟨f_m, f_n⟩ and \
+     b_m = ⟨f_m, F⟩ unconjugated, F the supplied field, continued in a PML and beyond the support \
+     by its exterior waves; residual F − Σ a_m f_m over the bounded partition";
+pub const BASIS_LOCAL_COUPLING_DEFINITION: &str = "K_mn = (ω ε0 / 4) [∫ Ẽ_m · (∂ε/∂p) E_n dz̃ \
+     + Σ_k v_k ((ε_k− − ε_k+) Ẽ_m,t · E_n,t − (1/ε_k− − 1/ε_k+) D_m,z D_n,z / ε0²)], \
+     Ẽ = (−Ex, Ey, Ez), v_k the velocity of interface k; C_mn = K_mn / (β_n − β_m); \
+     row m the receiving mode, column n the differentiated mode";
 pub const PROJECTION_DEFINITION: &str = "G c = b with G_ij = (1/4) ∫ (E_j × H_i* + E_i* × H_j) · x dz \
      and b_i = (1/4) ∫ (E × H_i* + E_i* × H) · x dz over the support, E and H the supplied field";
 
@@ -771,6 +780,100 @@ pub struct BasisPairing {
     pub scope: [String; 2],
 }
 
+/// One exterior wave of a supplied field beyond its support: the edge
+/// fields times exp(iκζ) at outward distance ζ.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ExteriorWave {
+    pub kappa_rad_per_m: C2,
+    pub electric_real: [f64; 3],
+    pub electric_imag: [f64; 3],
+    pub magnetic_real: [f64; 3],
+    pub magnetic_imag: [f64; 3],
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BasisProjection {
+    pub schema: String,
+    pub schema_version: u32,
+    pub conventions: Conventions,
+    pub definitions: Definitions,
+    pub definition: String,
+    pub assumption: String,
+    pub input_hash: String,
+    /// Caller-supplied identity of the field; null when unidentified.
+    pub field_id: Option<String>,
+    /// In the supplied field's coordinate.
+    pub support_m: [f64; 2],
+    pub interfaces_m: Vec<f64>,
+    /// The basis's first interface in the supplied field's coordinate.
+    pub origin_m: f64,
+    /// Left and right continuations beyond the support.
+    pub exterior: [Vec<ExteriorWave>; 2],
+    pub rank_rtol: f64,
+    /// Basis indices of the rows and columns.
+    pub modes: Vec<usize>,
+    pub gram_real: Vec<Vec<f64>>,
+    pub gram_imag: Vec<Vec<f64>>,
+    pub right_hand_side_real: Vec<f64>,
+    pub right_hand_side_imag: Vec<f64>,
+    pub rank: usize,
+    pub singular_values_w_per_m: Vec<f64>,
+    /// max |G − I|.
+    pub gram_defect: f64,
+    pub partition_m: Vec<f64>,
+    /// Distinct samples of the supplied field.
+    pub field_sample_count: usize,
+    pub sample_count: usize,
+    pub quadrature_change_w_per_m: f64,
+    /// Present at full numerical rank only.
+    pub coefficients_real: Option<Vec<f64>>,
+    pub coefficients_imag: Option<Vec<f64>>,
+    pub condition_number: Option<f64>,
+    pub equation_residual_w_per_m: Option<f64>,
+    pub field_scale_w_per_m: f64,
+    pub residual_scale_w_per_m: Option<f64>,
+    /// Null below full rank or for a zero field.
+    pub relative_residual: Option<f64>,
+    /// True for a basis without the radiation continuum: the residual then
+    /// includes the field's radiation content.
+    pub residual_includes_continuum: bool,
+    pub status: BasisStatus,
+    pub scope: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BasisLocalCoupling {
+    pub schema: String,
+    pub schema_version: u32,
+    pub conventions: Conventions,
+    pub definitions: Definitions,
+    pub definition: String,
+    pub assumption: String,
+    pub input_hash: String,
+    pub parameter: Parameter,
+    pub parameter_unit: String,
+    /// Modes whose β differ by no more than this share a group.
+    pub gap_rad_per_m: f64,
+    /// Basis indices of the rows and columns.
+    pub modes: Vec<usize>,
+    /// Rows first, in rad/m per parameter unit.
+    pub perturbation_matrix_real: Vec<Vec<f64>>,
+    pub perturbation_matrix_imag: Vec<Vec<f64>>,
+    /// Rows first, per parameter unit; null on the diagonal and within a group.
+    pub coefficients_real: Vec<Vec<Option<f64>>>,
+    pub coefficients_imag: Vec<Vec<Option<f64>>>,
+    /// Groups of two or more, as basis indices.
+    pub groups: Vec<Vec<usize>>,
+    pub partition_m: Vec<f64>,
+    pub sample_count: usize,
+    pub quadrature_change_rad_per_m: f64,
+    pub status: BasisStatus,
+    pub scope: String,
+}
+
 /// Records with a schema identity that can be checked after deserialisation.
 pub trait Record: Serialize + for<'de> Deserialize<'de> {
     const SCHEMA: &'static str;
@@ -940,6 +1043,38 @@ impl Record for ModalProfile {
     }
 }
 defined_record!(BasisPairing, BASIS_PAIRING_SCHEMA);
+
+macro_rules! defined_pairing_record {
+    ($ty:ty, $schema:expr, $definition:expr) => {
+        impl Record for $ty {
+            const SCHEMA: &'static str = $schema;
+            fn identity(&self) -> (&str, u32) {
+                (&self.schema, self.schema_version)
+            }
+            fn conventions(&self) -> Option<&Conventions> {
+                Some(&self.conventions)
+            }
+            fn check(&self) -> Result<(), String> {
+                check_definitions(&self.definitions, Self::SCHEMA)?;
+                if self.definition != $definition {
+                    return Err(format!("definition differs from {}'s", $schema));
+                }
+                Ok(())
+            }
+        }
+    };
+}
+
+defined_pairing_record!(
+    BasisProjection,
+    BASIS_PROJECTION_SCHEMA,
+    BASIS_PROJECTION_DEFINITION
+);
+defined_pairing_record!(
+    BasisLocalCoupling,
+    BASIS_LOCAL_COUPLING_SCHEMA,
+    BASIS_LOCAL_COUPLING_DEFINITION
+);
 
 pub fn check_identity<R: Record>(record: &R) -> Result<(), String> {
     let (schema, version) = record.identity();

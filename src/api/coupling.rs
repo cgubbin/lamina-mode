@@ -1,7 +1,10 @@
-//! Local perturbation matrix for nonmagnetic guided planar modes. Regions are
-//! isotropic or diagonal in the stack frame; each field component is weighted
-//! by its own permittivity entry.
+//! Local perturbation matrices for nonmagnetic guided planar modes, under the
+//! power overlap, and for the modes of a modal basis, under the unconjugated
+//! pairing. Regions are isotropic or diagonal in the stack frame; each field
+//! component is weighted by its own permittivity entry.
 
+use super::basis::{BasisFieldError, BasisScope, BasisStatus, ModalBasis, ModeFamily};
+use super::integration::{Sample, converge};
 use super::*;
 use crate::problem::material::{self, Principal};
 use lamina_core::ModalFieldBackend;
@@ -231,5 +234,299 @@ pub fn guided_local_coupling_with<B: ModalFieldBackend<Region> + Clone>(
         coefficients,
         unresolved_groups,
         quadrature_change_per_cm,
+    })
+}
+
+/// Local coupling between the normalised modes of a modal basis along a
+/// fixed-wavelength direction:
+///
+/// ```text
+/// K_mn = (ω ε0/4) [∫ Ẽ_m · ∂ε/∂p · E_n dz̃ + Σ_k v_k (jump terms at interface k)],
+/// C_mn = K_mn / (β_n − β_m),
+/// ```
+///
+/// with Ẽ = (−E_x, E_y, E_z) the electric field of the mirrored mode, dz̃ in a
+/// PML and continued tails on open sides. Lorentz reciprocity between the
+/// mirrored mode m and the perturbed mode n gives dβ_n/dp = K_nn and
+/// C_mn = ⟨f_m, ∂f_n/∂p⟩ under unit unconjugated self-pairing.
+#[derive(Debug)]
+pub struct BasisLocalCoupling {
+    /// Basis indices of the normalised modes, in key order: the rows and
+    /// columns of both matrices.
+    pub modes: Vec<usize>,
+    pub direction: GuidedPerturbation,
+    /// Complex symmetric, in inverse centimetres per parameter unit; the
+    /// diagonal is each mode's dβ/dp.
+    pub perturbation_matrix: DMatrix<Complex>,
+    /// Row is the receiving mode, column the differentiated mode, per
+    /// parameter unit. The diagonal and entries within a group are absent.
+    pub coefficients: DMatrix<Option<Complex>>,
+    /// Modes whose β differ by at most `gap_cm`, linked into groups of two
+    /// or more, as basis indices.
+    pub groups: Vec<Vec<usize>>,
+    pub gap_cm: f64,
+    pub partition_cm: Vec<f64>,
+    pub sample_count: usize,
+    pub quadrature_change_per_cm: f64,
+    pub status: BasisStatus,
+    pub scope: BasisScope,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BasisCouplingError {
+    #[error("the direction varies the vacuum wavelength; coupling is at fixed wavelength")]
+    Wavelength,
+    #[error(
+        "the direction has a permeability rate, or moves an interface across a jump in permeability"
+    )]
+    Magnetic,
+    #[error("the direction moves an interface against the {side:?} wall or PML")]
+    Termination { side: lamina_core::StackSide },
+    #[error("the direction does not match the stack's interfaces and regions")]
+    Geometry,
+    #[error("invalid propagation-constant gap threshold")]
+    Threshold,
+    #[error("the basis has no normalised mode")]
+    Empty,
+    #[error("a region's constitutive tensors cannot be evaluated at the basis's wavelength")]
+    Materials,
+    #[error("field recovery failed for mode {mode}")]
+    Fields {
+        mode: usize,
+        #[source]
+        source: Box<FieldRecoveryFailure>,
+    },
+    #[error("coupling quadrature exceeded its accuracy or sampling budget")]
+    Quadrature,
+    #[error("the {side:?} open tail is singular: |κ_a + κ_b| is below its floor")]
+    TailSingular { side: lamina_core::StackSide },
+}
+
+/// Local coupling of the normalised modes of `basis` along `direction`.
+/// `gap_cm` (default: the basis's degeneracy gap) links modes into groups.
+pub fn basis_local_coupling_with<B: ModalFieldBackend<Region> + Clone>(
+    backend: &B,
+    basis: &ModalBasis,
+    direction: &GuidedPerturbation,
+    gap_cm: Option<f64>,
+) -> Result<BasisLocalCoupling, BasisCouplingError> {
+    use super::integration::{Layout, simpson_sum, split_pmls};
+    use super::pairing::kappas;
+    use BasisCouplingError::*;
+    use lamina_core::StackSide;
+    let stack = &basis.stack;
+    let layers = stack.len();
+    if direction.interface_velocities().len() != layers + 1 {
+        return Err(Geometry);
+    }
+    if direction.wavelength_rate() != 0.0 {
+        return Err(Wavelength);
+    }
+    let rates: Vec<_> = direction
+        .regional_rates()
+        .iter()
+        .map(|rate| rate.tensors())
+        .collect();
+    if rates.iter().any(|[_, mu]| mu.entries() != [0.0; 3]) {
+        return Err(Magnetic);
+    }
+    let gap = gap_cm.unwrap_or(basis.degeneracy_gap_cm);
+    if !gap.is_finite() || gap < 0.0 {
+        return Err(Threshold);
+    }
+    let k0 = basis.request.k0_cm();
+    let at = Complex::new(k0, 0.0);
+    let tensors = material::regions(stack)
+        .map(|(region, m)| material::tensors(region, m, at))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| Materials)?;
+    let layout = Layout::new(stack, 0.0).ok_or(Geometry)?;
+    let interfaces = &layout.interfaces;
+    let span = interfaces[layers] - interfaces[0];
+    let closed = [StackSide::Left, StackSide::Right]
+        .into_iter()
+        .enumerate()
+        .find(|&(side, _)| layout.walls[side].is_some());
+    for (k, &velocity) in direction.interface_velocities().iter().enumerate() {
+        if velocity == 0.0 {
+            continue;
+        }
+        // Walls are fixed in the stack frame, whose origin is the first interface.
+        if let (0, Some((_, side))) = (k, closed) {
+            return Err(Termination { side });
+        }
+        let z = interfaces[k];
+        for (side, which) in [StackSide::Left, StackSide::Right].into_iter().enumerate() {
+            let near = |plane: f64| (plane - z).abs() <= 1e-12 * span.max(f64::MIN_POSITIVE);
+            if layout.walls[side].is_some_and(|(_, w)| near(w))
+                || layout.pmls[side].is_some_and(|p| near(p.start))
+            {
+                return Err(Termination { side: which });
+            }
+        }
+        if tensors[k][1].entries() != tensors[k + 1][1].entries() {
+            return Err(Magnetic);
+        }
+    }
+    let modes: Vec<usize> = (0..basis.modes.len())
+        .filter(|&i| basis.modes[i].is_normalised())
+        .collect();
+    if modes.is_empty() {
+        return Err(Empty);
+    }
+    let n = modes.len();
+    let betas: Vec<_> = modes
+        .iter()
+        .map(|&i| basis.modes[i].point.physical_coordinate())
+        .collect();
+    let kappa: Vec<_> = modes.iter().map(|&i| kappas(&basis.modes[i])).collect();
+    let ModeFamily::Polarised(polarisation) = basis.request.family;
+    let partition = split_pmls(
+        Layout::partition(&[&layout]),
+        &[(&layout, stack, polarisation)],
+        k0,
+        &betas,
+    );
+    // Each interval's region: 0 the left exterior (gap and PML), 1..=layers
+    // the layers, layers + 1 the right exterior.
+    let regions: Vec<usize> = partition
+        .windows(2)
+        .map(|e| {
+            let middle = 0.5 * (e[0] + e[1]);
+            interfaces.partition_point(|&z| z <= middle)
+        })
+        .collect();
+    // The left-side limit's sample index at each interface.
+    let limits: Vec<Option<usize>> = interfaces
+        .iter()
+        .map(|&z| partition.iter().position(|&p| p == z))
+        .collect();
+    // Ẽ_a ∘ E_b componentwise: the mirrored field's electric part.
+    let mirrored = |a: &Sample, b: &Sample| [-a[0] * b[0], a[1] * b[1], a[2] * b[2]];
+    let prefactor = 0.25 * k0 * super::power::CM_TO_M_OVER_Z0;
+    let converged = converge(
+        &partition,
+        || Quadrature,
+        |panels, _| {
+            let sampling = layout.sampling(&partition, panels, false);
+            let stretches = layout.stretches(&partition, panels);
+            let fields = modes
+                .iter()
+                .map(|&i| {
+                    basis.modes[i]
+                        .fields_with(backend.clone(), &sampling, basis.request.recovery)
+                        .map_err(|e| match e {
+                            BasisFieldError::Recovery(source) => Fields { mode: i, source },
+                            BasisFieldError::IllConditioned => Empty,
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut entries = Vec::with_capacity(n * (n + 1) / 2);
+            for m in 0..n {
+                let a = &fields[m];
+                for j in m..n {
+                    let b = &fields[j];
+                    let mut value = Complex::ZERO;
+                    for (interval, edges) in partition.windows(2).enumerate() {
+                        let rate = rates[regions[interval]][0];
+                        if rate == Principal::Isotropic(0.0) {
+                            continue;
+                        }
+                        let offset = 1 + interval * (panels + 1);
+                        let density = |s: usize| rate.weigh(mirrored(&a[s], &b[s])) * stretches[s];
+                        let width = edges[1] - edges[0];
+                        value +=
+                            simpson_sum(offset, panels, density) * (width / (3.0 * panels as f64));
+                    }
+                    for (side, which, anchor, region) in [
+                        (0, StackSide::Left, 0, 0),
+                        (1, StackSide::Right, a.len() - 1, layers + 1),
+                    ] {
+                        let rate = rates[region][0];
+                        let (Some(ka), Some(kb)) = (kappa[m][side], kappa[j][side]) else {
+                            continue;
+                        };
+                        if rate == Principal::Isotropic(0.0) {
+                            continue;
+                        }
+                        let sum = ka + kb;
+                        if sum.norm().is_nan() || sum.norm() < super::open::TAIL_SINGULAR_FLOOR * k0
+                        {
+                            return Err(TailSingular { side: which });
+                        }
+                        value += Complex::I * rate.weigh(mirrored(&a[anchor], &b[anchor])) / sum;
+                    }
+                    for (k, &velocity) in direction.interface_velocities().iter().enumerate() {
+                        if velocity == 0.0 {
+                            continue;
+                        }
+                        let p = match limits[k] {
+                            Some(0) => 0,
+                            Some(q) => q * (panels + 1),
+                            None => return Err(Geometry),
+                        };
+                        // Tangential E and normal D = ε_zz E_z are continuous.
+                        let (l, r) = (tensors[k][0].entries(), tensors[k + 1][0].entries());
+                        let [x, y, z] = mirrored(&a[p], &b[p]);
+                        value += velocity
+                            * ((l[0] - r[0]) * x + (l[1] - r[1]) * y
+                                - (l[2].inv() - r[2].inv()) * l[2] * l[2] * z);
+                    }
+                    entries.push(value * (prefactor / k0));
+                }
+            }
+            Ok((entries, ()))
+        },
+    )?;
+    let mut perturbation_matrix = DMatrix::zeros(n, n);
+    let mut p = 0;
+    for m in 0..n {
+        for j in m..n {
+            perturbation_matrix[(m, j)] = converged.entries[p] * k0;
+            perturbation_matrix[(j, m)] = converged.entries[p] * k0;
+            p += 1;
+        }
+    }
+    // Groups: connected components of |Δβ| ≤ gap.
+    let mut component: Vec<usize> = (0..n).collect();
+    for i in 0..n {
+        for j in 0..i {
+            if (betas[i] - betas[j]).norm() <= gap {
+                let (from, to) = (
+                    component[i].max(component[j]),
+                    component[i].min(component[j]),
+                );
+                component
+                    .iter_mut()
+                    .filter(|c| **c == from)
+                    .for_each(|c| *c = to);
+            }
+        }
+    }
+    let groups = (0..n)
+        .filter(|&i| component[i] == i)
+        .map(|i| {
+            (i..n)
+                .filter(|&j| component[j] == i)
+                .map(|j| modes[j])
+                .collect::<Vec<_>>()
+        })
+        .filter(|g| g.len() > 1)
+        .collect();
+    let coefficients = DMatrix::from_fn(n, n, |m, j| {
+        (component[m] != component[j]).then(|| perturbation_matrix[(m, j)] / (betas[j] - betas[m]))
+    });
+    Ok(BasisLocalCoupling {
+        modes,
+        direction: direction.clone(),
+        perturbation_matrix,
+        coefficients,
+        groups,
+        gap_cm: gap,
+        partition_cm: partition,
+        sample_count: converged.sample_count,
+        quadrature_change_per_cm: converged.change * k0,
+        status: basis.status,
+        scope: basis.scope,
     })
 }

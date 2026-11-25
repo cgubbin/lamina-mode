@@ -73,6 +73,9 @@ __all__ = [
     "ModalBasis",
     "ModalProfile",
     "BasisPairing",
+    "ExteriorWave",
+    "BasisProjection",
+    "BasisLocalCoupling",
     "enumerate_guided_modes",
     "modal_basis",
     "chart_window_covering",
@@ -1998,6 +2001,99 @@ class ModalBasis(_Record):
         z = np.ascontiguousarray(z_m, dtype=float).ravel()
         return ModalProfile.from_dict(json.loads(self._solver().profile(int(mode), z.tolist())))
 
+    def project_field(
+        self,
+        field: Callable[[float, str], tuple[Any, Any]],
+        support_m: tuple[float, float],
+        interfaces_m: Sequence[float] = (),
+        origin_m: float = 0.0,
+        rank_rtol: float = 1e-8,
+        field_id: str | None = None,
+        exterior: tuple[Sequence[ExteriorWave], Sequence[ExteriorWave]] = ((), ()),
+    ) -> BasisProjection:
+        """Expand a supplied field F in this basis's normalised modes f_m.
+
+        Solves G a = b with G[m, n] = ⟨f_m, f_n⟩ and b[m] = ⟨f_m, F⟩, both under
+        the unconjugated pairing of `definitions`, on the basis's partition with
+        the support ends and `interfaces_m` added: along the stretched
+        coordinate in a PML and with continued tails on open sides.
+
+        `field(z_m, side)` returns `(E, H)` as for `GuidedBasis.project_field`.
+        Inside a PML it is the exterior solution continued to the stretched
+        coordinate, as `profile` gives it; a field of the equivalent medium in
+        real z has its normal components divided by the stretch first. It
+        vanishes outside `support_m`, which must stay within the walls. On an
+        open side whose support edge lies at or beyond the outermost interface,
+        `exterior` may state the field beyond the edge as `ExteriorWave`s,
+        (left, right); a field built from leaky modes needs them.
+
+        The record holds the Gram matrix, its singular values, condition number
+        and defect, and at full rank the coefficients, the equation residual
+        and the reconstruction residual: the field scale of F − Σ a_m f_m over
+        the bounded partition. `residual_includes_continuum` is True for a
+        basis of a stack with an open side: its modes never span the fields,
+        so the residual then includes F's radiation content and is physical,
+        not numerical. An incomplete basis is accepted; read `status`.
+        """
+        lo, hi = support_m
+        left, right = exterior
+        text = self._solver().project_field(
+            _field_sampler(field),
+            [float(lo), float(hi)],
+            [float(z) for z in interfaces_m],
+            float(origin_m),
+            float(rank_rtol),
+            _dumps([[w.to_dict() for w in left], [w.to_dict() for w in right]]),
+            None if field_id is None else str(field_id),
+        )
+        return BasisProjection.from_dict(json.loads(text))
+
+    def local_coupling(self, parameter: Parameter, gap_rad_per_m: float | None = None) -> BasisLocalCoupling:
+        """The perturbation matrix and coupling coefficients of this basis's
+        normalised modes along a fixed-wavelength `parameter`.
+
+        `perturbation_matrix_rad_per_m` is complex symmetric, its diagonal each
+        mode's dβ/dp; `coefficients[m, n]` = K[m, n] / (β_n − β_m) is the rate of
+        the pairing of mode m with the moving mode n. Modes whose propagation
+        constants differ by at most `gap_rad_per_m` (default: the basis's
+        degeneracy gap) form `groups` whose mutual coefficients, like the
+        diagonal, are absent. A wavelength or permeability parameter, or one
+        moving an interface against a wall or PML, raises `InvalidInput`.
+        """
+        gap = None if gap_rad_per_m is None else float(gap_rad_per_m)
+        text = self._solver().local_coupling(_dumps(parameter.to_dict()), gap)
+        return BasisLocalCoupling.from_dict(json.loads(text))
+
+
+@dataclass(frozen=True)
+class ExteriorWave:
+    """One exterior wave of a supplied field beyond its support on an open
+    side: E and H at the support edge (three complex components each, V/m and
+    A/m) times exp(iκζ) at outward distance ζ, κ in rad/m on either sheet."""
+
+    kappa_rad_per_m: complex
+    electric_v_per_m: tuple[complex, complex, complex]
+    magnetic_a_per_m: tuple[complex, complex, complex]
+
+    def to_dict(self) -> dict[str, Any]:
+        e = np.asarray(self.electric_v_per_m, dtype=complex)
+        h = np.asarray(self.magnetic_a_per_m, dtype=complex)
+        if e.shape != (3,) or h.shape != (3,):
+            raise InvalidInput("an ExteriorWave's E and H each have three complex components")
+        return {
+            "kappa_rad_per_m": _pair(complex(self.kappa_rad_per_m)),
+            "electric_real": e.real.tolist(),
+            "electric_imag": e.imag.tolist(),
+            "magnetic_real": h.real.tolist(),
+            "magnetic_imag": h.imag.tolist(),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> ExteriorWave:
+        e = tuple(complex(r, i) for r, i in zip(d["electric_real"], d["electric_imag"]))
+        h = tuple(complex(r, i) for r, i in zip(d["magnetic_real"], d["magnetic_imag"]))
+        return cls(_c(d["kappa_rad_per_m"]), e, h)  # type: ignore[arg-type]
+
 
 @dataclass(frozen=True, eq=False)
 class ModalProfile(_Record):
@@ -2163,6 +2259,230 @@ class BasisPairing(_Record):
             d["quadrature_change_w_per_m"],
             tuple(d["status"]),
             tuple(d["scope"]),
+        )
+
+
+@dataclass(frozen=True, eq=False)
+class BasisProjection(_Record):
+    """A supplied field expanded in the normalised modes of a modal basis.
+
+    `modes` are the basis indices of the rows and columns of `gram_w_per_m`
+    (⟨f_m, f_n⟩) and of `right_hand_side_w_per_m` (⟨f_m, F⟩). `rank` counts
+    the singular values above `rank_rtol` times the largest; below full rank
+    `coefficients`, `condition_number`, `equation_residual_w_per_m`,
+    `residual_scale_w_per_m` and `relative_residual` are None. The field and
+    residual scales are (1/4Z0) ∫ (|E|² + |Z0 H|²) dz over the bounded
+    partition; `relative_residual` is the square root of their ratio (None
+    for a zero field). `residual_includes_continuum` states that the basis
+    has no radiation continuum, so the residual holds F's radiation content.
+    """
+
+    conventions: Mapping[str, str]
+    definitions: Mapping[str, str]
+    definition: str
+    assumption: str
+    input_hash: str
+    field_id: str | None
+    support_m: tuple[float, float]
+    interfaces_m: tuple[float, ...]
+    origin_m: float
+    exterior: tuple[tuple[ExteriorWave, ...], tuple[ExteriorWave, ...]]
+    rank_rtol: float
+    modes: tuple[int, ...]
+    gram_w_per_m: np.ndarray
+    right_hand_side_w_per_m: np.ndarray
+    rank: int
+    singular_values_w_per_m: np.ndarray
+    gram_defect: float
+    partition_m: np.ndarray
+    field_sample_count: int
+    sample_count: int
+    quadrature_change_w_per_m: float
+    coefficients: np.ndarray | None
+    condition_number: float | None
+    equation_residual_w_per_m: float | None
+    field_scale_w_per_m: float
+    residual_scale_w_per_m: float | None
+    relative_residual: float | None
+    residual_includes_continuum: bool
+    status: str
+    scope: str
+    _kind = "basis_projection"
+
+    @property
+    def is_full_rank(self) -> bool:
+        return self.coefficients is not None
+
+    def to_dict(self) -> dict[str, Any]:
+        g, b, c = self.gram_w_per_m, self.right_hand_side_w_per_m, self.coefficients
+        return {
+            "schema": "lamina.basis_projection",
+            "schema_version": SCHEMA_VERSION,
+            "conventions": dict(self.conventions),
+            "definitions": dict(self.definitions),
+            "definition": self.definition,
+            "assumption": self.assumption,
+            "input_hash": self.input_hash,
+            "field_id": self.field_id,
+            "support_m": list(self.support_m),
+            "interfaces_m": list(self.interfaces_m),
+            "origin_m": self.origin_m,
+            "exterior": [[w.to_dict() for w in side] for side in self.exterior],
+            "rank_rtol": self.rank_rtol,
+            "modes": list(self.modes),
+            "gram_real": g.real.tolist(),
+            "gram_imag": g.imag.tolist(),
+            "right_hand_side_real": b.real.tolist(),
+            "right_hand_side_imag": b.imag.tolist(),
+            "rank": self.rank,
+            "singular_values_w_per_m": self.singular_values_w_per_m.tolist(),
+            "gram_defect": self.gram_defect,
+            "partition_m": self.partition_m.tolist(),
+            "field_sample_count": self.field_sample_count,
+            "sample_count": self.sample_count,
+            "quadrature_change_w_per_m": self.quadrature_change_w_per_m,
+            "coefficients_real": None if c is None else c.real.tolist(),
+            "coefficients_imag": None if c is None else c.imag.tolist(),
+            "condition_number": self.condition_number,
+            "equation_residual_w_per_m": self.equation_residual_w_per_m,
+            "field_scale_w_per_m": self.field_scale_w_per_m,
+            "residual_scale_w_per_m": self.residual_scale_w_per_m,
+            "relative_residual": self.relative_residual,
+            "residual_includes_continuum": self.residual_includes_continuum,
+            "status": self.status,
+            "scope": self.scope,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> BasisProjection:
+        c_re, c_im = d["coefficients_real"], d["coefficients_imag"]
+        coefficients = None if c_re is None or c_im is None else _complex_vector(c_re, c_im)
+        left, right = d["exterior"]
+        return cls(
+            MappingProxyType(dict(d["conventions"])),
+            MappingProxyType(dict(d["definitions"])),
+            d["definition"],
+            d["assumption"],
+            d["input_hash"],
+            d["field_id"],
+            tuple(d["support_m"]),
+            tuple(d["interfaces_m"]),
+            d["origin_m"],
+            (
+                tuple(ExteriorWave.from_dict(w) for w in left),
+                tuple(ExteriorWave.from_dict(w) for w in right),
+            ),
+            d["rank_rtol"],
+            tuple(d["modes"]),
+            _complex_matrix(d["gram_real"], d["gram_imag"]),
+            _complex_vector(d["right_hand_side_real"], d["right_hand_side_imag"]),
+            d["rank"],
+            _readonly(np.asarray(d["singular_values_w_per_m"], dtype=float)),
+            d["gram_defect"],
+            _readonly(np.asarray(d["partition_m"], dtype=float)),
+            d["field_sample_count"],
+            d["sample_count"],
+            d["quadrature_change_w_per_m"],
+            coefficients,
+            d["condition_number"],
+            d["equation_residual_w_per_m"],
+            d["field_scale_w_per_m"],
+            d["residual_scale_w_per_m"],
+            d["relative_residual"],
+            d["residual_includes_continuum"],
+            d["status"],
+            d["scope"],
+        )
+
+
+@dataclass(frozen=True, eq=False)
+class BasisLocalCoupling(_Record):
+    """The local coupling of a modal basis along one fixed-wavelength parameter.
+
+    Rows and columns are the basis modes `modes`. `perturbation_matrix_rad_per_m`
+    is complex symmetric, in rad/m per `parameter_unit`, its diagonal each mode's
+    dβ/dp. `coefficients` are per `parameter_unit`, row the receiving mode and
+    column the differentiated mode; entries on the diagonal and within a group
+    are absent: nan there, with `coefficient_resolved` False. `groups` lists
+    the modes, by basis index, whose propagation constants lie within
+    `gap_rad_per_m` of each other.
+    """
+
+    conventions: Mapping[str, str]
+    definitions: Mapping[str, str]
+    definition: str
+    assumption: str
+    input_hash: str
+    parameter: Parameter
+    parameter_unit: str
+    gap_rad_per_m: float
+    modes: tuple[int, ...]
+    perturbation_matrix_rad_per_m: np.ndarray
+    coefficients: np.ndarray
+    coefficient_resolved: np.ndarray
+    groups: tuple[tuple[int, ...], ...]
+    partition_m: np.ndarray
+    sample_count: int
+    quadrature_change_rad_per_m: float
+    status: str
+    scope: str
+    _kind = "basis_local_coupling"
+
+    def to_dict(self) -> dict[str, Any]:
+        m, c, ok = self.perturbation_matrix_rad_per_m, self.coefficients, self.coefficient_resolved
+        return {
+            "schema": "lamina.basis_local_coupling",
+            "schema_version": SCHEMA_VERSION,
+            "conventions": dict(self.conventions),
+            "definitions": dict(self.definitions),
+            "definition": self.definition,
+            "assumption": self.assumption,
+            "input_hash": self.input_hash,
+            "parameter": self.parameter.to_dict(),
+            "parameter_unit": self.parameter_unit,
+            "gap_rad_per_m": self.gap_rad_per_m,
+            "modes": list(self.modes),
+            "perturbation_matrix_real": m.real.tolist(),
+            "perturbation_matrix_imag": m.imag.tolist(),
+            "coefficients_real": _optional_rows(c.real, ok),
+            "coefficients_imag": _optional_rows(c.imag, ok),
+            "groups": [list(g) for g in self.groups],
+            "partition_m": self.partition_m.tolist(),
+            "sample_count": self.sample_count,
+            "quadrature_change_rad_per_m": self.quadrature_change_rad_per_m,
+            "status": self.status,
+            "scope": self.scope,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> BasisLocalCoupling:
+        n = len(d["modes"])
+        re = _optional_matrix(d["coefficients_real"]).reshape(n, n)
+        im = _optional_matrix(d["coefficients_imag"]).reshape(n, n)
+        resolved = np.array(
+            [[v is not None for v in row] for row in d["coefficients_real"]], dtype=bool
+        ).reshape(n, n)
+        return cls(
+            MappingProxyType(dict(d["conventions"])),
+            MappingProxyType(dict(d["definitions"])),
+            d["definition"],
+            d["assumption"],
+            d["input_hash"],
+            Parameter.from_dict(d["parameter"]),
+            d["parameter_unit"],
+            d["gap_rad_per_m"],
+            tuple(d["modes"]),
+            _readonly(
+                _complex_matrix(d["perturbation_matrix_real"], d["perturbation_matrix_imag"]).reshape(n, n)
+            ),
+            _readonly(re + 1j * im),
+            _readonly(resolved),
+            tuple(tuple(g) for g in d["groups"]),
+            _readonly(np.asarray(d["partition_m"], dtype=float)),
+            d["sample_count"],
+            d["quadrature_change_rad_per_m"],
+            d["status"],
+            d["scope"],
         )
 
 

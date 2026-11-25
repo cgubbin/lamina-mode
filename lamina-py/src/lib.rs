@@ -165,27 +165,7 @@ impl NativeBasis {
         rank_rtol: f64,
         field_id: Option<String>,
     ) -> PyResult<String> {
-        let sample = |z_m: f64, side: &'static str| -> Result<[Complex; 6], pair::SampleError> {
-            let values: Vec<f64> = field
-                .call1((z_m, side))
-                .and_then(|v| v.extract())
-                .map_err(pair::SampleError::Raised)?;
-            if values.len() != 12 {
-                return Err(pair::SampleError::Invalid(format!(
-                    "the field sampler must return 12 values, got {}",
-                    values.len()
-                )));
-            }
-            Ok(std::array::from_fn(|k| {
-                let (part, component) = (k / 3, k % 3);
-                let (re, im) = if part == 0 {
-                    (values[component], values[3 + component])
-                } else {
-                    (values[6 + component], values[9 + component])
-                };
-                Complex::new(re, im)
-            }))
-        };
+        let sample = python_sampler(&field);
         let request = pair::ProjectionRequest {
             support_m,
             interfaces_m: &interfaces_m,
@@ -214,6 +194,34 @@ impl NativeBasis {
     }
 }
 
+/// A per-point sampler over a Python callable returning twelve floats:
+/// Re E, Im E (V/m), Re H, Im H (A/m), each (x, y, z).
+fn python_sampler<'a, 'py>(
+    field: &'a Bound<'py, PyAny>,
+) -> impl Fn(f64, &'static str) -> Result<[Complex; 6], pair::SampleError> + 'a {
+    move |z_m: f64, side: &'static str| {
+        let values: Vec<f64> = field
+            .call1((z_m, side))
+            .and_then(|v| v.extract())
+            .map_err(pair::SampleError::Raised)?;
+        if values.len() != 12 {
+            return Err(pair::SampleError::Invalid(format!(
+                "the field sampler must return 12 values, got {}",
+                values.len()
+            )));
+        }
+        Ok(std::array::from_fn(|k| {
+            let (part, component) = (k / 3, k % 3);
+            let (re, im) = if part == 0 {
+                (values[component], values[3 + component])
+            } else {
+                (values[6 + component], values[9 + component])
+            };
+            Complex::new(re, im)
+        }))
+    }
+}
+
 /// A solved modal basis whose modes stay available for sampling and pairing.
 #[pyclass(frozen, module = "lamina._native")]
 struct NativeModalBasis {
@@ -233,6 +241,54 @@ impl NativeModalBasis {
             .detach(|| basis::profile(&self.solved, mode_index, &z_m))
             .map_err(raise)?;
         json(&record)
+    }
+
+    /// The local coupling of the basis along a parameter, serialised.
+    #[pyo3(signature = (parameter_json, gap_rad_per_m=None))]
+    fn local_coupling(
+        &self,
+        py: Python<'_>,
+        parameter_json: &str,
+        gap_rad_per_m: Option<f64>,
+    ) -> PyResult<String> {
+        let parameter = parameter(parameter_json)?;
+        let record = py
+            .detach(|| basis::local_coupling(&self.solved, parameter, gap_rad_per_m))
+            .map_err(raise)?;
+        json(&record)
+    }
+
+    /// Project a supplied field onto the basis, serialised. `field(z_m, side)`
+    /// returns twelve floats as for `NativeBasis.project_field`; `exterior_json`
+    /// holds the left and right continuations. It runs with the GIL held.
+    #[pyo3(signature = (field, support_m, interfaces_m, origin_m, rank_rtol, exterior_json, field_id=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn project_field(
+        &self,
+        field: Bound<'_, PyAny>,
+        support_m: [f64; 2],
+        interfaces_m: Vec<f64>,
+        origin_m: f64,
+        rank_rtol: f64,
+        exterior_json: &str,
+        field_id: Option<String>,
+    ) -> PyResult<String> {
+        let exterior: [Vec<rec::ExteriorWave>; 2] = serde_json::from_str(exterior_json)
+            .map_err(|e| InvalidInput::new_err(format!("exterior: {e}")))?;
+        let sample = python_sampler(&field);
+        let request = basis::BasisProjectionRequest {
+            support_m,
+            interfaces_m: &interfaces_m,
+            origin_m,
+            rank_rtol,
+            field_id,
+            exterior,
+        };
+        match basis::project(&self.solved, request, &sample) {
+            Ok(record) => json(&record),
+            Err(pair::ProjectionFailure::Failure(f)) => Err(raise(f)),
+            Err(pair::ProjectionFailure::Raised(e)) => Err(e),
+        }
     }
 }
 
@@ -380,6 +436,8 @@ fn canonical(kind: &str, json: &str) -> PyResult<(String, String)> {
         "modal_basis" => go::<rec::ModalBasis>(json),
         "modal_profile" => go::<rec::ModalProfile>(json),
         "basis_pairing" => go::<rec::BasisPairing>(json),
+        "basis_projection" => go::<rec::BasisProjection>(json),
+        "basis_local_coupling" => go::<rec::BasisLocalCoupling>(json),
         other => Err(format!("unknown record kind {other:?}")),
     }
     .map_err(SchemaError::new_err)

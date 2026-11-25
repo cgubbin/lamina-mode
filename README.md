@@ -24,7 +24,9 @@ basis in any window of the complex β plane, and a stack with open sides a
 basis of its guided and leaky modes in a window of the conformal chart (its
 radiation continuum is not included), with unconjugated and conjugated
 pairings between bases, through a PML along its stretched coordinate and
-beyond an open side by analytically continued tails. It builds on `lamina-units`,
+beyond an open side by analytically continued tails, the expansion of a
+supplied field in a basis and local coupling coefficients between its modes.
+It builds on `lamina-units`,
 `lamina-core` and `argloc`.
 
 Read the [modal transform guide](docs/modal-transform.md) for the
