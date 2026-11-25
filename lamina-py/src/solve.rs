@@ -2,7 +2,8 @@
 use crate::records::{self as rec, C2};
 use lamina_core::{
     AnalyticalMaterialHandle, AnalyticalMaterialStack, Constant, ExteriorSampling, FieldSampling,
-    LayerSampling, Polarisation, Scatter2, Wall, WallKind, stack::StackBuilder,
+    LayerSampling, Pml, Polarisation, Scatter2, StretchProfile, Termination, Wall, WallKind,
+    stack::StackBuilder,
 };
 use lamina_mode::{
     AnalyticAssumption, Complex, FieldRecoverySettings, GuidedDirection, GuidedLimit, GuidedWindow,
@@ -68,6 +69,8 @@ pub fn sellmeier_model(spec: &rec::Sellmeier) -> Result<lamina_materials::Sellme
 #[derive(Debug)]
 pub enum Failure {
     Invalid(String),
+    /// A termination the operation does not support.
+    Unsupported(String),
     Enumeration(String),
     Fields(String),
     Derivatives(String),
@@ -125,7 +128,7 @@ pub fn normalise(mut input: rec::GuidedInput) -> Result<rec::GuidedInput, Failur
 }
 
 /// Validate a stack at `wavelength` and normalise the signed zeros of its
-/// wall positions.
+/// wall and PML fields.
 pub(crate) fn normalise_stack(stack: &mut rec::Stack, wavelength: f64) -> Result<(), Failure> {
     let material = |name: &str, m: &rec::Material| -> Result<(), Failure> {
         match m {
@@ -176,28 +179,54 @@ pub(crate) fn normalise_stack(stack: &mut rec::Stack, wavelength: f64) -> Result
         material(&format!("layer {i}"), &layer.material)?;
         finite_positive(&format!("layer {i} thickness_m"), layer.thickness_m)?;
     }
-    // Walls lie on or outside the outermost interface of their side: z ≤ 0
-    // on the left, z ≥ L on the right, with L summed left to right as in
-    // `Stack.interfaces_m`.
+    // Walls and PMLs start on or outside the outermost interface of their
+    // side: z ≤ 0 on the left, z ≥ L on the right, with L summed left to right
+    // as in `Stack.interfaces_m`.
     let length = total_m(stack);
     for (side, termination, interface) in [
         ("left", &mut stack.left_termination, 0.),
         ("right", &mut stack.right_termination, length),
     ] {
-        if let rec::Termination::Wall { z_m, .. } = termination {
-            let inside = if side == "left" {
-                *z_m > interface
-            } else {
-                *z_m < interface
-            };
-            if !z_m.is_finite() || inside {
-                return Err(Failure::Invalid(format!(
-                    "{side}_termination z_m must be finite and on or outside the {side} \
-                     interface at {interface} m, got {z_m}"
-                )));
+        let (field, z_m) = match termination {
+            rec::Termination::Open => continue,
+            rec::Termination::Wall { z_m, .. } => ("z_m", z_m),
+            rec::Termination::Pml {
+                start_z_m,
+                thickness_m,
+                profile: rec::StretchProfile::Polynomial { order, strength },
+                ..
+            } => {
+                finite_positive(&format!("{side}_termination thickness_m"), *thickness_m)?;
+                if !(order.is_finite() && *order >= 0.) {
+                    return Err(Failure::Invalid(format!(
+                        "{side}_termination profile order must be finite and non-negative, \
+                         got {order}"
+                    )));
+                }
+                let [re, im] = *strength;
+                if !(re.is_finite() && im.is_finite() && re >= 0. && im > 0.) {
+                    return Err(Failure::Invalid(format!(
+                        "{side}_termination profile strength must be finite with a \
+                         non-negative real and a positive imaginary part, got [{re}, {im}]"
+                    )));
+                }
+                *order += 0.;
+                *strength = [re + 0., im];
+                ("start_z_m", start_z_m)
             }
-            *z_m += 0.;
+        };
+        let inside = if side == "left" {
+            *z_m > interface
+        } else {
+            *z_m < interface
+        };
+        if !z_m.is_finite() || inside {
+            return Err(Failure::Invalid(format!(
+                "{side}_termination {field} must be finite and on or outside the {side} \
+                 interface at {interface} m, got {z_m}"
+            )));
         }
+        *z_m += 0.;
     }
     Ok(())
 }
@@ -221,32 +250,50 @@ fn total_m(spec: &rec::Stack) -> f64 {
         .fold(0., |total, l| total + l.thickness_m)
 }
 
-/// The wall closing each side, with its gap from the outermost interface in
-/// cm; `None` when open.
-fn walls(spec: &rec::Stack) -> [Option<(Wall<f64>, f64)>; 2] {
+/// The termination closing each side, with its gap from the outermost
+/// interface to the wall or PML start in cm; `None` when open.
+fn terminations(spec: &rec::Stack) -> [Option<(Termination<f64>, f64)>; 2] {
     let length = total_m(spec);
     let last_cm = spec
         .layers
         .iter()
         .fold(0., |total, l| total + l.thickness_m / M_PER_CM);
-    let wall = |termination: &rec::Termination, right: bool| match *termination {
+    let kind = |kind| match kind {
+        rec::WallType::Pec => WallKind::PerfectElectric,
+        rec::WallType::Pmc => WallKind::PerfectMagnetic,
+    };
+    // The gap is formed in metres, where the position was validated, and the
+    // right termination placed that gap beyond the layers as summed in cm, so
+    // one on the interface stays exactly on it.
+    let place = |z_m: f64, right: bool| {
+        let gap_cm = if right { z_m - length } else { -z_m } / M_PER_CM;
+        let z_cm = if right { last_cm + gap_cm } else { -gap_cm };
+        (Length::centimetres(z_cm), gap_cm)
+    };
+    let close = |termination: &rec::Termination, right: bool| match *termination {
         rec::Termination::Open => None,
-        rec::Termination::Wall { kind, z_m } => {
-            let kind = match kind {
-                rec::WallType::Pec => WallKind::PerfectElectric,
-                rec::WallType::Pmc => WallKind::PerfectMagnetic,
-            };
-            // The gap is formed in metres, where the position was validated,
-            // and the right wall placed that gap beyond the layers as summed
-            // in cm, so a wall on the interface stays exactly on it.
-            let gap_cm = if right { z_m - length } else { -z_m } / M_PER_CM;
-            let z_cm = if right { last_cm + gap_cm } else { -gap_cm };
-            Some((Wall::new(kind, Length::centimetres(z_cm)), gap_cm))
+        rec::Termination::Wall { kind: wall, z_m } => {
+            let (z, gap_cm) = place(z_m, right);
+            Some((Wall::new(kind(wall), z).into(), gap_cm))
+        }
+        rec::Termination::Pml {
+            start_z_m,
+            thickness_m,
+            profile: rec::StretchProfile::Polynomial { order, strength },
+            backing,
+        } => {
+            let (start, gap_cm) = place(start_z_m, right);
+            let profile = StretchProfile::polynomial(order, Complex::new(strength[0], strength[1]));
+            let thickness = Length::centimetres(thickness_m / M_PER_CM);
+            Some((
+                Pml::new(start, thickness, profile, kind(backing)).into(),
+                gap_cm,
+            ))
         }
     };
     [
-        wall(&spec.left_termination, false),
-        wall(&spec.right_termination, true),
+        close(&spec.left_termination, false),
+        close(&spec.right_termination, true),
     ]
 }
 
@@ -258,12 +305,12 @@ pub(crate) fn stack(spec: &rec::Stack) -> Result<AnalyticalMaterialStack<Complex
             Length::centimetres(layer.thickness_m / M_PER_CM),
         );
     }
-    let [left, right] = walls(spec);
-    if let Some((wall, _)) = left {
-        builder = builder.left_termination(wall);
+    let [left, right] = terminations(spec);
+    if let Some((termination, _)) = left {
+        builder = builder.left_termination(termination);
     }
-    if let Some((wall, _)) = right {
-        builder = builder.right_termination(wall);
+    if let Some((termination, _)) = right {
+        builder = builder.right_termination(termination);
     }
     Ok(builder.finalise())
 }
@@ -365,7 +412,10 @@ fn gap(g: &lamina_mode::GuidedGap) -> rec::Gap {
 pub fn enumerate(input: rec::GuidedInput) -> Result<Solved, Failure> {
     let input = normalise(input)?;
     let basis = lamina_mode::enumerate_guided_modes(stack(&input.stack)?, window(&input.request))
-        .map_err(|e| Failure::Enumeration(e.to_string()))?;
+        .map_err(|e| match e {
+        lamina_mode::EnumerationError::Termination { .. } => Failure::Unsupported(e.to_string()),
+        e => Failure::Enumeration(e.to_string()),
+    })?;
     let k0_cm = k0_cm(&input.request);
     let modes = basis
         .modes
@@ -424,7 +474,7 @@ pub(crate) fn sampling(spec: &rec::Stack, z_m: &[f64]) -> Result<FieldSampling<f
         interfaces_cm.push(interfaces_cm.last().unwrap() + layer.thickness_m / M_PER_CM);
     }
     let total = *interfaces_cm.last().unwrap();
-    let right_gap = walls(spec)[1].map(|(_, gap)| gap);
+    let right_gap = terminations(spec)[1].map(|(_, gap)| gap);
     #[derive(PartialEq, Clone, Copy)]
     enum Region {
         Left,

@@ -71,6 +71,24 @@ real-β mode in the window. Fields are sampled up to the walls, and sensitivitie
 `{"kind": "wall", "type": ..., "z_m": ...}` and omits open sides, so open stacks keep their hashes; decision note
 0009 has the details.
 
+## Perfectly matched layers
+
+A side may instead be closed by a perfectly matched layer of its exterior material, starting at an absolute position
+and extending outward by its thickness, with the stretch s(ζ) = 1 + strength (ζ/thickness)^order and a PEC or PMC
+backing wall. Every field is required:
+
+```python
+stack = lamina.Stack(
+    left=2.25, layers=[(4.0, 0.7e-6)], right=2.25,
+    right_termination=lamina.Pml(start_z_m=1.0e-6, thickness_m=1.0e-6, order=2.0, strength=1 + 3j, backing="pec"),
+)
+```
+
+The record stores it as `{"kind": "pml", "start_z_m": ..., "thickness_m": ..., "profile": {"kind": "polynomial",
+"order": ..., "strength": [re, im]}, "backing": ...}`; a non-positive thickness, a negative order or a strength with
+a negative real or non-positive imaginary part is `InvalidInput`. A PML-closed stack has no guided basis:
+`enumerate_guided_modes` raises `UnsupportedTermination`, an `InvalidInput`.
+
 ## Pairings
 
 Modes pair with each other, from one basis or from two stacks at one wavelength, and with supplied fields:
