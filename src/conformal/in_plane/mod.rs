@@ -902,9 +902,23 @@ mod tests {
             let k0 = jet_value(point.coordinates().vacuum_angular_wavenumber());
             let kx = jet_value(point.coordinates().parallel_angular_wavenumber());
 
-            let left = jet_value(point.exterior_wavevectors().left().unwrap());
+            let left = jet_value(
+                point
+                    .exterior_wavevectors()
+                    .left()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            );
 
-            let right = jet_value(point.exterior_wavevectors().right().unwrap());
+            let right = jet_value(
+                point
+                    .exterior_wavevectors()
+                    .right()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            );
 
             assert_complex_close(left * left, lossless_chi_left() * k0 * k0 - kx * kx);
 
@@ -922,9 +936,23 @@ mod tests {
             let k0 = jet_value(point.coordinates().vacuum_angular_wavenumber());
             let kx = jet_value(point.coordinates().parallel_angular_wavenumber());
 
-            let left = jet_value(point.exterior_wavevectors().left().unwrap());
+            let left = jet_value(
+                point
+                    .exterior_wavevectors()
+                    .left()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            );
 
-            let right = jet_value(point.exterior_wavevectors().right().unwrap());
+            let right = jet_value(
+                point
+                    .exterior_wavevectors()
+                    .right()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            );
 
             assert_complex_close(left * left, lossy_chi_left() * k0 * k0 - kx * kx);
 
@@ -942,9 +970,23 @@ mod tests {
             let k0 = jet_value(point.coordinates().vacuum_angular_wavenumber());
             let kx = jet_value(point.coordinates().parallel_angular_wavenumber());
 
-            let left = jet_value(point.exterior_wavevectors().left().unwrap());
+            let left = jet_value(
+                point
+                    .exterior_wavevectors()
+                    .left()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            );
 
-            let right = jet_value(point.exterior_wavevectors().right().unwrap());
+            let right = jet_value(
+                point
+                    .exterior_wavevectors()
+                    .right()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            );
 
             assert_complex_close(left * left, magnetic_lossy_chi_left() * k0 * k0 - kx * kx);
 
@@ -965,12 +1007,26 @@ mod tests {
             let point = map.map_raw(constant(z0));
 
             assert_complex_close(
-                jet_value(point.exterior_wavevectors().left().unwrap()),
+                jet_value(
+                    point
+                        .exterior_wavevectors()
+                        .left()
+                        .unwrap()
+                        .scalar()
+                        .unwrap(),
+                ),
                 expected_kappa_left(2.0, r, z0),
             );
 
             assert_complex_close(
-                jet_value(point.exterior_wavevectors().right().unwrap()),
+                jet_value(
+                    point
+                        .exterior_wavevectors()
+                        .right()
+                        .unwrap()
+                        .scalar()
+                        .unwrap(),
+                ),
                 expected_kappa_right(2.0, r, z0),
             );
         }
@@ -999,13 +1055,41 @@ mod tests {
         );
 
         assert_complex_close(
-            jet_value(constant_point.exterior_wavevectors().left().unwrap()),
-            jet_value(variable_point.exterior_wavevectors().left().unwrap()),
+            jet_value(
+                constant_point
+                    .exterior_wavevectors()
+                    .left()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            ),
+            jet_value(
+                variable_point
+                    .exterior_wavevectors()
+                    .left()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            ),
         );
 
         assert_complex_close(
-            jet_value(constant_point.exterior_wavevectors().right().unwrap()),
-            jet_value(variable_point.exterior_wavevectors().right().unwrap()),
+            jet_value(
+                constant_point
+                    .exterior_wavevectors()
+                    .right()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            ),
+            jet_value(
+                variable_point
+                    .exterior_wavevectors()
+                    .right()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            ),
         );
     }
 
@@ -1052,7 +1136,14 @@ mod tests {
             let point = map.map_raw(variable(z0));
 
             assert_complex_close(
-                jet_derivative(point.exterior_wavevectors().left().unwrap()),
+                jet_derivative(
+                    point
+                        .exterior_wavevectors()
+                        .left()
+                        .unwrap()
+                        .scalar()
+                        .unwrap(),
+                ),
                 expected_kappa_left_derivative(2.0, r, z0),
             );
         }
@@ -1068,7 +1159,14 @@ mod tests {
             let point = map.map_raw(variable(z0));
 
             assert_complex_close(
-                jet_derivative(point.exterior_wavevectors().right().unwrap()),
+                jet_derivative(
+                    point
+                        .exterior_wavevectors()
+                        .right()
+                        .unwrap()
+                        .scalar()
+                        .unwrap(),
+                ),
                 expected_kappa_right_derivative(2.0, r, z0),
             );
         }
@@ -1101,13 +1199,41 @@ mod tests {
         let second = map.map_raw(constant(z0 + c(0.0, PI)));
 
         assert_complex_close(
-            jet_value(second.exterior_wavevectors().left().unwrap()),
-            -jet_value(first.exterior_wavevectors().left().unwrap()),
+            jet_value(
+                second
+                    .exterior_wavevectors()
+                    .left()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            ),
+            -jet_value(
+                first
+                    .exterior_wavevectors()
+                    .left()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            ),
         );
 
         assert_complex_close(
-            jet_value(second.exterior_wavevectors().right().unwrap()),
-            -jet_value(first.exterior_wavevectors().right().unwrap()),
+            jet_value(
+                second
+                    .exterior_wavevectors()
+                    .right()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            ),
+            -jet_value(
+                first
+                    .exterior_wavevectors()
+                    .right()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            ),
         );
     }
 
@@ -1927,8 +2053,22 @@ mod tests {
             assert_complex_close(map.kx_squared_scalar(z), c(5.0 * 5.0, 0.0));
             let point = map.map_raw(constant(z));
             (
-                jet_value(point.exterior_wavevectors().left().unwrap()),
-                jet_value(point.exterior_wavevectors().right().unwrap()),
+                jet_value(
+                    point
+                        .exterior_wavevectors()
+                        .left()
+                        .unwrap()
+                        .scalar()
+                        .unwrap(),
+                ),
+                jet_value(
+                    point
+                        .exterior_wavevectors()
+                        .right()
+                        .unwrap()
+                        .scalar()
+                        .unwrap(),
+                ),
             )
         });
         // Each of the four sign pairs occurs once, away from exterior cutoffs.
@@ -1942,11 +2082,25 @@ mod tests {
             }
             let repeated = map.map_raw(constant(zs[i] + c(0.0, 2.0 * PI)));
             assert_complex_close(
-                jet_value(repeated.exterior_wavevectors().left().unwrap()),
+                jet_value(
+                    repeated
+                        .exterior_wavevectors()
+                        .left()
+                        .unwrap()
+                        .scalar()
+                        .unwrap(),
+                ),
                 signatures[i].0,
             );
             assert_complex_close(
-                jet_value(repeated.exterior_wavevectors().right().unwrap()),
+                jet_value(
+                    repeated
+                        .exterior_wavevectors()
+                        .right()
+                        .unwrap()
+                        .scalar()
+                        .unwrap(),
+                ),
                 signatures[i].1,
             );
         }
@@ -1956,7 +2110,18 @@ mod tests {
         let [a, b] = map.physical_preimages(4.0).unwrap().map(Option::unwrap);
         assert_complex_close(a, b);
         let point = map.map_raw(constant(a));
-        assert!(jet_value(point.exterior_wavevectors().left().unwrap()).norm() < 1e-6);
+        assert!(
+            jet_value(
+                point
+                    .exterior_wavevectors()
+                    .left()
+                    .unwrap()
+                    .scalar()
+                    .unwrap()
+            )
+            .norm()
+                < 1e-6
+        );
         // r=0 has one finite inverse t-root, with two exterior signs per 2*pi.
         let symmetric = symmetric_map();
         let finite: Vec<_> = symmetric
@@ -1969,12 +2134,40 @@ mod tests {
         let first = symmetric.map_raw(constant(finite[0]));
         let opposite = symmetric.map_raw(constant(finite[0] + c(0.0, PI)));
         assert_complex_close(
-            jet_value(first.exterior_wavevectors().left().unwrap()),
-            jet_value(first.exterior_wavevectors().right().unwrap()),
+            jet_value(
+                first
+                    .exterior_wavevectors()
+                    .left()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            ),
+            jet_value(
+                first
+                    .exterior_wavevectors()
+                    .right()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            ),
         );
         assert_complex_close(
-            jet_value(opposite.exterior_wavevectors().left().unwrap()),
-            -jet_value(first.exterior_wavevectors().left().unwrap()),
+            jet_value(
+                opposite
+                    .exterior_wavevectors()
+                    .left()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            ),
+            -jet_value(
+                first
+                    .exterior_wavevectors()
+                    .left()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+            ),
         );
     }
 }

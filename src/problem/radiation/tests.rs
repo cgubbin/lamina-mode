@@ -193,7 +193,18 @@ fn invalid_references_fail_without_reselecting_a_sheet() {
         .chart()
         .map(J::lift_constant(arr0(z)))
         .unwrap();
-    assert!((mapped.exterior_wavevectors().left().unwrap().value()[()] - c(2.0)).norm() < 1e-12);
+    assert!(
+        (mapped
+            .exterior_wavevectors()
+            .left()
+            .unwrap()
+            .scalar()
+            .unwrap()
+            .value()[()]
+            - c(2.0))
+        .norm()
+            < 1e-12
+    );
     assert_eq!(
         backwards.provenance().radiation(),
         &RadiationProvenance::Unspecified

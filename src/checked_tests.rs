@@ -102,8 +102,8 @@ impl<S: ModeDeterminantSolver<J>> ModeDeterminantSolver<J> for Counting<S> {
         let [a, b, l, r] = [
             coords.vacuum_angular_wavenumber(),
             coords.parallel_angular_wavenumber(),
-            exterior.left().unwrap(),
-            exterior.right().unwrap(),
+            exterior.left().unwrap().scalar().unwrap(),
+            exterior.right().unwrap().scalar().unwrap(),
         ];
         *self.inputs.lock().unwrap() = Some([
             a.value()[()],
@@ -166,8 +166,18 @@ where
     let [a, b, l, r] = [
         point.coordinates().vacuum_angular_wavenumber(),
         point.coordinates().parallel_angular_wavenumber(),
-        point.exterior_wavevectors().left().unwrap(),
-        point.exterior_wavevectors().right().unwrap(),
+        point
+            .exterior_wavevectors()
+            .left()
+            .unwrap()
+            .scalar()
+            .unwrap(),
+        point
+            .exterior_wavevectors()
+            .right()
+            .unwrap()
+            .scalar()
+            .unwrap(),
     ];
     assert_eq!(
         inputs.lock().unwrap().unwrap(),
@@ -337,9 +347,9 @@ fn check_physical<M>(
     let ext = point.exterior_wavevectors();
     // The exterior jets belong to this exact sheet and satisfy their dispersion.
     for (kappa, eps) in [
-        (ext.left().unwrap(), 1.0),
+        (ext.left().unwrap().scalar().unwrap(), 1.0),
         (
-            ext.right().unwrap(),
+            ext.right().unwrap().scalar().unwrap(),
             if expected.im == 0.0 { 2.25 } else { 1.0 },
         ),
     ] {

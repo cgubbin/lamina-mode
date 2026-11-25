@@ -209,12 +209,12 @@ fn in_plane_uses_stack_exteriors_at_fixed_spectral_point() {
         let b = chart.map(J::variable(arr0(z), 0).unwrap()).unwrap();
         for (a, b) in [
             (
-                a.exterior_wavevectors().left().unwrap(),
-                b.exterior_wavevectors().left().unwrap(),
+                a.exterior_wavevectors().left().unwrap().scalar().unwrap(),
+                b.exterior_wavevectors().left().unwrap().scalar().unwrap(),
             ),
             (
-                a.exterior_wavevectors().right().unwrap(),
-                b.exterior_wavevectors().right().unwrap(),
+                a.exterior_wavevectors().right().unwrap().scalar().unwrap(),
+                b.exterior_wavevectors().right().unwrap().scalar().unwrap(),
             ),
             (
                 a.coordinates().parallel_angular_wavenumber(),
@@ -377,12 +377,12 @@ where
             .unwrap();
         for (a, b) in [
             (
-                a.exterior_wavevectors().left().unwrap(),
-                b.exterior_wavevectors().left().unwrap(),
+                a.exterior_wavevectors().left().unwrap().scalar().unwrap(),
+                b.exterior_wavevectors().left().unwrap().scalar().unwrap(),
             ),
             (
-                a.exterior_wavevectors().right().unwrap(),
-                b.exterior_wavevectors().right().unwrap(),
+                a.exterior_wavevectors().right().unwrap().scalar().unwrap(),
+                b.exterior_wavevectors().right().unwrap().scalar().unwrap(),
             ),
         ] {
             assert_eq!(a.value(), b.value());
@@ -732,11 +732,21 @@ where
     for (material, kappa) in [
         (
             p.context().stack().left_exterior(),
-            point.exterior_wavevectors().left().unwrap(),
+            point
+                .exterior_wavevectors()
+                .left()
+                .unwrap()
+                .scalar()
+                .unwrap(),
         ),
         (
             p.context().stack().right_exterior(),
-            point.exterior_wavevectors().right().unwrap(),
+            point
+                .exterior_wavevectors()
+                .right()
+                .unwrap()
+                .scalar()
+                .unwrap(),
         ),
     ] {
         let material = material.scalar().unwrap();
@@ -1139,9 +1149,16 @@ fn diagonal_exteriors_scale_kappa_and_keep_branch_points_at_their_lines() {
                 let k = point.coordinates().vacuum_angular_wavenumber().value()[()];
                 let b = point.coordinates().parallel_angular_wavenumber().value()[()];
                 let exterior = point.exterior_wavevectors();
-                for (kappa, channel) in [exterior.left(), exterior.right()]
-                    .into_iter()
-                    .zip(channels)
+                for (kappa, channel) in [
+                    exterior
+                        .left()
+                        .and_then(lamina_core::ExteriorBranch::scalar),
+                    exterior
+                        .right()
+                        .and_then(lamina_core::ExteriorBranch::scalar),
+                ]
+                .into_iter()
+                .zip(channels)
                 {
                     let kappa = kappa.unwrap().value()[()];
                     let expected = channel.kappa_squared(k, b);
@@ -1160,7 +1177,15 @@ fn diagonal_exteriors_scale_kappa_and_keep_branch_points_at_their_lines() {
             let b = point.coordinates().parallel_angular_wavenumber().value()[()];
             assert!((b - beta).norm() < 1e-12 * beta);
             let exterior = point.exterior_wavevectors();
-            let kappa = [exterior.left(), exterior.right()].map(|k| k.unwrap().value()[()]);
+            let kappa = [
+                exterior
+                    .left()
+                    .and_then(lamina_core::ExteriorBranch::scalar),
+                exterior
+                    .right()
+                    .and_then(lamina_core::ExteriorBranch::scalar),
+            ]
+            .map(|k| k.unwrap().value()[()]);
             let s = channels[inner].scale().unwrap().re;
             assert!((kappa[inner] - C::new(0.0, s.sqrt() * alpha(lines[inner]))).norm() < 1e-12);
             if beta == lines[outer] {

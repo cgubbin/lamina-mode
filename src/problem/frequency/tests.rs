@@ -273,17 +273,44 @@ fn dispersive_branches_cross_principal_cut_and_keep_both_material_derivatives() 
                 .unwrap();
             let expected = (k / 2.0).exp();
             for wave in [
-                point.exterior_wavevectors().left().unwrap(),
-                point.exterior_wavevectors().right().unwrap(),
+                point
+                    .exterior_wavevectors()
+                    .left()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+                point
+                    .exterior_wavevectors()
+                    .right()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
             ] {
                 assert!((wave.value()[()] - expected).norm() < 1e-9);
                 assert!((wave.first()[()] - expected / 2.0).norm() < 1e-9);
             }
             assert!(
-                (other.exterior_wavevectors().left().unwrap().value()[()] + expected).norm() < 1e-9
+                (other
+                    .exterior_wavevectors()
+                    .left()
+                    .unwrap()
+                    .scalar()
+                    .unwrap()
+                    .value()[()]
+                    + expected)
+                    .norm()
+                    < 1e-9
             );
             assert!(
-                (other.exterior_wavevectors().right().unwrap().value()[()] - expected).norm()
+                (other
+                    .exterior_wavevectors()
+                    .right()
+                    .unwrap()
+                    .scalar()
+                    .unwrap()
+                    .value()[()]
+                    - expected)
+                    .norm()
                     < 1e-9
             );
             let h = 1e-5;

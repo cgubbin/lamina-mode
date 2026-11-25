@@ -259,7 +259,7 @@ impl ModeDeterminantSolver<J> for Solver {
         self.calls.fetch_add(1, Ordering::SeqCst);
         // For this map kappa_L/k0=i*(exp(z)-r exp(-z)); use exterior values
         // only to distinguish disjoint domains in this synthetic injected fault.
-        let value = exterior.left().unwrap().value()[()].im;
+        let value = exterior.left().unwrap().scalar().unwrap().value()[()].im;
         if self
             .fail_band
             .is_some_and(|(lo, hi)| value > lo && value < hi)
@@ -844,12 +844,32 @@ fn overlapping_physical_te_tm_guided_and_normal_spectral_roots() {
         let opposite = p.map.map_raw(J::lift_constant(ndarray::arr0(shifted)));
         for (out, inc) in [
             (
-                first.exterior_wavevectors().left().unwrap(),
-                opposite.exterior_wavevectors().left().unwrap(),
+                first
+                    .exterior_wavevectors()
+                    .left()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+                opposite
+                    .exterior_wavevectors()
+                    .left()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
             ),
             (
-                first.exterior_wavevectors().right().unwrap(),
-                opposite.exterior_wavevectors().right().unwrap(),
+                first
+                    .exterior_wavevectors()
+                    .right()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
+                opposite
+                    .exterior_wavevectors()
+                    .right()
+                    .unwrap()
+                    .scalar()
+                    .unwrap(),
             ),
         ] {
             assert!((out.value()[()] - expected).norm() < 1e-10);
