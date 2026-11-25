@@ -5,10 +5,22 @@
 //! closed by walls are bi-orthogonal under it, because the Lorentz boundary
 //! terms vanish on the walls. The conjugated product
 //! (a, b) = ¼ ∫ (E_a × H_b* + E_b* × H_a) · x̂ dz is power bookkeeping. Both
-//! integrate over the union of the stacks' interfaces and wall planes, up to
-//! the walls, which must coincide in kind and position.
+//! integrate over the union of the stacks' interfaces, PML starts and wall
+//! planes, up to the walls, which must coincide in kind and position, as must
+//! PMLs in start, thickness and profile.
+//!
+//! A PML is a uniaxial medium εΛ, μΛ with Λ = diag(s, s, 1/s): complex
+//! symmetric, hence reciprocal, and backed by a wall, so modes of a stack
+//! closed by PMLs are bi-orthogonal too. Inside a PML the unconjugated pairing
+//! is the contour integral ∫ (E_a × H_b + E_b × H_a) · x̂ dζ̃ of the continued
+//! fields, which depends on the PML only through its complex thickness τ; the
+//! conjugated product integrates the equivalent-medium fields in real
+//! coordinates, s* E_y H_z* − s E_z H_y* for each term, and depends on the
+//! profile.
 use super::basis::{BasisFieldError, BasisMode, BasisScope, BasisStatus, ModalBasis};
-use super::integration::{Layout, Sample, conjugated, converge, integral, intervals, unconjugated};
+use super::integration::{
+    Layout, Sample, conjugated, converge, equivalent, integral, intervals, split_pmls, unconjugated,
+};
 use super::*;
 use lamina_core::{AnalyticalMaterialStack, ModalFieldBackend, StackSide};
 use nalgebra::DMatrix;
@@ -56,7 +68,7 @@ pub enum PairingError {
     IncompatibleWavelength,
     #[error("invalid transverse registration or unrepresentable interface spacing")]
     Registration,
-    #[error("the {side:?} terminations differ in kind or registered position")]
+    #[error("the {side:?} terminations differ in kind, registered position or PML profile")]
     Terminations { side: StackSide },
     #[error("mode {operand} is ill-conditioned and has no normalised fields")]
     IllConditioned { operand: usize },
@@ -68,11 +80,9 @@ pub enum PairingError {
     },
     #[error("pairing quadrature exceeded its accuracy or sampling budget")]
     Quadrature,
-    #[error(transparent)]
-    Pml(#[from] PmlIntegral),
 }
 
-/// Both stacks' layouts, when their wavelengths and walls agree.
+/// Both stacks' layouts, when their wavelengths, walls and PMLs agree.
 fn compatible(
     stacks: [&AnalyticalMaterialStack<Complex>; 2],
     k0: [f64; 2],
@@ -84,7 +94,6 @@ fn compatible(
         return Err(PairingError::IncompatibleWavelength);
     }
     let layout = |i: usize| {
-        crate::problem::walls(stacks[i]).map_err(|side| PmlIntegral { side })?;
         Layout::new(stacks[i], registration.origins_cm[i]).ok_or(PairingError::Registration)
     };
     let layouts = [layout(0)?, layout(1)?];
@@ -93,10 +102,19 @@ fn compatible(
         [Some((_, left)), Some((_, right))] => right - left,
         _ => 0.0,
     };
+    let [pa, pb] = layouts.each_ref().map(|l| l.pmls);
     for (side, which) in [StackSide::Left, StackSide::Right].into_iter().enumerate() {
-        match (a[side], b[side]) {
-            (Some((ka, za)), Some((kb, zb))) if ka == kb && (za - zb).abs() <= 1e-12 * span => {}
-            _ => return Err(PairingError::Terminations { side: which }),
+        let walls = matches!(
+            (a[side], b[side]),
+            (Some((ka, za)), Some((kb, zb))) if ka == kb && (za - zb).abs() <= 1e-12 * span
+        );
+        let pmls = match (pa[side], pb[side]) {
+            (None, None) => true,
+            (Some(x), Some(y)) => x.matches(&y, 1e-12 * span),
+            _ => false,
+        };
+        if !(walls && pmls) {
+            return Err(PairingError::Terminations { side: which });
         }
     }
     Ok(layouts)
@@ -115,7 +133,12 @@ pub fn modal_pairing_with<B: ModalFieldBackend + Clone>(
     let k0 = modes.map(|m| m.point.signature().map_or(f64::NAN, |s| s.k0.re));
     let stacks = modes.map(|m| m.point.provenance().stack().clone());
     let layouts = compatible([&stacks[0], &stacks[1]], k0, registration)?;
-    let partition = Layout::partition(&[&layouts[0], &layouts[1]]);
+    let partition = split_pmls(
+        Layout::partition(&[&layouts[0], &layouts[1]]),
+        &[(&layouts[0], &stacks[0]), (&layouts[1], &stacks[1])],
+        k0[0],
+        &modes.map(|m| m.point.physical_coordinate()),
+    );
     let result = converge(
         &partition,
         || PairingError::Quadrature,
@@ -163,11 +186,14 @@ fn sampled<B: ModalFieldBackend + Clone>(
     settings: FieldRecoverySettings,
 ) -> Result<Vec<Sample>, PairingError> {
     let sampling = layout.sampling(partition, panels, false);
-    mode.fields_with(backend.clone(), &sampling, settings)
+    let mut samples = mode
+        .fields_with(backend.clone(), &sampling, settings)
         .map_err(|e| match e {
             BasisFieldError::IllConditioned => PairingError::IllConditioned { operand },
             BasisFieldError::Recovery(source) => PairingError::Fields { operand, source },
-        })
+        })?;
+    equivalent(&mut samples, &layout.stretches(partition, panels));
+    Ok(samples)
 }
 
 /// Both pairing matrices between the normalised modes of two bases, with
@@ -183,12 +209,27 @@ pub fn basis_pairing_with<B: ModalFieldBackend + Clone>(
         bases.map(|b| b.request.k0_cm()),
         registration,
     )?;
-    let partition = Layout::partition(&[&layouts[0], &layouts[1]]);
     let modes = bases.map(|basis| {
         (0..basis.modes.len())
             .filter(|&i| basis.modes[i].is_normalised())
             .collect::<Vec<_>>()
     });
+    let betas: Vec<_> = (0..2)
+        .flat_map(|b| {
+            modes[b]
+                .iter()
+                .map(move |&i| bases[b].modes[i].point.physical_coordinate())
+        })
+        .collect();
+    let partition = split_pmls(
+        Layout::partition(&[&layouts[0], &layouts[1]]),
+        &[
+            (&layouts[0], &bases[0].stack),
+            (&layouts[1], &bases[1].stack),
+        ],
+        bases[0].request.k0_cm(),
+        &betas,
+    );
     let [n, m] = [modes[0].len(), modes[1].len()];
     let result = converge(
         &partition,

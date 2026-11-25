@@ -71,6 +71,13 @@ fn cause(cause: &BasisLimit) -> (&'static str, Option<String>) {
         BasisLimit::Refinement(failure) => ("refinement", Some(failure.to_string())),
         BasisLimit::Multiplicity { count } => ("multiplicity", Some(format!("{count} roots"))),
         BasisLimit::Cutoff => ("cutoff", None),
+        BasisLimit::Scale {
+            side,
+            log_magnitude,
+        } => (
+            "scale",
+            Some(format!("{side:?} PML scale exp({log_magnitude})")),
+        ),
         _ => ("other", Some(format!("{cause:?}"))),
     }
 }
@@ -87,7 +94,6 @@ fn basis_failure(e: ModalBasisError) -> Failure {
     match e {
         ModalBasisError::Fields { .. } => Failure::Fields(format!("{e}: {e:?}")),
         ModalBasisError::Quadrature => Failure::Integration(e.to_string()),
-        ModalBasisError::Termination { .. } => Failure::Unsupported(e.to_string()),
         _ => Failure::Invalid(e.to_string()),
     }
 }

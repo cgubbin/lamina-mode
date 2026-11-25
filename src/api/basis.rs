@@ -1,25 +1,37 @@
 //! Complete modal bases in a window of the complex β plane.
 //!
-//! A stack closed by walls on both sides is a regular problem on a bounded
-//! interval: its spectrum is discrete. Its characteristic is entire and even
-//! in β at fixed real k0, so the argument principle over the boundary of a β
-//! rectangle counts the modes inside it, guided, radiation-like, evanescent
-//! and complex alike. The count is formed before, and independently of, the
-//! search; each counted cell is refined on its own, and every cell that does
-//! not end as accepted roots matching its count is reported with its cause.
+//! A stack closed on both sides, by walls or wall-backed PMLs, is a regular
+//! problem on a bounded interval: its spectrum is discrete. Its
+//! characteristic is entire and even in β at fixed real k0, so the argument
+//! principle over the boundary of a β rectangle counts the modes inside it,
+//! guided, radiation-like, evanescent and complex alike. With a PML these are
+//! the modes converging to the open stack's guided and exposed leaky modes as
+//! the PML thickens, and the modes near the rotated continuum
+//! arg κ ≈ −arg(g + τ), g the gap and τ the PML's complex thickness; all are
+//! counted. A PML normalises the characteristic by exp(iκ_ref τ), leaving it
+//! of order exp(Σ [−Im(κ_ref τ) + |Im(κ τ)|]); the search's near-zero
+//! threshold is scaled by
+//! the least of that, exp(Σ −Im(κ_ref τ)), and the residual limit of root
+//! correction by its value at the seed, so that both are relative to the
+//! characteristic's scale as between walls. The count is formed before, and
+//! independently of, the search; each counted cell is refined on its own, and
+//! every cell that does not end as accepted roots matching its count is
+//! reported with its cause.
 //!
 //! Modes are normalised to unit unconjugated self-pairing
 //! ⟨f, f⟩ = ¼ ∫ (E × H + E × H) · x̂ dz = 1 W/m from fields recovered at a
 //! canonical unit seed, signed by a reference at the first interface, ordered
 //! by decreasing Re β², then Im β², then Re β, and near-degenerate modes are
 //! replaced by the unconjugated Löwdin basis of their span.
-use super::integration::{Layout, Sample, converge, field_scale, integral, samples, unconjugated};
+use super::integration::{
+    Layout, Sample, converge, equivalent, field_scale, integral, samples, split_pmls, unconjugated,
+};
 use super::*;
 use crate::problem as p;
 use crate::search::ModalSearchResult;
 use argloc::ArgumentConfig;
 use lamina_core::{
-    AnalyticalMaterialStack, FieldSampling, ModalFieldBackend, Polarisation, Scatter2,
+    AnalyticalMaterialStack, FieldSampling, ModalFieldBackend, Polarisation, Scatter2, StackSide,
 };
 use lamina_units::Length;
 use nalgebra::DMatrix;
@@ -31,7 +43,7 @@ use std::f64::consts::TAU;
 #[non_exhaustive]
 pub enum ModalWindow {
     /// A β rectangle in cm^-1 on the direct chart, for stacks closed on both
-    /// sides: real parts `re_cm`, imaginary parts `im_cm`, each ascending.
+    /// sides by walls or PMLs: real parts `re_cm`, imaginary parts `im_cm`, each ascending.
     Wavenumber { re_cm: [f64; 2], im_cm: [f64; 2] },
 }
 
@@ -156,6 +168,9 @@ pub enum BasisLimit {
     Multiplicity { count: usize },
     /// A root where the window meets its own mirror image around β = 0.
     Cutoff,
+    /// A cell on which the PML normalisation scale of the characteristic
+    /// reaches exp(`log_magnitude`), outside the representable range.
+    Scale { side: StackSide, log_magnitude: i64 },
 }
 
 #[derive(Debug)]
@@ -306,10 +321,13 @@ impl ModalBasis {
 pub enum ModalBasisError {
     #[error("invalid window, wavelength or numerical controls")]
     InvalidRequest,
-    #[error("a wavenumber window needs a stack closed by walls on both sides")]
+    #[error("a wavenumber window needs a stack closed by walls or PMLs on both sides")]
     OpenSide,
-    #[error("modal bases need walled sides; the {side:?} side is closed by a PML")]
-    Termination { side: lamina_core::StackSide },
+    #[error(
+        "the {side:?} PML normalisation scale reaches exp({log_magnitude}) on the window, \
+         outside the representable range"
+    )]
+    Scale { side: StackSide, log_magnitude: i64 },
     #[error(transparent)]
     Problem(#[from] ConstructionError),
     #[error("field recovery failed for mode {mode}")]
@@ -322,8 +340,8 @@ pub enum ModalBasisError {
     Quadrature,
 }
 
-/// Every mode of a stack closed by walls on both sides in a β window, with
-/// counts and evidence. Searches use Scatter2; fields use `backend`.
+/// Every mode of a stack closed by walls or PMLs on both sides in a β window,
+/// with counts and evidence. Searches use Scatter2; fields use `backend`.
 pub fn modal_basis_in_window_with<B: ModalFieldBackend + Clone>(
     backend: &B,
     stack: AnalyticalMaterialStack<Complex>,
@@ -351,23 +369,41 @@ pub(super) fn solve<B: ModalFieldBackend + Clone>(
     {
         return Err(InvalidRequest);
     }
-    let argument = request
-        .discovery
-        .argument_config()
-        .map_err(|_| InvalidRequest)?;
-    let refinement = crate::refinement::RefinementConfig::from(request.refinement)
+    crate::refinement::RefinementConfig::from(request.refinement)
         .validate()
         .map_err(|_| InvalidRequest)?;
-    let walls = p::walls(&stack).map_err(|side| Termination { side })?;
-    if walls.iter().any(Option::is_none) {
+    if p::open_sides(&stack).contains(&true) {
         return Err(OpenSide);
     }
     let problem = p::InPlaneProblem::in_plane(stack.clone(), k0, polarisation, Scatter2::new())?;
+    let bounds = ConformalRegion::new(window.x_min, window.x_max, window.y_min, window.y_max)
+        .map_err(|_| InvalidRequest)?;
+    if let Err(p::direct::DirectChartError::PmlScale {
+        side,
+        log_magnitude,
+    }) = problem.direct_domain(bounds, request.assumption)
+    {
+        return Err(Scale {
+            side,
+            log_magnitude,
+        });
+    }
+    // The near-zero threshold relative to the least scale of the
+    // characteristic, which the PML normalisation sets.
+    let least_scale = p::direct::pml_log_floor(&stack, k0).min(0.0).exp();
+    let argument = DiscoveryConfig {
+        zero_tolerance: request.discovery.zero_tolerance * least_scale,
+        ..request.discovery
+    }
+    .argument_config()
+    .map_err(|_| InvalidRequest)?;
     let search = Search {
         problem: &problem,
         assumption: request.assumption,
         argument,
-        refinement,
+        refinement: request.refinement,
+        stack: &stack,
+        k0,
         mirror: mirror_square(window),
         resolution: 1e-9 * k0,
         reverse,
@@ -443,7 +479,9 @@ struct Search<'a> {
     problem: &'a Problem,
     assumption: AnalyticAssumption,
     argument: ArgumentConfig<f64>,
-    refinement: crate::refinement::ValidatedConfig,
+    refinement: RefinementConfig,
+    stack: &'a AnalyticalMaterialStack<Complex>,
+    k0: f64,
     mirror: Option<Rect<f64>>,
     /// Cells no larger than this (cm^-1) are not split further.
     resolution: f64,
@@ -451,12 +489,26 @@ struct Search<'a> {
 }
 
 impl Search<'_> {
+    /// The direct domain of `cell`; a cell whose PML scale leaves the
+    /// representable range is `Scale`, any other failure `NonIntegerCount`.
     fn domain(
         &self,
         cell: Rect<f64>,
-    ) -> Option<p::direct::DirectDomain<crate::problem::Compiled<Scatter2>>> {
-        let bounds = ConformalRegion::new(cell.x_min, cell.x_max, cell.y_min, cell.y_max).ok()?;
-        self.problem.direct_domain(bounds, self.assumption).ok()
+    ) -> Result<p::direct::DirectDomain<crate::problem::Compiled<Scatter2>>, BasisLimit> {
+        let bounds = ConformalRegion::new(cell.x_min, cell.x_max, cell.y_min, cell.y_max)
+            .map_err(|_| BasisLimit::NonIntegerCount)?;
+        self.problem
+            .direct_domain(bounds, self.assumption)
+            .map_err(|e| match e {
+                p::direct::DirectChartError::PmlScale {
+                    side,
+                    log_magnitude,
+                } => BasisLimit::Scale {
+                    side,
+                    log_magnitude,
+                },
+                _ => BasisLimit::NonIntegerCount,
+            })
     }
 
     fn search(
@@ -464,7 +516,7 @@ impl Search<'_> {
         cell: Rect<f64>,
         config: ArgumentConfig<f64>,
     ) -> Option<ModalSearchResult<Complex>> {
-        let result = self.problem.search(&self.domain(cell)?, config).ok()?;
+        let result = self.problem.search(&self.domain(cell).ok()?, config).ok()?;
         Some(result.into_parts().0)
     }
 
@@ -489,7 +541,7 @@ impl Search<'_> {
             corner(x[0], y[0]),
         ];
         let failed = |z| (z, BasisLimit::NonIntegerCount);
-        let domain = self.domain(window).ok_or_else(|| failed(path[0]))?;
+        let domain = self.domain(window).map_err(|cause| (path[0], cause))?;
         let evaluate = |z: Complex| {
             let bundle = self.problem.evaluate(&domain, z).map_err(|_| failed(z))?;
             let (value, derivative) = (*bundle.value(), *bundle.derivative());
@@ -577,7 +629,7 @@ impl Search<'_> {
 
     /// Correct the one root counted in `cell` from its estimate. Newton steps
     /// may leave the cell by up to its size; the accepted root must lie in it.
-    fn correct(&self, cell: Rect<f64>, estimate: Complex) -> Result<ModePoint, BranchFailure> {
+    fn correct(&self, cell: Rect<f64>, estimate: Complex) -> Result<ModePoint, BasisLimit> {
         let reach = (cell.x_max - cell.x_min).max(cell.y_max - cell.y_min);
         let around = Rect {
             x_min: cell.x_min - reach,
@@ -585,16 +637,28 @@ impl Search<'_> {
             y_min: cell.y_min - reach,
             y_max: cell.y_max + reach,
         };
-        let domain = self
-            .domain(around)
-            .ok_or_else(|| BranchFailure::Domain("invalid cell".into()))?;
+        let domain = self.domain(around)?;
         let seed = Complex::new(
             estimate.re.clamp(cell.x_min, cell.x_max),
             estimate.im.clamp(cell.y_min, cell.y_max),
         );
-        let (mut root, mut signature, _) =
-            self.problem
-                .corrected_point(&domain, seed, self.refinement)?;
+        // The residual limit relative to the PML scale of the characteristic
+        // at the seed.
+        let scale = p::direct::pml_log_scale(self.stack, self.k0, seed).exp();
+        let refinement = crate::refinement::RefinementConfig::from(RefinementConfig {
+            residual_atol: self.refinement.residual_atol * scale,
+            ..self.refinement
+        })
+        .validate()
+        .map_err(|_| {
+            BasisLimit::Refinement(BranchFailure::Correction(
+                "residual limit out of range at the PML scale".into(),
+            ))
+        })?;
+        let (mut root, mut signature, _) = self
+            .problem
+            .corrected_point(&domain, seed, refinement)
+            .map_err(BasisLimit::Refinement)?;
         // The accepted point's own Newton step is within the correction
         // limit; accepting again from the stepped point keeps the root to the
         // square of that step, which fields far from the seed side need.
@@ -602,16 +666,15 @@ impl Search<'_> {
         let stepped = root.coordinate() - evidence.value / evidence.derivative;
         if contains(cell, stepped)
             && let Ok((polished, polished_signature, _)) =
-                self.problem
-                    .corrected_point(&domain, stepped, self.refinement)
+                self.problem.corrected_point(&domain, stepped, refinement)
             && contains(cell, polished.coordinate())
         {
             (root, signature) = (polished, polished_signature);
         }
         if !contains(cell, root.coordinate()) {
-            return Err(BranchFailure::Correction(
+            return Err(BasisLimit::Refinement(BranchFailure::Correction(
                 "converged outside its counted cell".into(),
-            ));
+            )));
         }
         let enclosure = cell;
         Ok(ModePoint {
@@ -670,9 +733,7 @@ impl Search<'_> {
                         unresolved.push(region(cell, Some(1), BasisLimit::Cutoff))
                     }
                     Ok(point) => roots.push(point),
-                    Err(failure) => {
-                        unresolved.push(region(cell, Some(1), BasisLimit::Refinement(failure)))
-                    }
+                    Err(cause) => unresolved.push(region(cell, Some(1), cause)),
                 }
                 continue;
             }
@@ -710,7 +771,7 @@ impl Search<'_> {
             } else {
                 budget -= 1;
                 match self.quadrants(cell, count) {
-                    Some(quadrants) => {
+                    Ok(quadrants) => {
                         cells.extend(
                             quadrants
                                 .into_iter()
@@ -718,7 +779,7 @@ impl Search<'_> {
                         );
                         continue;
                     }
-                    None => BasisLimit::NonIntegerCount,
+                    Err(cause) => cause,
                 }
             };
             unresolved.push(region(cell, Some(count), cause));
@@ -745,10 +806,17 @@ impl Search<'_> {
 
     /// The four quadrants of a cell holding `count` roots with their counts
     /// and the sums of their zeros, at a split whose quadrant boundaries all
-    /// count, to `count` in total.
-    fn quadrants(&self, cell: Rect<f64>, count: usize) -> Option<Vec<(Rect<f64>, usize, Complex)>> {
+    /// count, to `count` in total; otherwise `Scale` if a quadrant's PML scale
+    /// failed, else `NonIntegerCount`.
+    #[allow(clippy::type_complexity)]
+    fn quadrants(
+        &self,
+        cell: Rect<f64>,
+        count: usize,
+    ) -> Result<Vec<(Rect<f64>, usize, Complex)>, BasisLimit> {
         let clearance = 1e-6 * (cell.x_max - cell.x_min).max(cell.y_max - cell.y_min);
-        [0.4637, 0.5381, 0.4129].into_iter().find_map(|f| {
+        let mut cause = BasisLimit::NonIntegerCount;
+        let split = [0.4637, 0.5381, 0.4129].into_iter().find_map(|f| {
             let x = cell.x_min + f * (cell.x_max - cell.x_min);
             let y = cell.y_min + f * (cell.y_max - cell.y_min);
             let quadrants = [
@@ -765,10 +833,18 @@ impl Search<'_> {
             });
             let counted = quadrants
                 .iter()
-                .map(|&q| self.winding(q, clearance).ok().map(|(n, sum)| (q, n, sum)))
+                .map(|&q| match self.winding(q, clearance) {
+                    Ok((n, sum)) => Some((q, n, sum)),
+                    Err((_, scale @ BasisLimit::Scale { .. })) => {
+                        cause = scale;
+                        None
+                    }
+                    Err(_) => None,
+                })
                 .collect::<Option<Vec<_>>>()?;
             (counted.iter().map(|(_, n, _)| n).sum::<usize>() == count).then_some(counted)
-        })
+        });
+        split.ok_or(cause)
     }
 }
 
@@ -812,7 +888,13 @@ fn normalise<B: ModalFieldBackend + Clone>(
     use ModalBasisError::*;
     let n = points.len();
     let layout = Layout::new(stack, 0.0).ok_or(InvalidRequest)?;
-    let partition = Layout::partition(&[&layout]);
+    let beta: Vec<_> = points.iter().map(ModePoint::physical_coordinate).collect();
+    let partition = split_pmls(
+        Layout::partition(&[&layout]),
+        &[(&layout, stack)],
+        request.k0_cm(),
+        &beta,
+    );
     let kind = if layout.walls[0].is_some_and(|(_, z)| z == 0.0) {
         SignReference::WallOnFirstInterface
     } else {
@@ -824,7 +906,6 @@ fn normalise<B: ModalFieldBackend + Clone>(
         .unwrap_or(0)
         .min(partition.len().saturating_sub(2));
     // Near-degenerate groups: connected components of |Δβ| ≤ gap.
-    let beta: Vec<_> = points.iter().map(ModePoint::physical_coordinate).collect();
     let mut component: Vec<usize> = (0..n).collect();
     for i in 0..n {
         for j in 0..i {
@@ -867,12 +948,16 @@ fn normalise<B: ModalFieldBackend + Clone>(
         || Quadrature,
         |panels, _| {
             let sampling = layout.sampling(&partition, panels, false);
+            let stretches = layout.stretches(&partition, panels);
             let mut seeds = points
                 .iter()
                 .enumerate()
                 .map(|(mode, point)| {
-                    seed_samples(point, backend.clone(), &sampling, request.recovery)
-                        .map_err(|source| Fields { mode, source })
+                    let mut seed =
+                        seed_samples(point, backend.clone(), &sampling, request.recovery)
+                            .map_err(|source| Fields { mode, source })?;
+                    equivalent(&mut seed, &stretches);
+                    Ok::<_, ModalBasisError>(seed)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             if unit.is_empty() {

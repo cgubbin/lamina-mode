@@ -27,6 +27,28 @@ Added:
   stacks whose walls coincide in a registered frame, with regional
   contributions, singular values, leading condition numbers and self-pairing
   defects from one shared grid. The guided pairings share their integrator.
+- Modal bases and pairings of stacks closed by wall-backed PMLs, on either or
+  both sides. Inside a PML the unconjugated pairing is the contour integral
+  along the stretched coordinate, ∫ (…) s dζ = ∫ (…) dζ̃, which depends on the
+  PML only through its complex thickness τ; the conjugated product integrates
+  the equivalent-medium fields in real coordinates (normal components s E_z,
+  s H_z). PML intervals are split by their transverse phase |κ τ|. A basis
+  counts every mode in the window: those converging to the open stack's
+  guided and exposed leaky modes as the PML thickens and those near the
+  rotated continuum. The near-zero threshold of the search and the residual
+  limit of root correction follow the PML scale of the characteristic, and a
+  window on which that scale leaves the representable range is refused with
+  `ModalBasisError::Scale`; a cell that does so during subdivision is
+  unresolved with `BasisLimit::Scale`. Pairings accept PMLs equal in start,
+  thickness, profile and backing in the registered frame; their materials may
+  differ. Accepted roots of a basis are stepped once more by their own Newton
+  correction, self-pairings converge relative to themselves, and a modal
+  pairing's regional contributions converge with its totals.
+- lamina-py: `lamina.modal_basis` and `lamina.basis_pairing` accept PML-closed
+  stacks; profiles name `"pml"` samples and carry their stretched coordinate
+  and stretch (`stretched_z_m`, `stretch`, `pml_fields`; omitted for stacks
+  without a PML); unresolved regions may have cause `"scale"`; an
+  out-of-range window raises `InvalidInput`.
 - lamina-py: `lamina.BetaWindow`, `lamina.modal_basis`, `ModalBasis.profile`
   and `lamina.basis_pairing`, with the record kinds `lamina.modal_basis_input`,
   `lamina.modal_basis`, `lamina.modal_profile` and `lamina.basis_pairing` at
@@ -94,9 +116,7 @@ Changed (breaking):
   `GuidedPowerError::Termination`, `GroupIndexError::Termination` and
   `GuidedPowerSensitivityError::Termination` (`PmlIntegral`, naming the side).
 - `FrequencyProblem` and guided-mode pairings refuse PML-closed stacks as they
-  refuse walled ones. Modal bases in a β window refuse PML sides with
-  `ModalBasisError::Termination`, and modal and basis pairings with
-  `PairingError::Pml` (`PmlIntegral`), each naming the side.
+  refuse walled ones.
 - `FrequencyProblem` refuses walled stacks (`ConstructionError::ClosedSide`);
   conformal domains of a stack walled on both sides fail with
   `ConformalChartError::ClosedStack`; pairings refuse walled stacks
