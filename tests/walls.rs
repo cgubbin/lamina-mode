@@ -8,6 +8,8 @@ use lamina_core::{
 use lamina_mode::*;
 use lamina_units::Length;
 use std::f64::consts::TAU;
+mod support;
+use support::resolved_roots;
 
 const TE: Polarisation = Polarisation::TransverseElectric;
 const TM: Polarisation = Polarisation::TransverseMagnetic;
@@ -142,41 +144,6 @@ const A: f64 = 0.35;
 const GAP: f64 = 0.45;
 const BOX_WINDOW: [f64; 2] = [0.4 * K, 1.999 * K];
 
-/// Accepted roots over `bounds` with argloc's count. argloc may leave
-/// well-conditioned roots together as one cluster; each cluster's enclosure
-/// is searched again in halves until it resolves.
-fn resolved_roots(
-    problem: &PropagationProblem,
-    bounds: ConformalRegion<f64>,
-    domain: &dyn Fn(ConformalRegion<f64>) -> Domain,
-) -> (Vec<ModePoint>, usize) {
-    let report = problem
-        .plan(vec![domain(bounds)], vec![])
-        .unwrap()
-        .solve(Default::default(), Default::default(), Default::default())
-        .unwrap();
-    let mut points = report.observations().to_vec();
-    let mut count = 0;
-    for chart in report.discovery().entries() {
-        for estimate in chart.unwrap().estimates() {
-            let raw = estimate.raw();
-            if raw.multiplicity == 1 {
-                count += 1;
-                continue;
-            }
-            let r = raw.enclosure;
-            let mid = 0.5 * (r.x_min + r.x_max);
-            for (lo, hi) in [(r.x_min, mid), (mid, r.x_max)] {
-                let half = ConformalRegion::new(lo, hi, r.y_min, r.y_max).unwrap();
-                let (more, n) = resolved_roots(problem, half, domain);
-                points.extend(more);
-                count += n;
-            }
-        }
-    }
-    (points, count)
-}
-
 #[test]
 fn direct_search_finds_the_layered_box_ladder_once_each() {
     for pol in [TE, TM] {
@@ -194,7 +161,7 @@ fn direct_search_finds_the_layered_box_ladder_once_each() {
                 );
                 domain
             };
-            let (points, count) = resolved_roots(&problem, bounds, &direct);
+            let (points, count) = resolved_roots(&problem, bounds, &direct, Default::default());
             assert_eq!(count, expected.len());
             let mut found = vec![];
             for point in &points {
@@ -628,7 +595,7 @@ fn leaky_modes_of_a_slab_on_a_wall_are_images_too() {
                 .domain(bounds, sheet, Default::default(), ASSUME)
                 .unwrap()
         };
-        let (points, count) = resolved_roots(&problem, bounds, &domain);
+        let (points, count) = resolved_roots(&problem, bounds, &domain, Default::default());
         assert_eq!(points.len(), count);
         let mut roots: Vec<_> = points
             .iter()
