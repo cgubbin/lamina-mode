@@ -100,7 +100,12 @@ parameter sweeps must maintain this reference or explicitly change gauge.
 
 The supported material class has real positive relative permittivity and
 permeability at the physical frequency, real propagation up to numerical tolerance,
-and two evanescent exteriors. Ineligible roots, cutoff, ill-conditioned phase or
+and two evanescent exteriors. In a region whose ε and μ are diagonal in the stack
+frame this applies to the entries the polarisation sees: μ_xx, μ_zz and ε_yy for TE,
+ε_xx, ε_zz and μ_yy for TM. Each field component then carries its own entry: the
+tails decay as exp(−α|z|) with α = √(t/n) √(β² − v n k0²) for the entries t, n, v
+seen, and normal D = ε_zz E_z and B = μ_zz H_z are continuous across interfaces
+with tangential E and H. The power integral uses the fields alone. Ineligible roots, cutoff, ill-conditioned phase or
 power, integration budget exhaustion and field recovery failure are explicit errors.
 Near cutoff, the analytic tails can dominate even when a finite plotted window
 shows little field outside the guide.

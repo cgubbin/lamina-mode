@@ -32,3 +32,29 @@ The regression requires both scaled errors below 2e−5 at the smallest step. Th
 cargo run --locked --offline --example multimode_slab
 cargo test --locked --offline --example multimode_slab -- --nocapture
 ```
+
+## Uniaxial slab ladders
+
+A symmetric slab of half-thickness 0.6 cm at a 1 cm wavelength, with a
+uniaxial core (ε_o = 4, ε_e = 6.25) and a uniaxial cladding (ε_o = 2,
+ε_e = 2.56) sharing an optic axis along x, y or z in turn, is enumerated for
+TE and TM and compared with the closed-form conditions
+
+```text
+even: q tan(q a)/t_core = α/t_clad      odd: −q cot(q a)/t_core = α/t_clad
+q² = s (v n k0² − β²) in the core,  α² = s (β² − v n k0²) in the cladding,  s = t/n
+```
+
+with (t, n, v) = (μ_xx, μ_zz, ε_yy) for TE and (ε_xx, ε_zz, μ_yy) for TM. All
+six ladders are complete and their roots agree within 1e−8 cm⁻¹ (largest
+difference 4.2e−12 cm⁻¹); the light line and upper bound of each are the
+cladding and core lines k0 √(v n). With PEC walls 0.15 cm from each interface
+(α → α coth(α g) for TE, α tanh(α g) for TM) the ladders above the cladding
+lines agree to 1.2e−12 cm⁻¹. An isotropic two-layer guide, one layer magnetic,
+rebuilt with every region a diagonal tensor of equal entries gives the
+isotropic roots, counts and windows exactly and the isotropic unit-power
+fields to 4e−16 of their peak.
+
+```sh
+cargo test --locked --release --test diagonal_modes -- --nocapture
+```

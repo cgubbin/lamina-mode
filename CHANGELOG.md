@@ -7,6 +7,36 @@ released in step until 1.0. Each entry names any shared convention it changes.
 
 Added:
 
+- Guided modes of stacks whose regions are isotropic or carry ε and μ
+  diagonal in the stack frame (lamina-core `Region`; principal axes along
+  x, y and z). A polarisation sees three entries per region: μ_xx, μ_zz and
+  ε_yy for TE, ε_xx, ε_zz and μ_yy for TM. The oscillation count uses
+  q² = s (line² − β²) with line = k0 √(ε_yy μ_zz) and s = μ_xx/μ_zz (TE), or
+  line = k0 √(ε_zz μ_yy) and s = ε_xx/ε_zz (TM); light lines and upper bounds
+  are per polarisation. The in-plane and spectral charts keep their branch
+  points at the per-polarisation lines and scale each exterior wavevector by
+  √s. Fields, unit power and its phase rule, local derivatives, branch
+  continuation, sensitivities, overlaps, reciprocity and local coupling carry
+  over; the group-index energy uses per-component dispersive weights
+  ε_ii + k0 ∂ε_ii/∂k0 and μ_ii + k0 ∂μ_ii/∂k0, and local coupling weighs each
+  field component by its own permittivity rate, with ε_xx and ε_yy in the
+  tangential and ε_zz in the normal interface terms.
+- Eligibility of guided enumeration: the entries a polarisation sees must be
+  real and positive, so a hyperbolic or lossy entry is refused with
+  `EnumerationError::Material { region, entry }` (`TensorEntry`); entries it
+  does not see are not inspected.
+- `enumerate_guided_modes_with(backend, stack, window)` selects the 2×2
+  backend; `enumerate_guided_modes` keeps Scatter2.
+- `ConstantExterior::diagonal` for spectral problems with diagonal constant
+  exteriors.
+- `ConstitutiveRate::diagonal` and the fields `permittivity_entries` and
+  `permeability_entries`: the rate of ε_ii is `relative_permittivity +
+  permittivity_entries[i]`, and likewise for μ; `ConstitutiveRate::scaled`.
+  Wavelength directions add each tensor entry's dispersion to its own rate.
+- Regions with off-diagonal entries are refused with
+  `ConstructionError::Constitutive`, `EnumerationError::Constitutive` or
+  `DirectChartError::Constitutive` (lamina-core `ConstitutiveError`).
+
 - Complete modal bases in a window for stacks closed by walls on both sides:
   `modal_basis_in_window_with` with `ModalWindow::Wavenumber` (and `forward`)
   finds every mode in a β rectangle on the direct chart, guided,
@@ -104,6 +134,22 @@ Fixed:
 
 Changed (breaking):
 
+- Stacks are `ModeStack` (lamina-core `AnalyticalTensorStack` of `Region`s).
+  Functions that take a stack accept `impl Into<ModeStack>`, so scalar stacks
+  convert; `ProblemContext::stack`, `ModalProfile::stack`, `ModalBasis::stack`
+  and `GuidedTrackingStep::stack` hold a `ModeStack`, and field backends are
+  bound as `ModalFieldBackend<Region>`. Spectral problems take layers of
+  `impl Into<Region>`.
+- `EnumerationError::Material(region)` becomes `Material { region, entry }`.
+- `ConstantExterior::epsilon` and `mu` return the stack-frame diagonal, and
+  `ConstantExterior` no longer implements the scalar material traits.
+- An exterior that is not isotropic is refused by `FrequencyProblem`
+  (`ConstructionError::Constitutive`; `ExteriorFailure::Anisotropic` on its
+  domain) and by QNM scattering windows, and a radiation reference refuses an
+  exterior whose channel is scaled (`RadiationReferenceError::UnsupportedMaterial`).
+  Interpretation reports such an open exterior as
+  `Unsupported(ExteriorMaterial)`.
+
 - `BranchSignature::left`/`right`, `PhysicalData::kappa`,
   `RadiationReference::choices` and `VerifiedRadiationReference::observed`
   hold an `Option` per side, `None` on a walled side; `BranchSignature` gains
@@ -123,7 +169,8 @@ Changed (breaking):
   (`GuidedOverlapError::ClosedStack`).
 - Built against lamina-core's per-side `ExteriorWavevectors`.
 
-Open stacks keep their roots, evidence and enumerated records bit for bit. These breaking
+Isotropic stacks keep their roots, fields, sensitivities, group indices,
+overlaps and couplings bit for bit. Open stacks keep their roots, evidence and enumerated records bit for bit. These breaking
 changes, with lamina-core's, make the next release 0.2.0; lamina-core's version
 is still 0.1.0, so the package versions and the lamina-core requirement are
 unchanged here.
