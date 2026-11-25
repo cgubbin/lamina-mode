@@ -135,15 +135,18 @@ pub fn modal_pairing_with<B: ModalFieldBackend + Clone>(
             let (a, b) = (fields(0)?, fields(1)?);
             let u = intervals(&partition, panels, |i| unconjugated(&a[i], &b[i]));
             let c = intervals(&partition, panels, |i| conjugated(&a[i], &b[i]));
-            let regional: Vec<_> = u.iter().zip(&c).map(|(u, c)| [*u, *c]).collect();
-            Ok((vec![u.iter().sum(), c.iter().sum()], regional))
+            // The totals, then each interval's contributions, all converged.
+            let mut entries = vec![u.iter().sum(), c.iter().sum()];
+            entries.extend(u.iter().zip(&c).flat_map(|(u, c)| [*u, *c]));
+            Ok((entries, ()))
         },
     )?;
+    let e = &result.entries;
     Ok(ModalPairing {
         registration,
-        unconjugated_w_per_m: result.entries[0],
-        conjugated_w_per_m: result.entries[1],
-        regional_w_per_m: result.extra,
+        unconjugated_w_per_m: e[0],
+        conjugated_w_per_m: e[1],
+        regional_w_per_m: e[2..].chunks(2).map(|r| [r[0], r[1]]).collect(),
         partition_cm: partition,
         sample_count: result.sample_count,
         quadrature_change_w_per_m: result.change,

@@ -592,9 +592,22 @@ impl Search<'_> {
             estimate.re.clamp(cell.x_min, cell.x_max),
             estimate.im.clamp(cell.y_min, cell.y_max),
         );
-        let (root, signature, _) = self
-            .problem
-            .corrected_point(&domain, seed, self.refinement)?;
+        let (mut root, mut signature, _) =
+            self.problem
+                .corrected_point(&domain, seed, self.refinement)?;
+        // The accepted point's own Newton step is within the correction
+        // limit; accepting again from the stepped point keeps the root to the
+        // square of that step, which fields far from the seed side need.
+        let evidence = root.evidence();
+        let stepped = root.coordinate() - evidence.value / evidence.derivative;
+        if contains(cell, stepped)
+            && let Ok((polished, polished_signature, _)) =
+                self.problem
+                    .corrected_point(&domain, stepped, self.refinement)
+            && contains(cell, polished.coordinate())
+        {
+            (root, signature) = (polished, polished_signature);
+        }
         if !contains(cell, root.coordinate()) {
             return Err(BranchFailure::Correction(
                 "converged outside its counted cell".into(),
@@ -844,8 +857,10 @@ fn normalise<B: ModalFieldBackend + Clone>(
                 .flat_map(move |(a, &i)| g[a + 1..].iter().map(move |&j| (i, j)))
         }))
         .collect();
-    // Seeds at each level, scaled to about unit field scale by their first
-    // level so that the convergence test is relative for every mode.
+    // Seeds at each level, scaled by their first level to about unit
+    // self-pairing, or to the threshold's share of the field scale when the
+    // self-pairing is smaller, so that the convergence test is relative for
+    // every mode's self-pairing as for the pairings of normalised modes.
     let mut unit: Vec<f64> = vec![];
     let converged = converge(
         &partition,
@@ -864,8 +879,11 @@ fn normalise<B: ModalFieldBackend + Clone>(
                 unit = seeds
                     .iter()
                     .map(|u| {
-                        integral(&partition, panels, |s| field_scale(&u[s]))
-                            .re
+                        let scale = integral(&partition, panels, |s| field_scale(&u[s])).re;
+                        let pairing = integral(&partition, panels, |s| unconjugated(&u[s], &u[s]));
+                        pairing
+                            .norm()
+                            .max(request.self_pairing_rtol * scale)
                             .sqrt()
                             .recip()
                     })
