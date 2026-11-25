@@ -19,9 +19,9 @@ stacks, derivatives of modal quantities with respect to stack, wavelength and
 material parameters, a certified group index, and continuation of modes and
 modal sets along a parameter. Either side of a stack may be open or closed by a
 perfect electric or perfect magnetic wall or by a wall-backed perfectly matched
-layer; a stack closed on both sides by walls has a complete modal basis in any
-window of the complex β plane, with unconjugated and conjugated pairings
-between bases. It builds on `lamina-units`,
+layer; a stack closed on both sides by walls or PMLs has a complete modal
+basis in any window of the complex β plane, with unconjugated and conjugated
+pairings between bases, through a PML along its stretched coordinate. It builds on `lamina-units`,
 `lamina-core` and `argloc`.
 
 Read the [modal transform guide](docs/modal-transform.md) for the

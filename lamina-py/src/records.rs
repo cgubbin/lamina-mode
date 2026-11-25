@@ -712,12 +712,30 @@ pub struct ModalProfile {
     pub mode_index: usize,
     pub beta_rad_per_m: C2,
     pub z_m: Vec<f64>,
-    /// Per sample: "layer", "gap" or "exterior".
+    /// Per sample: "layer", "gap", "pml" or "exterior".
     pub region: Vec<String>,
     pub electric_real: Vec<[f64; 3]>,
     pub electric_imag: Vec<[f64; 3]>,
     pub magnetic_real: Vec<[f64; 3]>,
     pub magnetic_imag: Vec<[f64; 3]>,
+    /// For a stack with a PML side, per sample the stretched coordinate z̃
+    /// and the stretch s, `null` outside a PML, and what the fields are
+    /// there; omitted otherwise, so other profiles keep their form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pml: Option<PmlSamples>,
+}
+
+/// The fixed statement of what a profile's fields are inside a PML.
+pub const PML_FIELDS: &str = "continued fields at the stretched coordinate z̃; \
+     the equivalent-medium fields in real z have the same tangential components and \
+     normal components s Ez and s Hz";
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PmlSamples {
+    pub fields: String,
+    pub stretched_z_m: Vec<Option<C2>>,
+    pub stretch: Vec<Option<C2>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -895,7 +913,28 @@ macro_rules! defined_record {
     };
 }
 
-defined_record!(ModalProfile, MODAL_PROFILE_SCHEMA);
+impl Record for ModalProfile {
+    const SCHEMA: &'static str = MODAL_PROFILE_SCHEMA;
+    fn identity(&self) -> (&str, u32) {
+        (&self.schema, self.schema_version)
+    }
+    fn conventions(&self) -> Option<&Conventions> {
+        Some(&self.conventions)
+    }
+    fn check(&self) -> Result<(), String> {
+        check_definitions(&self.definitions, Self::SCHEMA)?;
+        if let Some(pml) = &self.pml {
+            if pml.fields != PML_FIELDS {
+                return Err(format!("pml fields differ from {}'s", Self::SCHEMA));
+            }
+            let n = self.z_m.len();
+            if pml.stretched_z_m.len() != n || pml.stretch.len() != n {
+                return Err("pml samples do not match z_m".into());
+            }
+        }
+        Ok(())
+    }
+}
 defined_record!(BasisPairing, BASIS_PAIRING_SCHEMA);
 
 pub fn check_identity<R: Record>(record: &R) -> Result<(), String> {

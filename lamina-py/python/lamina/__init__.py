@@ -1793,8 +1793,9 @@ class ModalBasisInput(_Record):
 class UnresolvedRegion:
     """A region of the window that did not end as accepted modes, and why:
     "boundary_root", "non_integer_count", "budget", "refinement",
-    "multiplicity" or "cutoff". `bounds` is in the chart's coordinate (rad/m
-    on the wavenumber chart); `count` is the number of zeros counted inside."""
+    "multiplicity", "cutoff" or "scale" (a PML scale out of range). `bounds`
+    is in the chart's coordinate (rad/m on the wavenumber chart); `count` is
+    the number of zeros counted inside."""
 
     bounds: _Rect
     beta_image_rad_per_m: _Rect
@@ -1858,7 +1859,8 @@ class BasisMode:
 
 @dataclass(frozen=True, eq=False)
 class ModalBasis(_Record):
-    """Every mode of a stack closed by walls in a β window, with its evidence.
+    """Every mode of a stack closed by walls or PMLs in a β window, with its
+    evidence.
 
     `expected` is the count from the argument principle over the window
     boundary and `found` the distinct accepted modes. `status` is "complete"
@@ -1958,7 +1960,14 @@ class ModalBasis(_Record):
 @dataclass(frozen=True, eq=False)
 class ModalProfile(_Record):
     """Normalised fields of one basis mode; arrays have shape (n, 3): (x, y, z).
-    `region` names each sample's region: "layer", "gap" or "exterior"."""
+    `region` names each sample's region: "layer", "gap", "pml" or "exterior".
+
+    For a stack with a PML side, `stretched_z_m` and `stretch` give each
+    sample's stretched coordinate z̃ and stretch s (nan outside a PML), and
+    `pml_fields` states what the fields are there: the exterior solution
+    continued to z̃; the equivalent medium in real z has the same tangential
+    components and normal components s E_z and s H_z. All three are None for
+    a stack without a PML."""
 
     conventions: Mapping[str, str]
     definitions: Mapping[str, str]
@@ -1969,6 +1978,9 @@ class ModalProfile(_Record):
     region: tuple[str, ...]
     electric_v_per_m: np.ndarray
     magnetic_a_per_m: np.ndarray
+    stretched_z_m: np.ndarray | None = None
+    stretch: np.ndarray | None = None
+    pml_fields: str | None = None
     _kind = "modal_profile"
 
     def to_dict(self) -> dict[str, Any]:
@@ -1987,10 +1999,22 @@ class ModalProfile(_Record):
             "electric_imag": e.imag.tolist(),
             "magnetic_real": h.real.tolist(),
             "magnetic_imag": h.imag.tolist(),
+            **(
+                {}
+                if self.pml_fields is None
+                else {
+                    "pml": {
+                        "fields": self.pml_fields,
+                        "stretched_z_m": _pml_samples(self.stretched_z_m),
+                        "stretch": _pml_samples(self.stretch),
+                    }
+                }
+            ),
         }
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> ModalProfile:
+        pml = d.get("pml")
         return cls(
             MappingProxyType(dict(d["conventions"])),
             MappingProxyType(dict(d["definitions"])),
@@ -2001,7 +2025,20 @@ class ModalProfile(_Record):
             tuple(d["region"]),
             _components(d["electric_real"], d["electric_imag"]),
             _components(d["magnetic_real"], d["magnetic_imag"]),
+            None if pml is None else _pml_array(pml["stretched_z_m"]),
+            None if pml is None else _pml_array(pml["stretch"]),
+            None if pml is None else pml["fields"],
         )
+
+
+def _pml_array(values: Sequence[Sequence[float] | None]) -> np.ndarray:
+    """Complex samples with nan where the record has null."""
+    nan = complex(math.nan, math.nan)
+    return _readonly(np.array([nan if v is None else _c(v) for v in values], dtype=complex))
+
+
+def _pml_samples(values: np.ndarray | None) -> list[list[float] | None]:
+    return [None if np.isnan(v) else _pair(v) for v in (values if values is not None else [])]
 
 
 @dataclass(frozen=True, eq=False)
@@ -2096,13 +2133,15 @@ def modal_basis(
     degeneracy_gap_rad_per_m: float | None = None,
     self_pairing_rtol: float = 1e-8,
 ) -> ModalBasis:
-    """Every mode of `stack`, closed by walls on both sides, in `window`.
+    """Every mode of `stack`, closed by walls or PMLs on both sides, in `window`.
 
     An incomplete basis is a result, not an error: read `status`, `expected`,
-    `found` and `unresolved` together. Invalid inputs, including a stack with
-    an open side, raise `InvalidInput`, and a `Pml` side its subclass
-    `UnsupportedTermination`; a self-pairing quadrature over its
-    budget raises `IntegrationFailed` and field recovery `FieldsFailed`.
+    `found` and `unresolved` together; a cell whose PML scale leaves the
+    representable range is unresolved with cause "scale". Invalid inputs,
+    including a stack with an open side and a window on which a PML's scale
+    leaves the representable range (naming the side and the log-magnitude),
+    raise `InvalidInput`; a self-pairing quadrature over its budget raises
+    `IntegrationFailed` and field recovery `FieldsFailed`.
     """
     resolved = ModalBasisInput(
         stack, wavelength_m, polarisation, window, degeneracy_gap_rad_per_m, self_pairing_rtol
@@ -2119,7 +2158,8 @@ def basis_pairing(
     """Both pairing matrices between two modal bases at one wavelength.
 
     `origins_m` places each stack's first interface in a common frame; the
-    walls must then coincide in kind and position (materials may differ).
+    walls must then coincide in kind and position, and PMLs in start,
+    thickness, profile and backing (materials may differ).
     Otherwise, or at different wavelengths, `InvalidInput`; a quadrature over
     its budget raises `IntegrationFailed` and field recovery `FieldsFailed`.
     """

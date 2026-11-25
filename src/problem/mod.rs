@@ -148,6 +148,29 @@ pub(crate) fn walls<M>(stack: &Stack<M, f64>) -> Result<[Option<(WallKind, f64)>
     let [left, right] = sides(stack);
     Ok([gap(left)?, gap(right)?])
 }
+/// A closed side: its wall, or a PML's backing wall; the gap in cm from the
+/// outermost interface to the wall or the PML's start; and the PML.
+pub(crate) type Closure = (WallKind, f64, Option<lamina_core::Pml<f64>>);
+/// Each closed side, `None` when open. Any other termination is refused with
+/// its side.
+pub(crate) fn closures<M>(stack: &Stack<M, f64>) -> Result<[Option<Closure>; 2], StackSide> {
+    let closure = |(side, termination): (StackSide, &Termination<f64>)| match termination {
+        Termination::Open => Ok(None),
+        Termination::Wall(wall) => Ok(Some((
+            wall.kind(),
+            gap_cm(stack, side, wall.position()),
+            None,
+        ))),
+        Termination::Pml(pml) => Ok(Some((
+            pml.backing(),
+            gap_cm(stack, side, pml.start()),
+            Some(*pml),
+        ))),
+        _ => Err(side),
+    };
+    let [left, right] = sides(stack);
+    Ok([closure(left)?, closure(right)?])
+}
 /// Each PML side's gap from its outermost interface and its complex
 /// thickness τ = d (1 + c/(m+1)), both in cm; `None` on other sides.
 pub(crate) fn pmls<M>(stack: &Stack<M, f64>) -> [Option<(f64, C)>; 2] {

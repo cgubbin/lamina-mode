@@ -1,14 +1,22 @@
 //! Transverse quadrature shared by the pairings of planar modes.
 //!
 //! Stacks are placed in one registered frame. The partition is the union of
-//! their interfaces and of the planes of the walls closing them; every
-//! partition point is sampled from both sides, each interval by composite
-//! Simpson, and refinement doubles the panels of every interval at once. An
-//! open exterior beyond the partition enters as a closed-form tail.
+//! their interfaces, of the starts of their PMLs and of the planes of the
+//! walls closing them, a PML's backing wall included; every partition point is
+//! sampled from both sides, each interval by composite Simpson, and
+//! refinement doubles the panels of every interval at once. An open exterior
+//! beyond the partition enters as a closed-form tail.
+//!
+//! Inside a PML the sampled fields are the exterior solution continued to the
+//! stretched coordinate ζ̃(ζ). The equivalent medium in real coordinates has
+//! the same tangential fields and normal components s E_z and s H_z, so the
+//! densities of the equivalent-medium fields, integrated in real ζ, give the
+//! conjugated product of that medium and the unconjugated pairing as the
+//! contour integral ∫ (E × H) · x̂ s dζ = ∫ (E × H) · x̂ dζ̃.
 use super::*;
 use lamina_core::{
-    AnalyticalMaterialStack, ExteriorSampling, FieldSampling, LayerSampling, OwnedModeFields,
-    WallKind,
+    AnalyticalMaterialStack, EvaluateMeromorphicMaterial, ExteriorSampling, FieldSampling,
+    LayerSampling, OwnedModeFields, Scalar, StretchProfile, WallKind,
 };
 use lamina_units::Length;
 
@@ -18,19 +26,57 @@ const SAMPLE_BUDGET: usize = 131072;
 /// Fields at one sample: [Ex, Ey, Ez, Z0 Hx, Z0 Hy, Z0 Hz].
 pub(super) type Sample = [Complex; 6];
 
-/// A stack's interfaces and walls in a registered frame, in cm.
+/// A PML in a registered frame, in cm.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Stretch {
+    /// Registered position of the inner face.
+    pub start: f64,
+    pub thickness: f64,
+    pub order: f64,
+    pub strength: Complex,
+}
+
+impl Stretch {
+    /// s(ζ) = 1 + c (ζ/d)^m at outward depth ζ, clamped to [0, d].
+    pub fn at(&self, depth: f64) -> Complex {
+        let fraction = (depth / self.thickness).clamp(0.0, 1.0);
+        1.0 + self.strength * fraction.powf(self.order)
+    }
+
+    /// ζ̃(ζ) = ζ + c d/(m+1) (ζ/d)^(m+1) at outward depth ζ, clamped to [0, d].
+    pub fn stretched(&self, depth: f64) -> Complex {
+        let depth = depth.clamp(0.0, self.thickness);
+        let fraction = depth / self.thickness;
+        depth
+            + self.strength
+                * (self.thickness / (self.order + 1.0))
+                * fraction.powf(self.order + 1.0)
+    }
+
+    /// Equal start, thickness and profile to `tolerance` cm and 1e-12.
+    pub fn matches(&self, other: &Self, tolerance: f64) -> bool {
+        (self.start - other.start).abs() <= tolerance
+            && (self.thickness - other.thickness).abs() <= tolerance
+            && (self.order - other.order).abs() <= 1e-12 * self.order.max(1.0)
+            && (self.strength - other.strength).norm() <= 1e-12 * self.strength.norm().max(1.0)
+    }
+}
+
+/// A stack's interfaces, walls and PMLs in a registered frame, in cm.
 #[derive(Clone, Debug)]
 pub(super) struct Layout {
     pub interfaces: Vec<f64>,
     widths: Vec<f64>,
-    /// Each side's wall kind and registered position, `None` for an open side.
+    /// Each side's wall kind and registered position, a PML's backing wall
+    /// included, `None` for an open side.
     pub walls: [Option<(WallKind, f64)>; 2],
+    /// Each PML side's stretch.
+    pub pmls: [Option<Stretch>; 2],
 }
 
 impl Layout {
     /// `None` for a non-finite origin, an unrepresentable interface spacing
-    /// or a termination other than a wall; callers refuse a PML side first,
-    /// naming it.
+    /// or a termination other than a wall or a PML.
     pub fn new(stack: &AnalyticalMaterialStack<Complex>, origin: f64) -> Option<Self> {
         if !origin.is_finite() {
             return None;
@@ -48,20 +94,40 @@ impl Layout {
             widths.push(width);
             interfaces.push(right);
         }
-        let [left, right_wall] = crate::problem::walls(stack).ok()?;
+        let closures = crate::problem::closures(stack).ok()?;
+        let outward = [-1.0, 1.0];
+        let faces = [origin, right];
+        let mut walls = [None; 2];
+        let mut pmls = [None; 2];
+        for side in 0..2 {
+            let Some((kind, gap, pml)) = closures[side] else {
+                continue;
+            };
+            let start = faces[side] + outward[side] * gap;
+            let thickness = pml.map_or(0.0, |pml| pml.thickness().as_centimetres());
+            walls[side] = Some((kind, start + outward[side] * thickness));
+            pmls[side] = pml.map(|pml| {
+                let StretchProfile::Polynomial { order, strength } = *pml.profile();
+                Stretch {
+                    start,
+                    thickness,
+                    order,
+                    strength,
+                }
+            });
+        }
         Some(Self {
             interfaces,
             widths,
-            walls: [
-                left.map(|(kind, gap)| (kind, origin - gap)),
-                right_wall.map(|(kind, gap)| (kind, right + gap)),
-            ],
+            walls,
+            pmls,
         })
     }
 
-    /// The union of the interfaces of `layouts` and their wall planes,
-    /// ascending. Walls of compatible layouts coincide to round-off; the
-    /// outermost of each side is used, whatever the order of `layouts`.
+    /// The union of the interfaces of `layouts`, their PML starts and their
+    /// wall planes, ascending. Walls and PMLs of compatible layouts coincide
+    /// to round-off; the outermost of each side is used, whatever the order
+    /// of `layouts`.
     pub fn partition(layouts: &[&Layout]) -> Vec<f64> {
         let mut partition: Vec<_> = layouts
             .iter()
@@ -73,8 +139,16 @@ impl Layout {
                 .filter_map(move |l| l.walls[side])
                 .map(|(_, z)| z)
         };
+        let starts = |side: usize| {
+            layouts
+                .iter()
+                .filter_map(move |l| l.pmls[side])
+                .map(|pml| pml.start)
+        };
         partition.extend(walls(0).reduce(f64::min));
         partition.extend(walls(1).reduce(f64::max));
+        partition.extend(starts(0).reduce(f64::min));
+        partition.extend(starts(1).reduce(f64::max));
         partition.sort_by(f64::total_cmp);
         partition.dedup();
         partition
@@ -143,6 +217,126 @@ impl Layout {
             1,
             partition[partition.len() - 1] - interfaces[last],
         )))
+    }
+}
+
+/// Most pieces a PML interval is split into.
+const MAX_PML_PIECES: usize = 4096;
+
+/// `partition` with each PML interval split into equal pieces whose
+/// transverse phase, the largest |κ| over `betas` times the interval's
+/// complex thickness ζ̃(ζ₂) − ζ̃(ζ₁), shared out among them, is at most the
+/// largest phase |κ| width of an interval outside the PMLs, and at least one
+/// radian: panels then resolve a PML as they resolve the layers and gaps.
+/// Fields there grow or decay as exp(±iκζ̃).
+pub(super) fn split_pmls(
+    partition: Vec<f64>,
+    stacks: &[(&Layout, &AnalyticalMaterialStack<Complex>)],
+    k0: f64,
+    betas: &[Complex],
+) -> Vec<f64> {
+    let at = Scalar(Complex::new(k0, 0.0));
+    let kappa = |material: &lamina_core::AnalyticalMaterialHandle<Complex>| {
+        let chi = material.evaluate_relative_permittivity_complex(at)
+            * material.evaluate_relative_permeability_complex(at)
+            * (k0 * k0);
+        betas
+            .iter()
+            .map(|beta| (chi - beta * beta).sqrt().norm())
+            .fold(0.0, f64::max)
+    };
+    // Each interval's phase and whether it lies in a PML.
+    let phases: Vec<(f64, bool)> = partition
+        .windows(2)
+        .map(|edges| {
+            let (left, right) = (edges[0], edges[1]);
+            let middle = 0.5 * (left + right);
+            stacks
+                .iter()
+                .fold((0.0_f64, false), |(phase, pml), &(layout, stack)| {
+                    let last = layout.interfaces.len() - 1;
+                    let side = if middle < layout.interfaces[0] {
+                        Some(0)
+                    } else if middle > layout.interfaces[last] {
+                        Some(1)
+                    } else {
+                        None
+                    };
+                    let exterior = [stack.left_exterior(), stack.right_exterior()];
+                    let (here, inside) = match side {
+                        Some(side) => match layout.pmls[side] {
+                            Some(stretch) if (middle - stretch.start) * [-1.0, 1.0][side] > 0.0 => {
+                                let depth = |z: f64| (z - stretch.start).abs();
+                                let length = stretch.stretched(depth(right))
+                                    - stretch.stretched(depth(left));
+                                (kappa(exterior[side]) * length.norm(), true)
+                            }
+                            _ => (kappa(exterior[side]) * (right - left), false),
+                        },
+                        None => {
+                            let index = layout.interfaces.partition_point(|&z| z <= middle);
+                            let phase = stack
+                                .layers_left_to_right()
+                                .get(index.saturating_sub(1))
+                                .map_or(0.0, |layer| kappa(layer.material()) * (right - left));
+                            (phase, false)
+                        }
+                    };
+                    (phase.max(here), pml || inside)
+                })
+        })
+        .collect();
+    let reference = phases
+        .iter()
+        .filter(|(_, pml)| !pml)
+        .map(|(phase, _)| *phase)
+        .fold(1.0, f64::max);
+    let mut split: Vec<f64> = partition.first().copied().into_iter().collect();
+    for (edges, &(phase, pml)) in partition.windows(2).zip(&phases) {
+        let pieces = if pml && phase.is_finite() {
+            ((phase / reference).ceil() as usize).clamp(1, MAX_PML_PIECES)
+        } else {
+            1
+        };
+        let (left, right) = (edges[0], edges[1]);
+        split.extend((1..pieces).map(|i| left + (right - left) * (i as f64 / pieces as f64)));
+        split.push(right);
+    }
+    split
+}
+
+impl Layout {
+    /// The stretch s at each sample of [`Layout::sampling`] for `partition`
+    /// at `panels`: s(ζ) inside a PML, by the interval holding the sample,
+    /// and one elsewhere.
+    pub fn stretches(&self, partition: &[f64], panels: usize) -> Vec<Complex> {
+        let mut stretches = vec![Complex::ONE];
+        for interval in partition.windows(2) {
+            let (left, right) = (interval[0], interval[1]);
+            let middle = 0.5 * (left + right);
+            let pml = match self.pmls {
+                [Some(pml), _] if middle < pml.start => Some((pml, -1.0)),
+                [_, Some(pml)] if middle > pml.start => Some((pml, 1.0)),
+                _ => None,
+            };
+            stretches.extend((0..=panels).map(|i| {
+                let z = left + (right - left) * (i as f64 / panels as f64);
+                pml.map_or(Complex::ONE, |(pml, outward)| {
+                    pml.at(outward * (z - pml.start))
+                })
+            }));
+        }
+        stretches.push(Complex::ONE);
+        stretches
+    }
+}
+
+/// The equivalent-medium fields in real coordinates: normal components
+/// E_z and Z0 H_z multiplied by the stretch, tangential ones unchanged.
+pub(super) fn equivalent(samples: &mut [Sample], stretches: &[Complex]) {
+    for (sample, s) in samples.iter_mut().zip(stretches) {
+        sample[2] *= s;
+        sample[5] *= s;
     }
 }
 

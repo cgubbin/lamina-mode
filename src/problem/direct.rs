@@ -48,16 +48,7 @@ fn check_pml_scale(
     k0: f64,
     region: ConformalRegion<f64>,
 ) -> Result<(), DirectChartError> {
-    let factors = radiation::exterior_factors(stack, C::new(k0, 0.0));
-    let pmls: Vec<_> = [StackSide::Left, StackSide::Right]
-        .into_iter()
-        .zip(pmls(stack))
-        .zip(factors)
-        .filter_map(|((side, pml), (epsilon, mu))| {
-            pml.map(|(_, tau)| (side, epsilon * mu * k0 * k0, tau))
-        })
-        .collect();
-    let floor = |chi: C, tau: C| -(chi.sqrt() * tau).im;
+    let pmls = pml_sides(stack, k0);
     let (x0, x1) = region.real_bounds();
     let (y0, y1) = region.imaginary_bounds();
     let corners = [
@@ -75,10 +66,7 @@ fn check_pml_scale(
     let peak = boundary
         .map(|beta| {
             pmls.iter()
-                .map(|&(side, chi, tau)| {
-                    let growth = ((chi - beta * beta).sqrt() * tau).im.abs();
-                    (side, floor(chi, tau) + growth)
-                })
+                .map(|&(side, chi, tau)| (side, share(chi, tau, beta)))
                 .collect::<Vec<_>>()
         })
         .max_by(|a, b| total(a).total_cmp(&total(b)));
@@ -102,6 +90,49 @@ fn check_pml_scale(
         }
     }
     Ok(())
+}
+
+/// Each PML side with its material's κ_ref² = εμk0² and its complex
+/// thickness τ.
+fn pml_sides(stack: &AnalyticalMaterialStack<C>, k0: f64) -> Vec<(StackSide, C, C)> {
+    let factors = radiation::exterior_factors(stack, C::new(k0, 0.0));
+    [StackSide::Left, StackSide::Right]
+        .into_iter()
+        .zip(pmls(stack))
+        .zip(factors)
+        .filter_map(|((side, pml), (epsilon, mu))| {
+            pml.map(|(_, tau)| (side, epsilon * mu * k0 * k0, tau))
+        })
+        .collect()
+}
+
+/// A PML side's share −Im(κ_ref τ) of the least log-scale.
+fn floor(chi: C, tau: C) -> f64 {
+    -(chi.sqrt() * tau).im
+}
+
+/// A PML side's share −Im(κ_ref τ) + |Im(κ τ)| of the log-scale at β.
+fn share(chi: C, tau: C, beta: C) -> f64 {
+    floor(chi, tau) + ((chi - beta * beta).sqrt() * tau).im.abs()
+}
+
+/// The log-scale Σ [−Im(κ_ref τ) + |Im(κ τ)|] of the characteristic at β:
+/// zero without PMLs.
+pub(crate) fn pml_log_scale(stack: &AnalyticalMaterialStack<C>, k0: f64, beta: C) -> f64 {
+    pml_sides(stack, k0)
+        .iter()
+        .map(|&(_, chi, tau)| share(chi, tau, beta))
+        .sum()
+}
+
+/// The least log-scale Σ −Im(κ_ref τ) of the characteristic over every β:
+/// where the PML sides' transfer is of order one, near the rotated
+/// continuum, the characteristic is of order exp of this. Zero without PMLs.
+pub(crate) fn pml_log_floor(stack: &AnalyticalMaterialStack<C>, k0: f64) -> f64 {
+    pml_sides(stack, k0)
+        .iter()
+        .map(|&(_, chi, tau)| floor(chi, tau))
+        .sum()
 }
 
 /// A β rectangle in cm^-1 at fixed real k0.

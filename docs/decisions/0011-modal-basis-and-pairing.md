@@ -86,7 +86,7 @@ refined until each entry changes by less than 1e-9 of max(|entry|, 1 W/m).
 
 **Additive schema.** `lamina.modal_basis_input`, `lamina.modal_basis`, `lamina.modal_profile` and
 `lamina.basis_pairing` are new kinds at schema version 1 (0005). `CONVENTIONS` and every existing kind, its canonical
-form and hash are unchanged. Profiles name the region of every sample: `layer`, `gap` or `exterior`.
+form and hash are unchanged. Profiles name the region of every sample: `layer`, `gap`, `pml` or `exterior`.
 
 **Defaults.** The 1e-6 k0 gap and the 1e-8 threshold are kept. On the walled slabs of the tests (TE and TM, PEC and
 PMC), the smallest gap between distinct modes is 8.3e-2 k0 and the largest distance from a mode to its layered-box
@@ -95,8 +95,46 @@ form one group with an unchanged bi-orthogonal pair. The smallest self-pairing r
 0.27, and a box mode at β = 6.3e-4 k0 has ratio 6.3e-4: the ratio follows β/k0 near cutoff, so the threshold flags
 modes within about 1e-8 k0 of the origin, where a forward window's mirror square reports `cutoff` first.
 
+**PMLs.** A side may be closed by a wall-backed PML (0009): the exterior material over
+ζ ∈ [0, d] with stretch s(ζ) = 1 + c (ζ/d)^m, ζ̃(ζ) = ∫₀^ζ s and complex thickness τ = d (1 + c/(m+1)). In real
+coordinates the stretch is the uniaxial medium εΛ, μΛ with Λ = diag(s, s, 1/s) in (x, y, z): complex symmetric,
+hence reciprocal, and the backing wall removes the boundary term, so modes of a stack closed by walls and PMLs are
+bi-orthogonal under ⟨·,·⟩ as between walls. Inside a PML the sampled fields are the exterior solution continued to
+ζ̃; the equivalent-medium fields have the same tangential components and normal components Ê_z = s E_z,
+Ĥ_z = s H_z. The densities there are
+
+| pairing | density in real ζ |
+| --- | --- |
+| unconjugated | (Ê_a × Ĥ_b) · x = s (E_a × H_b) · x, so ∫ … dζ = ∫ … dζ̃ along the contour |
+| conjugated | (Ê_a × Ĥ_b*) · x = s* E_y H_z* − s E_z H_y* |
+
+The unconjugated integrand is analytic in ζ̃ (one homogeneous material), so a PML's contribution depends on τ alone:
+two profiles of equal τ (orders 0, 2 and 4 in the tests) give the same modes and the same unconjugated contributions
+to 1e-10, while their conjugated contributions differ by up to 18 times. The contribution agrees with the closed form
+∫₀^τ e^{iqζ̃} dζ̃ of the fitted exponentials to 4e-11, and both pairings agree with Gauss–Legendre in every region
+to 7e-11. PML intervals are split until each piece carries no more transverse phase |κ τ| than the most oscillatory
+other interval. Two stacks pair when each side's PMLs agree in registered start, thickness, profile and backing;
+the PML and gap materials may differ. A PML against a wall, or differing PMLs, is `Terminations`, naming the side.
+
+**PML scale.** A PML side normalises the characteristic by exp(iκ_ref τ), leaving it of order exp(Σ [−Im(κ_ref τ) +
+|Im(κ τ)|]); near the rotated continuum that is exp(Σ −Im(κ_ref τ)), e^−33 for PMLs 1.75 wavelengths thick on the
+tests' slab. The basis search scales its near-zero threshold by that least scale, and root correction its residual
+limit by the scale at the seed, so both mean what they mean between walls: unscaled, argloc refused 352 cells of the
+tests' windows as boundary singularities, all then recovered by subdivision. A window whose scale leaves e^±300 is
+refused (`Scale`, naming the side and the log-magnitude); a cell that does so during subdivision is unresolved with
+cause `scale`.
+
+**PML bases.** A basis counts every mode in its window: the modes converging to the open stack's guided and exposed
+leaky modes (Im(κ (g + τ)) > 0) as the PML thickens and the modes near the rotated continuum arg κ ≈ −arg(g + τ).
+For symmetric slabs each guided and exposed leaky ladder value lies within 10 k0 |e^{2iκ(g+τ)}| of exactly one basis
+mode, with |Δβ| / (k0 |e^{2iκ(g+τ)}|) constant along the thickness sequence (0.07 to 5 in TE, 0.06 to 1 in TM), and
+every other mode stays at least 0.07 k0 from every ladder value. Rotated-continuum modes high in Im β grow strongly
+in thick PMLs; their self-pairing ratio falls below the 1e-8 threshold there, so they are reported ill-conditioned
+and the window, the caller's choice, decides whether the basis is complete. Profiles name `pml` samples and carry
+`stretched_z_m` and `stretch`, with the fixed statement of what the fields are there.
+
 ## Consequences
 
-Bases are formed for stacks closed by walls on both sides; a wavenumber window on a stack with an open side is
-refused. Fields are not projected onto a modal basis here, local coupling is not formed on one, and nothing is
-differentiated with respect to a wall position.
+Bases are formed for stacks closed by walls or PMLs on both sides; a wavenumber window on a stack with an open side
+is refused. Fields are not projected onto a modal basis here, local coupling is not formed on one, and nothing is
+differentiated with respect to a wall position or a PML's thickness, profile or position.

@@ -108,11 +108,3 @@ def test_enumerating_a_pml_terminated_stack_is_refused():
         with pytest.raises(lamina.UnsupportedTermination, match="PML"):
             lamina.enumerate_guided_modes(s, REQUEST)
     assert issubclass(lamina.UnsupportedTermination, lamina.InvalidInput)
-
-
-def test_a_modal_basis_of_a_pml_terminated_stack_is_refused():
-    k0 = 2 * math.pi / WAVELENGTH
-    window = lamina.BetaWindow((-0.01 * k0, 2.0 * k0), (-0.01 * k0, 0.5 * k0))
-    s = stack(left=pml(start=-GAP), right=lamina.Wall("pmc", D + GAP))
-    with pytest.raises(lamina.UnsupportedTermination, match="Left side is closed by a PML"):
-        lamina.modal_basis(s, WAVELENGTH, "TE", window)
