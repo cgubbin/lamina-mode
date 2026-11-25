@@ -773,8 +773,15 @@ impl GuidedBetaSensitivity {
     /// Rates of the exterior decay constants; the pairings that use them
     /// take open stacks only.
     pub(super) fn exterior_decay_rates(&self) -> [f64; 2] {
-        [self.exterior.left(), self.exterior.right()]
-            .map(|root| root.expect("an open side").first()[()].im)
+        [
+            self.exterior
+                .left()
+                .and_then(lamina_core::ExteriorBranch::scalar),
+            self.exterior
+                .right()
+                .and_then(lamina_core::ExteriorBranch::scalar),
+        ]
+        .map(|root| root.expect("an open side").first()[()].im)
     }
 
     pub(super) fn power_field_tangent_on_mesh<B: lamina_core::ModalDerivativeBackend>(
@@ -796,7 +803,14 @@ impl GuidedBetaSensitivity {
         let grid = super::power::ProfileGrid::new(stack, provenance.polarisation(), k, beta, 2, 4)
             .map_err(Termination)?
             .ok_or(Quadrature)?;
-        let roots = [self.exterior.left(), self.exterior.right()];
+        let roots = [
+            self.exterior
+                .left()
+                .and_then(lamina_core::ExteriorBranch::scalar),
+            self.exterior
+                .right()
+                .and_then(lamina_core::ExteriorBranch::scalar),
+        ];
         // Walls stay fixed: the right gap narrows as the layers thicken.
         let width_rates: Vec<_> = std::iter::once(0.0)
             .chain(self.thickness_rates.iter().copied())

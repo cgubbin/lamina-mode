@@ -256,8 +256,14 @@ impl BranchSignature {
         Self {
             k0: value(point.coordinates().vacuum_angular_wavenumber()),
             k_parallel: value(point.coordinates().parallel_angular_wavenumber()),
-            left: exterior.left().map(value),
-            right: exterior.right().map(value),
+            left: exterior
+                .left()
+                .and_then(lamina_core::ExteriorBranch::scalar)
+                .map(value),
+            right: exterior
+                .right()
+                .and_then(lamina_core::ExteriorBranch::scalar)
+                .map(value),
         }
     }
     /// The exterior wavevectors in left/right order, `None` on a closed side.

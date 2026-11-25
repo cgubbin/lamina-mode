@@ -624,10 +624,14 @@ mod mock_solver_tests {
             _coordinates: &CanonicalCoordinates<J>,
             exterior: &ExteriorWavevectors<J>,
         ) -> Result<J, Self::Error> {
-            Ok(exterior
-                .left()
-                .unwrap()
-                .add(&exterior.right().unwrap().scale(c(3.0, 0.0))))
+            Ok(exterior.left().unwrap().scalar().unwrap().add(
+                &exterior
+                    .right()
+                    .unwrap()
+                    .scalar()
+                    .unwrap()
+                    .scale(c(3.0, 0.0)),
+            ))
         }
     }
 
@@ -641,9 +645,19 @@ mod mock_solver_tests {
 
         let point = mapped_point(&dispersion, z);
 
-        let left = point.exterior_wavevectors().left().unwrap();
+        let left = point
+            .exterior_wavevectors()
+            .left()
+            .unwrap()
+            .scalar()
+            .unwrap();
 
-        let right = point.exterior_wavevectors().right().unwrap();
+        let right = point
+            .exterior_wavevectors()
+            .right()
+            .unwrap()
+            .scalar()
+            .unwrap();
 
         let expected_value = left.value()[()] + c(3.0, 0.0) * right.value()[()];
 
@@ -686,8 +700,17 @@ mod mock_solver_tests {
             let exterior_part = exterior
                 .left()
                 .unwrap()
+                .scalar()
+                .unwrap()
                 .scale(c(3.0, 0.0))
-                .subtract(&exterior.right().unwrap().scale(c(4.0, 0.0)));
+                .subtract(
+                    &exterior
+                        .right()
+                        .unwrap()
+                        .scalar()
+                        .unwrap()
+                        .scale(c(4.0, 0.0)),
+                );
 
             Ok(coordinate_part.add(&exterior_part))
         }
@@ -707,9 +730,19 @@ mod mock_solver_tests {
 
         let kx = point.coordinates().parallel_angular_wavenumber();
 
-        let left = point.exterior_wavevectors().left().unwrap();
+        let left = point
+            .exterior_wavevectors()
+            .left()
+            .unwrap()
+            .scalar()
+            .unwrap();
 
-        let right = point.exterior_wavevectors().right().unwrap();
+        let right = point
+            .exterior_wavevectors()
+            .right()
+            .unwrap()
+            .scalar()
+            .unwrap();
 
         let expected_value =
             k0.value()[()] + c(2.0, 0.0) * kx.value()[()] + c(3.0, 0.0) * left.value()[()]

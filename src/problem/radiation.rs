@@ -178,7 +178,16 @@ where
         let actual_beta = point.coordinates().parallel_angular_wavenumber().value()[()];
         let value = |a: &J| a.value()[()];
         let exterior = point.exterior_wavevectors();
-        let observed = [exterior.left().map(value), exterior.right().map(value)];
+        let observed = [
+            exterior
+                .left()
+                .and_then(lamina_core::ExteriorBranch::scalar)
+                .map(value),
+            exterior
+                .right()
+                .and_then(lamina_core::ExteriorBranch::scalar)
+                .map(value),
+        ];
         let scale = expected
             .iter()
             .flatten()
