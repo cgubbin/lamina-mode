@@ -78,6 +78,29 @@ Added:
   differ. Accepted roots of a basis are stepped once more by their own Newton
   correction, self-pairings converge relative to themselves, and a modal
   pairing's regional contributions converge with its totals.
+- Modal bases of stacks with one or two open sides, on the conformal chart of
+  the open exteriors: `ModalWindow::Chart`, a rectangle in z less than one
+  period tall, and `ModalWindow::covering`, the chart window covering a β
+  rectangle on stated sheets with its extra area (`WindowError`, including
+  `CrossesCut` for a rectangle that meets a stated sheet's cut). Guided and
+  leaky modes carry their `ExteriorSheet` per open side; scope
+  `BasisScope::DiscreteWithoutContinuum` states that the radiation continuum
+  is not included; a root within 1e-4 k0 of a branch point is unresolved with
+  `BasisLimit::BranchPoint`. Open tails: unconjugated i v₀/(κ_a + κ_b) by
+  analytic continuation, conjugated i v₀/(κ_a − κ_b*) only where
+  Im κ_a + Im κ_b > 0, otherwise absent (`Absent::Unbounded`), and
+  `TailSingular` near κ_a + κ_b = 0. Pairings accept sides open in both
+  stacks. Open exteriors must be isotropic; an anisotropic one is refused
+  with `WindowError::AnisotropicExterior`, naming the region.
+- Breaking: `ModalPairing::conjugated_w_per_m` is a
+  `Result<Complex, Absent>` and `BasisPairing::conjugated` a
+  `DMatrix<Result<Complex, Absent>>`.
+- lamina-py: `lamina.ChartWindow`, `lamina.chart_window_covering`, open stacks
+  in `lamina.modal_basis` (charts `"one_exterior"` and `"two_exterior"`,
+  sheets, `"guided"` and `"leaky"` mode types, scope
+  `"discrete_without_continuum"`, cause `"branch_point"`), and `null`
+  conjugated entries with cause `"unbounded"` in `lamina.basis_pairing`. A
+  `BetaWindow` on an open stack raises `InvalidInput` naming `ChartWindow`.
 - lamina-py: `lamina.modal_basis` and `lamina.basis_pairing` accept PML-closed
   stacks; profiles name `"pml"` samples and carry their stretched coordinate
   and stretch (`stretched_z_m`, `stretch`, `pml_fields`; omitted for stacks

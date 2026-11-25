@@ -486,3 +486,58 @@ pub(super) fn field_scale(a: &Sample) -> Complex {
         0.0,
     )
 }
+
+/// Why an open tail has no finite value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TailFailure {
+    /// |κ_a + κ_b|, or |κ_a − κ_b*|, below the k0-relative floor.
+    Singular(lamina_core::StackSide),
+    /// The conjugated tail diverges: Im κ_a + Im κ_b ≤ 0.
+    Unbounded(lamina_core::StackSide),
+}
+
+/// Each side's exterior wavevector κ, `None` on a closed side.
+pub(super) type Kappas = [Option<Complex>; 2];
+
+/// The closed-form tails beyond the partition on each side open for both
+/// modes, from the densities at the anchor samples: with fields ∝ exp(iκζ)
+/// outward, ∫₀^∞ v₀ e^{i(κ_a+κ_b)ζ} dζ = i v₀/(κ_a + κ_b) by analytic
+/// continuation, or conjugated i v₀/(κ_a − κ_b*) where Im κ_a + Im κ_b > 0.
+/// For decaying modes, κ = iα, both are v₀/(α_a + α_b).
+pub(super) fn tails(
+    a: &[Sample],
+    b: &[Sample],
+    kappas: [Kappas; 2],
+    k0: f64,
+    conjugate: bool,
+) -> Result<Complex, TailFailure> {
+    use lamina_core::StackSide::{Left, Right};
+    let mut total = Complex::ZERO;
+    for (side, which, anchor) in [(0, Left, 0), (1, Right, a.len() - 1)] {
+        let (Some(ka), Some(kb)) = (kappas[0][side], kappas[1][side]) else {
+            continue;
+        };
+        let (value, sum) = if conjugate {
+            if ka.im + kb.im <= 0.0 {
+                return Err(TailFailure::Unbounded(which));
+            }
+            (conjugated(&a[anchor], &b[anchor]), ka - kb.conj())
+        } else {
+            (unconjugated(&a[anchor], &b[anchor]), ka + kb)
+        };
+        let floor = super::open::TAIL_SINGULAR_FLOOR * k0;
+        if sum.norm().is_nan() || sum.norm() < floor {
+            return Err(TailFailure::Singular(which));
+        }
+        total += Complex::I * value / sum;
+    }
+    Ok(total)
+}
+
+/// The open sides' share of the field scale: |F(edge)|²/(4 Z0 |κ|) each.
+pub(super) fn tail_scale(a: &[Sample], kappas: Kappas) -> f64 {
+    [(0, 0), (1, a.len() - 1)]
+        .into_iter()
+        .filter_map(|(side, anchor)| Some(field_scale(&a[anchor]).re / kappas[side]?.norm()))
+        .sum()
+}

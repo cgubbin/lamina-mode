@@ -66,6 +66,7 @@ __all__ = [
     "FieldProjection",
     "DEFINITIONS",
     "BetaWindow",
+    "ChartWindow",
     "ModalBasisInput",
     "UnresolvedRegion",
     "BasisMode",
@@ -74,6 +75,7 @@ __all__ = [
     "BasisPairing",
     "enumerate_guided_modes",
     "modal_basis",
+    "chart_window_covering",
     "basis_pairing",
     "power_overlap",
     "power_overlap_sensitivity",
@@ -1747,6 +1749,36 @@ class BetaWindow:
         return cls(tuple(d["re_rad_per_m"]), tuple(d["im_rad_per_m"]))
 
 
+@dataclass(frozen=True)
+class ChartWindow:
+    """A rectangle in the dimensionless conformal coordinate z, for stacks
+    with an open side: Re z in `re`, Im z in `im`, each ascending, less than
+    one period, 2π, tall. With one open side β² = k0² (χ + e^{2z}) and
+    κ = i k0 e^z; with two, β² = k0² (s + e^{2z} + r² e^{−2z}),
+    κ_L,R = i k0 (e^z ∓ r e^{−z}), r = (χ_L − χ_R)/4, s = (χ_L + χ_R)/2.
+    `chart_window_covering` builds one from a β rectangle on stated sheets."""
+
+    re: tuple[float, float]
+    im: tuple[float, float]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "re", _bounds(self.re))
+        object.__setattr__(self, "im", _bounds(self.im))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"kind": "chart", "re": list(self.re), "im": list(self.im)}
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> ChartWindow:
+        if d.get("kind") != "chart":
+            raise InvalidInput(f"not a chart window: {d.get('kind')!r}")
+        return cls(tuple(d["re"]), tuple(d["im"]))
+
+
+def _window(d: Mapping[str, Any]) -> BetaWindow | ChartWindow:
+    return ChartWindow.from_dict(d) if d.get("kind") == "chart" else BetaWindow.from_dict(d)
+
+
 @dataclass(frozen=True, eq=False)
 class ModalBasisInput(_Record):
     """The canonical input of a modal basis, with the near-degeneracy gap resolved."""
@@ -1754,7 +1786,7 @@ class ModalBasisInput(_Record):
     stack: Stack
     wavelength_m: float
     polarisation: Literal["TE", "TM"]
-    window: BetaWindow
+    window: BetaWindow | ChartWindow
     degeneracy_gap_rad_per_m: float | None = None
     self_pairing_rtol: float = 1e-8
     _kind = "modal_basis_input"
@@ -1783,7 +1815,7 @@ class ModalBasisInput(_Record):
             Stack.from_dict(d["stack"]),
             d["wavelength_m"],
             d["polarisation"],
-            BetaWindow.from_dict(d["window"]),
+            _window(d["window"]),
             d["degeneracy_gap_rad_per_m"],
             d["self_pairing_rtol"],
         )
@@ -1793,9 +1825,12 @@ class ModalBasisInput(_Record):
 class UnresolvedRegion:
     """A region of the window that did not end as accepted modes, and why:
     "boundary_root", "non_integer_count", "budget", "refinement",
-    "multiplicity", "cutoff" or "scale" (a PML scale out of range). `bounds`
-    is in the chart's coordinate (rad/m on the wavenumber chart); `count` is
-    the number of zeros counted inside."""
+    "multiplicity", "cutoff", "scale" (a PML scale out of range) or
+    "branch_point" (a root whose exterior wavevector on an open side is
+    within 1e-4 k0 of zero, where its self-pairing tail diverges). `bounds`
+    is in the chart's coordinate (rad/m on the wavenumber chart,
+    dimensionless z on a conformal chart); `count` is the number of zeros
+    counted inside."""
 
     bounds: _Rect
     beta_image_rad_per_m: _Rect
@@ -1821,7 +1856,10 @@ class UnresolvedRegion:
 class BasisMode:
     """One mode of a modal basis. `normalisation` is "unit" (⟨f, f⟩ = 1 W/m)
     or "ill_conditioned" (|⟨u, u⟩| below the threshold of the field scale: no
-    normalised fields). `sign_margin` is |Re ℓ| / max |Ey + Z0 Hy|."""
+    normalised fields). `sign_margin` is |Re ℓ| / max |Ey + Z0 Hy|. `sheet`
+    gives each open side's sheet, "proper" (Im κ > 0, decaying) or
+    "improper" (growing), None for a closed side; `mode_type` is "closed"
+    without open sides, else "guided" or "leaky"."""
 
     index: int
     beta_rad_per_m: complex
@@ -1859,8 +1897,12 @@ class BasisMode:
 
 @dataclass(frozen=True, eq=False)
 class ModalBasis(_Record):
-    """Every mode of a stack closed by walls or PMLs in a β window, with its
-    evidence.
+    """Every mode of a stack in a window, with its evidence: a β window for a
+    stack closed by walls or PMLs ("wavenumber" chart, scope "discrete"), a
+    chart window for one with an open side ("one_exterior" or
+    "two_exterior" chart, scope "discrete_without_continuum": the guided and
+    leaky modes in the window, never the radiation continuum, so they do not
+    span the stack's fields).
 
     `expected` is the count from the argument principle over the window
     boundary and `found` the distinct accepted modes. `status` is "complete"
@@ -2128,20 +2170,22 @@ def modal_basis(
     stack: Stack,
     wavelength_m: float,
     polarisation: Literal["TE", "TM"],
-    window: BetaWindow,
+    window: BetaWindow | ChartWindow,
     *,
     degeneracy_gap_rad_per_m: float | None = None,
     self_pairing_rtol: float = 1e-8,
 ) -> ModalBasis:
-    """Every mode of `stack`, closed by walls or PMLs on both sides, in `window`.
+    """Every mode of `stack` in `window`: a `BetaWindow` for a stack closed by
+    walls or PMLs on both sides, a `ChartWindow` for one with an open side.
 
     An incomplete basis is a result, not an error: read `status`, `expected`,
     `found` and `unresolved` together; a cell whose PML scale leaves the
     representable range is unresolved with cause "scale". Invalid inputs,
-    including a stack with an open side and a window on which a PML's scale
-    leaves the representable range (naming the side and the log-magnitude),
-    raise `InvalidInput`; a self-pairing quadrature over its budget raises
-    `IntegrationFailed` and field recovery `FieldsFailed`.
+    including a `BetaWindow` on a stack with an open side, a `ChartWindow`
+    taller than one period, and a window on which a PML's scale leaves the
+    representable range (naming the side and the log-magnitude), raise
+    `InvalidInput`; a self-pairing quadrature over its budget or a singular
+    open tail raises `IntegrationFailed` and field recovery `FieldsFailed`.
     """
     resolved = ModalBasisInput(
         stack, wavelength_m, polarisation, window, degeneracy_gap_rad_per_m, self_pairing_rtol
@@ -2152,6 +2196,28 @@ def modal_basis(
     return basis
 
 
+def chart_window_covering(
+    stack: Stack,
+    wavelength_m: float,
+    beta_rect_rad_per_m: tuple[tuple[float, float], tuple[float, float]],
+    sheets: tuple[Literal["proper", "improper"] | None, Literal["proper", "improper"] | None],
+) -> tuple[ChartWindow, float]:
+    """The smallest chart window whose image covers the β rectangle
+    `((re_low, re_high), (im_low, im_high))` (rad/m) on `sheets`, one per side
+    (left, right), None for a closed side, and the extra area of its β image
+    (rad²/m²). A rectangle meeting a stated sheet's cut, where a leaky mode
+    would be reached across a branch cut, raises `InvalidInput` naming the
+    side. The basis of the window holds every mode in it, each with its sheet.
+    """
+    (re, im), extra = _native.chart_window_covering(
+        _dumps(stack.to_dict()),
+        float(wavelength_m),
+        [list(_bounds(beta_rect_rad_per_m[0])), list(_bounds(beta_rect_rad_per_m[1]))],
+        list(sheets),
+    )
+    return ChartWindow(tuple(re), tuple(im)), float(extra)
+
+
 def basis_pairing(
     first: ModalBasis, second: ModalBasis, origins_m: tuple[float, float] = (0.0, 0.0)
 ) -> BasisPairing:
@@ -2159,7 +2225,11 @@ def basis_pairing(
 
     `origins_m` places each stack's first interface in a common frame; the
     walls must then coincide in kind and position, and PMLs in start,
-    thickness, profile and backing (materials may differ).
+    thickness, profile and backing, and an open side must be open in both
+    (materials may differ). Beyond the stacks an open side contributes a
+    closed-form tail: unconjugated by analytic continuation for guided and
+    leaky modes alike; a conjugated entry whose tail diverges is nan with
+    cause "unbounded" in `conjugated_absent`.
     Otherwise, or at different wavelengths, `InvalidInput`; a quadrature over
     its budget raises `IntegrationFailed` and field recovery `FieldsFailed`.
     """

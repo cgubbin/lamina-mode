@@ -176,6 +176,25 @@ the unconjugated pairing along z̃ and the conjugated product over the equivalen
 when their PMLs agree in start, thickness, profile and backing; their materials may differ. A window on which a
 PML's normalisation scale leaves the representable range raises `InvalidInput` naming the side and log-magnitude.
 
+A stack with an open side has a radiation continuum besides its discrete modes. Its basis holds the guided and
+leaky modes in a `ChartWindow`, a rectangle in the conformal coordinate z (κ = i k0 e^z with one open side or equal
+exteriors), never the continuum, so it does not span the stack's fields (scope `"discrete_without_continuum"`).
+`chart_window_covering` builds the window covering a β rectangle on stated sheets:
+
+```python
+stack = lamina.Stack(2.25, [(4.0, 0.7e-6)], 2.25)                      # open on both sides
+window, extra = lamina.chart_window_covering(
+    stack, 1e-6, ((1.45 * k0, 1.65 * k0), (0.03 * k0, 0.15 * k0)), ("improper", "improper")
+)
+basis = lamina.modal_basis(stack, 1e-6, "TE", window)
+[(m.mode_type, m.sheet) for m in basis.modes]  # "guided" on the proper sheet, "leaky" on the improper one
+```
+
+A rectangle that meets a stated sheet's cut raises `InvalidInput` naming the side, and a `BetaWindow` on an open
+stack raises `InvalidInput` naming `ChartWindow`. Pairings continue the unconjugated tail beyond an open side
+analytically; a conjugated entry whose tail diverges (Im κ_a + Im κ_b ≤ 0, as between leaky modes) is nan with
+cause `"unbounded"`. A root within 1e-4 k0 of a branch point (κ = 0) is unresolved with cause `"branch_point"`.
+
 ## Scope
 
 lamina-py presents lamina-mode's results in Python: SI quantities with the unit in every field name, typed

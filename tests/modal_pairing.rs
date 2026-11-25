@@ -82,7 +82,7 @@ fn gaps_pair_as_closed_form_sine_integrals() {
             let conjugated = 0.25 * C * (gamma.conj() + beta) / K * p * q.conj() * overlap;
             worst = worst
                 .max((pairing.unconjugated[(i, j)] - unconjugated).norm())
-                .max((pairing.conjugated[(i, j)] - conjugated).norm());
+                .max((pairing.conjugated[(i, j)].unwrap() - conjugated).norm());
         }
     }
     assert!(matched > 3);
@@ -124,7 +124,11 @@ fn pairings_are_symmetric_and_need_matching_walls() {
                 forward.unconjugated_w_per_m.im.to_bits(),
                 back.unconjugated_w_per_m.im.to_bits()
             );
-            assert!((forward.conjugated_w_per_m - back.conjugated_w_per_m.conj()).norm() < 1e-12);
+            assert!(
+                (forward.conjugated_w_per_m.unwrap() - back.conjugated_w_per_m.unwrap().conj())
+                    .norm()
+                    < 1e-12
+            );
             let expected = [-0.5, 0., 0.1, 0.5, 0.6, 1.1];
             assert_eq!(forward.partition_cm.len(), expected.len());
             assert!(

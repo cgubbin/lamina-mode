@@ -17,9 +17,16 @@
 //! conjugated product integrates the equivalent-medium fields in real
 //! coordinates, s* E_y H_z* − s E_z H_y* for each term, and depends on the
 //! profile.
+//!
+//! Beyond the partition, a side open in both stacks contributes a closed-form
+//! tail: unconjugated i v₀/(κ_a + κ_b) by analytic continuation, the integral
+//! along a rotated ray on which both fields decay, for guided and leaky modes
+//! alike; conjugated i v₀/(κ_a − κ_b*) only where Im κ_a + Im κ_b > 0, and
+//! otherwise absent, never a regularised number.
 use super::basis::{BasisFieldError, BasisMode, BasisScope, BasisStatus, ModalBasis};
 use super::integration::{
-    Layout, Sample, conjugated, converge, equivalent, integral, intervals, split_pmls, unconjugated,
+    Kappas, Layout, Sample, TailFailure, conjugated, converge, equivalent, integral, intervals,
+    split_pmls, tails, unconjugated,
 };
 use super::*;
 use lamina_core::{ModalFieldBackend, StackSide};
@@ -30,9 +37,10 @@ pub struct ModalPairing {
     pub registration: GuidedOverlapRegistration,
     /// ⟨a, b⟩, W/m.
     pub unconjugated_w_per_m: Complex,
-    /// (a, b), W/m.
-    pub conjugated_w_per_m: Complex,
+    /// (a, b), W/m; absent when an open tail diverges.
+    pub conjugated_w_per_m: Result<Complex, Absent>,
     /// Per partition interval, left to right: [unconjugated, conjugated].
+    /// Open tails are not included.
     pub regional_w_per_m: Vec<[Complex; 2]>,
     pub partition_cm: Vec<f64>,
     pub sample_count: usize,
@@ -47,8 +55,8 @@ pub struct BasisPairing {
     pub modes: [Vec<usize>; 2],
     /// ⟨f_i, g_j⟩, W/m.
     pub unconjugated: DMatrix<Complex>,
-    /// (f_i, g_j), W/m.
-    pub conjugated: DMatrix<Complex>,
+    /// (f_i, g_j), W/m; absent where an open tail diverges.
+    pub conjugated: DMatrix<Result<Complex, Absent>>,
     /// Of the unconjugated matrix, descending.
     pub singular_values: Vec<f64>,
     /// Condition number of the unconjugated matrix's leading (k + 1) × (k + 1) block.
@@ -60,6 +68,13 @@ pub struct BasisPairing {
     pub quadrature_change_w_per_m: f64,
     pub status: [BasisStatus; 2],
     pub scope: [BasisScope; 2],
+}
+
+/// Why a conjugated pairing has no value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Absent {
+    /// The conjugated tail on `side` diverges: Im κ_a + Im κ_b ≤ 0.
+    Unbounded { side: StackSide },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -80,6 +95,34 @@ pub enum PairingError {
     },
     #[error("pairing quadrature exceeded its accuracy or sampling budget")]
     Quadrature,
+    #[error("the {side:?} open tail is singular: |κ_a + κ_b| is below its floor")]
+    TailSingular { side: StackSide },
+}
+
+/// Each side's exterior wavevector of a mode, `None` on closed sides.
+fn kappas(mode: &BasisMode) -> Kappas {
+    mode.point
+        .signature()
+        .map_or([None; 2], |s| [s.left, s.right])
+}
+
+/// The open tails of a pair: unconjugated, and conjugated unless absent.
+fn pair_tails(
+    a: &[Sample],
+    b: &[Sample],
+    kappas: [Kappas; 2],
+    k0: f64,
+) -> Result<(Complex, Result<Complex, Absent>), PairingError> {
+    let singular = |side| PairingError::TailSingular { side };
+    let unconjugated = tails(a, b, kappas, k0, false).map_err(|e| match e {
+        TailFailure::Singular(side) | TailFailure::Unbounded(side) => singular(side),
+    })?;
+    let conjugated = match tails(a, b, kappas, k0, true) {
+        Ok(value) => Ok(value),
+        Err(TailFailure::Unbounded(side)) => Err(Absent::Unbounded { side }),
+        Err(TailFailure::Singular(side)) => return Err(singular(side)),
+    };
+    Ok((unconjugated, conjugated))
 }
 
 /// Both stacks' layouts, when their wavelengths, walls and PMLs agree.
@@ -98,16 +141,20 @@ fn compatible(
     };
     let layouts = [layout(0)?, layout(1)?];
     let [a, b] = layouts.each_ref().map(|l| l.walls);
-    let span = match a {
-        [Some((_, left)), Some((_, right))] => right - left,
-        _ => 0.0,
-    };
+    let span = Layout::partition(&[&layouts[0], &layouts[1]])
+        .iter()
+        .fold([f64::INFINITY, f64::NEG_INFINITY], |[lo, hi], &z| {
+            [lo.min(z), hi.max(z)]
+        });
+    let span = span[1] - span[0];
     let [pa, pb] = layouts.each_ref().map(|l| l.pmls);
     for (side, which) in [StackSide::Left, StackSide::Right].into_iter().enumerate() {
-        let walls = matches!(
-            (a[side], b[side]),
-            (Some((ka, za)), Some((kb, zb))) if ka == kb && (za - zb).abs() <= 1e-12 * span
-        );
+        // Open in both stacks, or walls of one kind at one registered z.
+        let walls = match (a[side], b[side]) {
+            (None, None) => true,
+            (Some((ka, za)), Some((kb, zb))) => ka == kb && (za - zb).abs() <= 1e-12 * span,
+            _ => false,
+        };
         let pmls = match (pa[side], pb[side]) {
             (None, None) => true,
             (Some(x), Some(y)) => x.matches(&y, 1e-12 * span),
@@ -164,17 +211,21 @@ pub fn modal_pairing_with<B: ModalFieldBackend<Region> + Clone>(
             let (a, b) = (fields(0)?, fields(1)?);
             let u = intervals(&partition, panels, |i| unconjugated(&a[i], &b[i]));
             let c = intervals(&partition, panels, |i| conjugated(&a[i], &b[i]));
+            let (tail, conjugated_tail) = pair_tails(&a, &b, modes.map(kappas), k0[0])?;
             // The totals, then each interval's contributions, all converged.
-            let mut entries = vec![u.iter().sum(), c.iter().sum()];
+            let mut entries = vec![
+                u.iter().sum::<Complex>() + tail,
+                c.iter().sum::<Complex>() + conjugated_tail.unwrap_or(Complex::ZERO),
+            ];
             entries.extend(u.iter().zip(&c).flat_map(|(u, c)| [*u, *c]));
-            Ok((entries, ()))
+            Ok((entries, conjugated_tail.map(|_| ())))
         },
     )?;
     let e = &result.entries;
     Ok(ModalPairing {
         registration,
         unconjugated_w_per_m: e[0],
-        conjugated_w_per_m: e[1],
+        conjugated_w_per_m: result.extra.map(|()| e[1]),
         regional_w_per_m: e[2..].chunks(2).map(|r| [r[0], r[1]]).collect(),
         partition_cm: partition,
         sample_count: result.sample_count,
@@ -237,6 +288,13 @@ pub fn basis_pairing_with<B: ModalFieldBackend<Region> + Clone>(
         &betas,
     );
     let [n, m] = [modes[0].len(), modes[1].len()];
+    let k0 = bases[0].request.k0_cm();
+    let kappa = [0, 1].map(|b| {
+        modes[b]
+            .iter()
+            .map(|&i| kappas(&bases[b].modes[i]))
+            .collect::<Vec<_>>()
+    });
     let result = converge(
         &partition,
         || PairingError::Quadrature,
@@ -258,25 +316,32 @@ pub fn basis_pairing_with<B: ModalFieldBackend<Region> + Clone>(
                 integral(&partition, panels, |i| density(&x[i], &y[i]))
             };
             let mut entries = Vec::with_capacity(2 * n * m + n * n + m * m);
-            for f in &a {
-                for g in &b {
-                    entries.push(pair(f, g, unconjugated));
-                    entries.push(pair(f, g, conjugated));
+            let mut absent = Vec::with_capacity(n * m);
+            for (f, kf) in a.iter().zip(&kappa[0]) {
+                for (g, kg) in b.iter().zip(&kappa[1]) {
+                    let (tail, conjugated_tail) = pair_tails(f, g, [*kf, *kg], k0)?;
+                    entries.push(pair(f, g, unconjugated) + tail);
+                    entries.push(pair(f, g, conjugated) + conjugated_tail.unwrap_or(Complex::ZERO));
+                    absent.push(conjugated_tail.err());
                 }
             }
-            for set in [&a, &b] {
-                for f in set.iter() {
-                    for g in set.iter() {
-                        entries.push(pair(f, g, unconjugated));
+            for (set, k) in [(&a, &kappa[0]), (&b, &kappa[1])] {
+                for (f, kf) in set.iter().zip(k) {
+                    for (g, kg) in set.iter().zip(k) {
+                        let (tail, _) = pair_tails(f, g, [*kf, *kg], k0)?;
+                        entries.push(pair(f, g, unconjugated) + tail);
                     }
                 }
             }
-            Ok((entries, ()))
+            Ok((entries, absent))
         },
     )?;
     let e = &result.entries;
     let unconjugated = DMatrix::from_fn(n, m, |i, j| e[2 * (i * m + j)]);
-    let conjugated = DMatrix::from_fn(n, m, |i, j| e[2 * (i * m + j) + 1]);
+    let conjugated = DMatrix::from_fn(n, m, |i, j| match result.extra[i * m + j] {
+        Some(cause) => Err(cause),
+        None => Ok(e[2 * (i * m + j) + 1]),
+    });
     let defect = |offset: usize, k: usize| {
         (0..k * k)
             .map(|p| {
