@@ -248,12 +248,20 @@ pub struct BranchSignature {
     pub k_parallel: C,
     pub left: Option<C>,
     pub right: Option<C>,
+    /// The two outward wavevectors of each open side of the coupled channel,
+    /// left then right; `None` for a scalar channel or a closed side.
+    pub pairs: [Option<[C; 2]>; 2],
 }
 impl BranchSignature {
     pub(crate) fn of(point: &crate::conformal::ConformalPoint<J>) -> Self {
         let value = |a: &J| a.value()[()];
         let exterior = point.exterior_wavevectors();
+        let pair = |branch: Option<&lamina_core::ExteriorBranch<J>>| match branch {
+            Some(lamina_core::ExteriorBranch::Pair(pair)) => Some(pair.each_ref().map(value)),
+            _ => None,
+        };
         Self {
+            pairs: [pair(exterior.left()), pair(exterior.right())],
             k0: value(point.coordinates().vacuum_angular_wavenumber()),
             k_parallel: value(point.coordinates().parallel_angular_wavenumber()),
             left: exterior

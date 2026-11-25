@@ -30,6 +30,9 @@ pub enum DirectChartError {
     PmlScale { side: StackSide, log_magnitude: i64 },
     #[error(transparent)]
     Constitutive(#[from] ConstitutiveError),
+    /// The PML normalisation is a scalar channel's.
+    #[error("a β domain of the coupled channel cannot be closed by a PML")]
+    CoupledPml,
 }
 
 /// Largest accepted magnitude of the log-scale of the characteristic. The
@@ -225,12 +228,18 @@ impl<S: ModeDeterminantSolver<J> + Clone> ModalProblem<ComplexInPlaneMap<J>, S> 
             self.solver.clone(),
             chart,
         ))?;
-        check_pml_scale(
-            &self.context.stack,
-            self.context.polarisation,
-            k0,
-            *search.dispersion().chart().region(),
-        )?;
+        match self.context.polarisation() {
+            Some(polarisation) => check_pml_scale(
+                &self.context.stack,
+                polarisation,
+                k0,
+                *search.dispersion().chart().region(),
+            )?,
+            None if pmls(&self.context.stack).iter().any(Option::is_some) => {
+                return Err(DirectChartError::CoupledPml);
+            }
+            None => {}
+        }
         let provenance = DomainProvenance {
             domain_identity: Arc::new(()),
             context: self.context.clone(),

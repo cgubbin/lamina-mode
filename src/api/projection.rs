@@ -9,7 +9,7 @@
 //! also has a radiation continuum, which a discrete basis never includes:
 //! the residual then holds F's radiation content and is physical.
 
-use super::basis::{BasisFieldError, BasisScope, BasisStatus, ModalBasis, ModeFamily};
+use super::basis::{BasisFieldError, BasisScope, BasisStatus, ModalBasis};
 use super::*;
 use lamina_core::Scatter2;
 use nalgebra::{DMatrix, DVector};
@@ -382,7 +382,11 @@ pub fn basis_projection_with<B: lamina_core::ModalFieldBackend<Region> + Clone>(
     partition.extend(field.interfaces_cm.iter().copied());
     partition.sort_by(f64::total_cmp);
     partition.dedup();
-    let ModeFamily::Polarised(polarisation) = basis.request.family;
+    let polarisation = basis
+        .request
+        .family
+        .polarisation()
+        .ok_or(BasisProjectionError::InvalidInput)?;
     let betas: Vec<_> = modes
         .iter()
         .map(|&i| basis.modes[i].point.physical_coordinate())

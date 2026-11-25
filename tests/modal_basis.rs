@@ -241,7 +241,7 @@ fn real_modes_are_the_walled_guided_modes_with_their_unit_power_fields() {
                 stack.clone(),
                 GuidedWindow {
                     wavelength: cm(1.),
-                    polarisation: pol,
+                    family: pol.into(),
                     direction: GuidedDirection::Forward,
                     abs_beta: [MARGIN, BETA_MAX],
                     cutoff_margin: 1e-8,

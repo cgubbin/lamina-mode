@@ -24,6 +24,7 @@ fn independent_cavity_reference_and_positive_source_jump() {
             k_parallel: c(0.),
             left: Some(k),
             right: Some(k),
+            pairs: [None; 2],
         };
         let center = Green::new(&stack, sig, true, k, pol);
         assert!(center.wronskian().norm() < 1e-12);
@@ -90,7 +91,7 @@ fn positions(point: &ModePoint, z: &[f64]) -> FieldSampling<f64> {
     sampling
 }
 fn primary(fields: &ModeFields) -> &ndarray::Array1<Complex> {
-    if fields.point.provenance().polarisation() == Polarisation::TransverseElectric {
+    if fields.point.provenance().polarisation() == Some(Polarisation::TransverseElectric) {
         fields.fields.quantity().electric().y()
     } else {
         fields.fields.quantity().magnetic().y()
@@ -101,7 +102,7 @@ fn complete_norm_predicts_independent_residues_and_invariances() {
     for (name, point) in fixtures::cases() {
         let point = point.unwrap_or_else(|e| panic!("{name}: {e}"));
         let sig = *point.signature().unwrap();
-        let pol = point.provenance().polarisation();
+        let pol = point.provenance().polarisation().expect("a scalar channel");
         let v = variable(&point);
         let spectral = v == PoleVariable::K0AtFixedBeta;
         let scale = 1. / sig.k0.norm().max(sig.k_parallel.norm());
@@ -295,7 +296,7 @@ fn check_scattering_contours(residues: &QnmScatteringResidue) {
     let seed = |value| <J as SeedJet>::constant(arr0(value));
     let sig = residues.signature;
     let provenance = residues.point.provenance();
-    let pol = provenance.polarisation();
+    let pol = provenance.polarisation().expect("a scalar channel");
     let stack = &reference::scalar_stack(provenance.stack());
     let solver = ComplexPlaneEvaluator::<J, _, _>::compile(stack, Scatter2::new()).unwrap();
     let mut max_error = 0.0_f64;

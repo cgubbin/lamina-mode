@@ -128,6 +128,7 @@ pub fn dispersive(pol: Polarisation, magnetic: bool) -> Result<ModePoint, Error>
             k_parallel: c(0.),
             left: Some(k),
             right: Some(kr),
+            pairs: [None; 2],
         };
         green::Green::new(&stack, sig, true, k, pol).wronskian()
     };

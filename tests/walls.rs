@@ -106,7 +106,7 @@ fn ladder(kind: WallKind, pol: Polarisation, a: f64, gap: f64, window: [f64; 2])
 fn window(pol: Polarisation, abs_beta: [f64; 2]) -> GuidedWindow {
     GuidedWindow {
         wavelength: cm(1.),
-        polarisation: pol,
+        family: pol.into(),
         direction: GuidedDirection::Forward,
         abs_beta,
         cutoff_margin: 1e-8,

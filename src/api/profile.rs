@@ -49,6 +49,12 @@ pub(super) fn snapshot(
         })
     })?;
     let source = point.provenance();
+    let polarisation = source.polarisation().ok_or_else(|| {
+        Box::new(FieldRecoveryFailure {
+            point: point.clone(),
+            cause: FieldRecoveryError::CoupledChannel,
+        })
+    })?;
     let stack = source.stack().clone();
     let mut interfaces = vec![0.];
     for layer in stack.layers_left_to_right() {
@@ -79,7 +85,7 @@ pub(super) fn snapshot(
         .collect();
     Ok(ModalProfile {
         wavevectors,
-        polarisation: source.polarisation(),
+        polarisation,
         stack,
         interfaces_cm: interfaces,
         depths_cm: depths,

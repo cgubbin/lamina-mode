@@ -74,7 +74,7 @@ pub fn track_guided_basis(
         || step.ambiguity_margin < 0.0
         || step.registration.origins_cm.iter().any(|v| !v.is_finite())
         || step.perturbation.wavelength_rate() != 0.0
-        || source_window.polarisation != step.window.polarisation
+        || source_window.family != step.window.family
         || source_window.direction != step.window.direction
         || (source_window.wavelength.as_centimetres() - step.window.wavelength.as_centimetres())
             .abs()

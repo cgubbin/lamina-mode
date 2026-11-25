@@ -13,7 +13,7 @@ fn main() -> Result<(), String> {
             stack,
             GuidedWindow {
                 wavelength: Length::centimetres(1.0),
-                polarisation: Polarisation::TransverseElectric,
+                family: Polarisation::TransverseElectric.into(),
                 direction: GuidedDirection::Forward,
                 abs_beta: [0.0, 15.0],
                 cutoff_margin: 1e-8,

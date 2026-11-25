@@ -217,7 +217,7 @@ fn pml_sides_refuse_enumeration_integrals_and_open_strategies() {
     let stack = long_pml_and_wall();
     let window = GuidedWindow {
         wavelength: cm(1.),
-        polarisation: TE,
+        family: TE.into(),
         direction: GuidedDirection::Forward,
         abs_beta: [1.55 * K, 1.999 * K],
         cutoff_margin: 1e-8,

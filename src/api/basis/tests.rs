@@ -99,7 +99,7 @@ fn reciprocity_flux_is_minus_four_unconjugated_pairings_with_the_mirror() {
         let modes = |direction| {
             let window = GuidedWindow {
                 wavelength: cm(1.0),
-                polarisation,
+                family: polarisation.into(),
                 direction,
                 abs_beta: [1.5 * K, 1.999 * K],
                 cutoff_margin: 1e-8,

@@ -95,6 +95,31 @@ impl ModalWindow {
 pub enum ModeFamily {
     /// Modes of one polarisation of a separable stack.
     Polarised(Polarisation),
+    /// Every mode: the coupled TE/TM channel, whose modes are hybrid on a
+    /// stack that is not separable.
+    All,
+}
+
+impl ModeFamily {
+    /// The polarisation of a TE or TM family; `None` for every mode.
+    pub fn polarisation(self) -> Option<Polarisation> {
+        match self {
+            Self::Polarised(polarisation) => Some(polarisation),
+            Self::All => None,
+        }
+    }
+
+    /// The channel this family solves.
+    pub fn channel(self) -> lamina_core::Channel {
+        self.polarisation()
+            .map_or(lamina_core::Channel::Coupled, Into::into)
+    }
+}
+
+impl From<Polarisation> for ModeFamily {
+    fn from(polarisation: Polarisation) -> Self {
+        Self::Polarised(polarisation)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -377,6 +402,9 @@ pub enum ModalBasisError {
     },
     #[error("self-pairing quadrature exceeded its accuracy or sampling budget")]
     Quadrature,
+    /// Modal bases span one polarisation of a separable stack.
+    #[error("modal bases need a TE or TM family")]
+    Family,
 }
 
 /// Every mode in a window, with counts and evidence: a β window for a stack
@@ -400,7 +428,7 @@ pub(super) fn solve<B: ModalFieldBackend<Region> + Clone>(
     let k0 = request.k0_cm();
     let window = request.window.rectangle().ok_or(InvalidRequest)?;
     let gap = request.degeneracy_gap_cm.unwrap_or(1e-6 * k0);
-    let ModeFamily::Polarised(polarisation) = request.family;
+    let polarisation = request.family.polarisation().ok_or(Family)?;
     if !k0.is_finite()
         || k0 <= 0.0
         || !gap.is_finite()
@@ -465,18 +493,23 @@ pub(super) fn solve<B: ModalFieldBackend<Region> + Clone>(
     }
     .argument_config()
     .map_err(|_| InvalidRequest)?;
+    let mirror = top.is_none().then(|| mirror_square(window)).flatten();
+    let resolution = if top.is_some() { 1e-9 } else { 1e-9 * k0 };
     let search = Search {
-        problem: &problem,
-        assumption: request.assumption,
+        cells: BasisCells {
+            problem: &problem,
+            assumption: request.assumption,
+            window,
+            top,
+        },
         argument,
         refinement: request.refinement,
-        pml_sides: &pml_sides,
+        pml_sides,
         k0,
-        mirror: top.is_none().then(|| mirror_square(window)).flatten(),
-        resolution: if top.is_some() { 1e-9 } else { 1e-9 * k0 },
+        mirror,
+        resolution,
         reverse,
         window,
-        top,
         open,
     };
     let (counted, mut unresolved, interior) = search.count(window);
@@ -588,71 +621,43 @@ impl Domain {
     }
 }
 
-struct Search<'a> {
+/// The cells of a counted search: the domain of a rectangle, evaluation,
+/// localisation and correction on it, and β at a native point.
+pub(super) trait Cells {
+    type Domain;
+    fn domain(&self, cell: Rect<f64>) -> Result<Self::Domain, BasisLimit>;
+    /// The characteristic and its derivative in the native coordinate.
+    fn evaluate(&self, domain: &Self::Domain, z: Complex) -> Option<(Complex, Complex)>;
+    fn search(
+        &self,
+        domain: &Self::Domain,
+        config: ArgumentConfig<f64>,
+    ) -> Option<ModalSearchResult<Complex>>;
+    fn corrected(
+        &self,
+        domain: &Self::Domain,
+        seed: Complex,
+        config: crate::refinement::ValidatedConfig,
+    ) -> Result<(crate::refinement::AcceptedRoot, BranchSignature), BranchFailure>;
+    /// β at a point of the window.
+    fn beta(&self, z: Complex) -> Option<Complex>;
+    /// The core backend named on accepted modes.
+    fn backend(&self) -> &'static str;
+}
+
+/// The cells of a modal basis: the direct β chart, or the conformal chart
+/// over the whole window for a stack with an open side.
+struct BasisCells<'a> {
     problem: &'a Problem,
     assumption: AnalyticAssumption,
-    argument: ArgumentConfig<f64>,
-    refinement: RefinementConfig,
-    /// The PML sides, which set the characteristic's scale.
-    pml_sides: &'a [p::direct::PmlSide],
-    k0: f64,
-    mirror: Option<Rect<f64>>,
-    /// Cells no larger than this, in the native coordinate, are not split
-    /// further.
-    resolution: f64,
-    reverse: bool,
     window: Rect<f64>,
     /// The conformal chart over the whole window, for a stack with an open
     /// side; each cell's chart continues β from it.
     top: Option<ChartDomain>,
-    open: Option<OpenChart>,
 }
 
-impl Search<'_> {
-    /// β at a point of the window: itself on the direct chart.
-    fn beta(&self, z: Complex) -> Option<Complex> {
-        match &self.top {
-            None => Some(z),
-            Some(top) => {
-                let w = self.window;
-                let z = Complex::new(z.re.clamp(w.x_min, w.x_max), z.im.clamp(w.y_min, w.y_max));
-                top.chart().coordinate(z).ok()
-            }
-        }
-    }
-
-    /// The β image of `bounds`: themselves on the direct chart, else the
-    /// bounding box of the image of their boundary.
-    fn image(&self, bounds: Rect<f64>) -> Rect<f64> {
-        match &self.open {
-            None => bounds,
-            Some(open) => {
-                open.beta_image(bounds, self.beta(Complex::new(bounds.x_min, bounds.y_min)))
-            }
-        }
-    }
-
-    fn gap(&self, bounds: Rect<f64>, count: Option<usize>, cause: BasisLimit) -> BasisGap {
-        BasisGap {
-            bounds,
-            beta_image: self.image(bounds),
-            count,
-            cause,
-        }
-    }
-
-    /// The open side on which a root's exterior wavevector is within the
-    /// branch-point clearance of zero, if any.
-    fn branch_point(&self, point: &ModePoint) -> Option<StackSide> {
-        let signature = point.signature().ok()?;
-        [
-            (StackSide::Left, signature.left),
-            (StackSide::Right, signature.right),
-        ]
-        .into_iter()
-        .find(|(_, kappa)| kappa.is_some_and(|k| k.norm() <= BRANCH_POINT_CLEARANCE * self.k0))
-        .map(|(side, _)| side)
-    }
+impl Cells for BasisCells<'_> {
+    type Domain = Domain;
 
     /// The domain of `cell`: on the conformal chart with β continued from
     /// the window's chart at its centre, else the direct domain, where a
@@ -696,12 +701,108 @@ impl Search<'_> {
             })
     }
 
+    fn evaluate(&self, domain: &Domain, z: Complex) -> Option<(Complex, Complex)> {
+        domain.evaluate(self.problem, z)
+    }
+
+    fn search(
+        &self,
+        domain: &Domain,
+        config: ArgumentConfig<f64>,
+    ) -> Option<ModalSearchResult<Complex>> {
+        domain.search(self.problem, config)
+    }
+
+    fn corrected(
+        &self,
+        domain: &Domain,
+        seed: Complex,
+        config: crate::refinement::ValidatedConfig,
+    ) -> Result<(crate::refinement::AcceptedRoot, BranchSignature), BranchFailure> {
+        domain.corrected(self.problem, seed, config)
+    }
+
+    /// β at a point of the window: itself on the direct chart.
+    fn beta(&self, z: Complex) -> Option<Complex> {
+        match &self.top {
+            None => Some(z),
+            Some(top) => {
+                let w = self.window;
+                let z = Complex::new(z.re.clamp(w.x_min, w.x_max), z.im.clamp(w.y_min, w.y_max));
+                top.chart().coordinate(z).ok()
+            }
+        }
+    }
+
+    fn backend(&self) -> &'static str {
+        std::any::type_name::<Scatter2>()
+    }
+}
+
+pub(super) struct Search<X> {
+    pub(super) cells: X,
+    pub(super) argument: ArgumentConfig<f64>,
+    pub(super) refinement: RefinementConfig,
+    /// The PML sides, which set the characteristic's scale.
+    pub(super) pml_sides: Vec<p::direct::PmlSide>,
+    pub(super) k0: f64,
+    pub(super) mirror: Option<Rect<f64>>,
+    /// Cells no larger than this, in the native coordinate, are not split
+    /// further.
+    pub(super) resolution: f64,
+    pub(super) reverse: bool,
+    pub(super) window: Rect<f64>,
+    pub(super) open: Option<OpenChart>,
+}
+
+impl<X: Cells> Search<X> {
+    fn beta(&self, z: Complex) -> Option<Complex> {
+        self.cells.beta(z)
+    }
+
+    /// The β image of `bounds`: themselves on the direct chart, else the
+    /// bounding box of the image of their boundary.
+    fn image(&self, bounds: Rect<f64>) -> Rect<f64> {
+        match &self.open {
+            None => bounds,
+            Some(open) => {
+                open.beta_image(bounds, self.beta(Complex::new(bounds.x_min, bounds.y_min)))
+            }
+        }
+    }
+
+    fn gap(&self, bounds: Rect<f64>, count: Option<usize>, cause: BasisLimit) -> BasisGap {
+        BasisGap {
+            bounds,
+            beta_image: self.image(bounds),
+            count,
+            cause,
+        }
+    }
+
+    /// The open side on which a root's exterior wavevector is within the
+    /// branch-point clearance of zero, if any.
+    fn branch_point(&self, point: &ModePoint) -> Option<StackSide> {
+        let signature = point.signature().ok()?;
+        [
+            (StackSide::Left, signature.left),
+            (StackSide::Right, signature.right),
+        ]
+        .into_iter()
+        .find(|(_, kappa)| kappa.is_some_and(|k| k.norm() <= BRANCH_POINT_CLEARANCE * self.k0))
+        .map(|(side, _)| side)
+    }
+
+    fn domain(&self, cell: Rect<f64>) -> Result<X::Domain, BasisLimit> {
+        self.cells.domain(cell)
+    }
+
     fn search(
         &self,
         cell: Rect<f64>,
         config: ArgumentConfig<f64>,
     ) -> Option<ModalSearchResult<Complex>> {
-        self.domain(cell).ok()?.search(self.problem, config)
+        self.cells.search(&self.domain(cell).ok()?, config)
     }
 
     /// Zeros inside `window` from the change of arg D around its boundary,
@@ -727,7 +828,7 @@ impl Search<'_> {
         let failed = |z| (z, BasisLimit::NonIntegerCount);
         let domain = self.domain(window).map_err(|cause| (path[0], cause))?;
         let evaluate = |z: Complex| {
-            let (value, derivative) = domain.evaluate(self.problem, z).ok_or_else(|| failed(z))?;
+            let (value, derivative) = self.cells.evaluate(&domain, z).ok_or_else(|| failed(z))?;
             if value == Complex::ZERO {
                 return Err((z, BasisLimit::BoundaryRoot));
             }
@@ -784,7 +885,10 @@ impl Search<'_> {
     /// the window less a margin, so that a zero on the boundary is left to
     /// the unresolved region rather than invented or dropped.
     #[allow(clippy::type_complexity)]
-    fn count(&self, window: Rect<f64>) -> (Option<(usize, Complex)>, Vec<BasisGap>, Rect<f64>) {
+    pub(super) fn count(
+        &self,
+        window: Rect<f64>,
+    ) -> (Option<(usize, Complex)>, Vec<BasisGap>, Rect<f64>) {
         let scale = (window.x_max - window.x_min).max(window.y_max - window.y_min);
         let (clearance, margin) = (1e-6 * scale, 1e-4 * scale);
         match self.winding(window, clearance) {
@@ -820,7 +924,7 @@ impl Search<'_> {
             y_min: cell.y_min - reach,
             y_max: cell.y_max + reach,
         };
-        if self.top.is_some() {
+        if self.open.is_some() {
             // Within the window, a validated chart region.
             let w = self.window;
             around = Rect {
@@ -838,7 +942,7 @@ impl Search<'_> {
         // The residual limit relative to the PML scale of the characteristic
         // at the seed.
         let beta = self.beta(seed).unwrap_or(seed);
-        let scale = p::direct::pml_log_scale(self.pml_sides, beta).exp();
+        let scale = p::direct::pml_log_scale(&self.pml_sides, beta).exp();
         let refinement = crate::refinement::RefinementConfig::from(RefinementConfig {
             residual_atol: self.refinement.residual_atol * scale,
             ..self.refinement
@@ -849,8 +953,9 @@ impl Search<'_> {
                 "residual limit out of range at the PML scale".into(),
             ))
         })?;
-        let (mut root, mut signature) = domain
-            .corrected(self.problem, seed, refinement)
+        let (mut root, mut signature) = self
+            .cells
+            .corrected(&domain, seed, refinement)
             .map_err(BasisLimit::Refinement)?;
         // The accepted point's own Newton step is within the correction
         // limit; accepting again from the stepped point keeps the root to the
@@ -859,7 +964,7 @@ impl Search<'_> {
         let stepped = evidence.z - evidence.value / evidence.derivative;
         if contains(cell, stepped)
             && let Ok((polished, polished_signature)) =
-                domain.corrected(self.problem, stepped, refinement)
+                self.cells.corrected(&domain, stepped, refinement)
             && contains(cell, polished.evidence().z)
         {
             (root, signature) = (polished, polished_signature);
@@ -876,7 +981,7 @@ impl Search<'_> {
             enclosure,
             chart: 0,
             candidate: 0,
-            backend: std::any::type_name::<Scatter2>(),
+            backend: self.cells.backend(),
         })
     }
 
@@ -884,7 +989,7 @@ impl Search<'_> {
     /// argloc counts and localises; a cell it cannot search, or a cluster it
     /// leaves, is split into quadrants counted by [`Self::winding`], and a
     /// cell holding one root is corrected from its estimate.
-    fn roots(
+    pub(super) fn roots(
         &self,
         interior: Rect<f64>,
         counted: Option<(usize, Complex)>,
@@ -1090,7 +1195,7 @@ fn normalise<B: ModalFieldBackend<Region> + Clone>(
     let k0 = request.k0_cm();
     let layout = Layout::new(stack, 0.0).ok_or(InvalidRequest)?;
     let beta: Vec<_> = points.iter().map(ModePoint::physical_coordinate).collect();
-    let ModeFamily::Polarised(polarisation) = request.family;
+    let polarisation = request.family.polarisation().ok_or(Family)?;
     let kappas: Vec<Kappas> = points
         .iter()
         .map(|point| point.signature().map_or([None; 2], |s| [s.left, s.right]))

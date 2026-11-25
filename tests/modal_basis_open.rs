@@ -369,7 +369,7 @@ fn positive_power_guided_modes_are_the_signed_unit_power_profiles() {
             open(),
             GuidedWindow {
                 wavelength: cm(1.),
-                polarisation: pol,
+                family: pol.into(),
                 direction: GuidedDirection::Forward,
                 abs_beta: [CLAD.sqrt() * K * (1. + 1e-6), CORE.sqrt() * K],
                 cutoff_margin: 1e-8,

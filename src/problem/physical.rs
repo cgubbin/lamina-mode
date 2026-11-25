@@ -60,6 +60,10 @@ pub enum InputError {
     ForeignProblem,
     #[error("physical interpretation belongs to another domain")]
     ForeignDomain,
+    /// Interpretation reads one scalar channel's exterior factors; a hybrid
+    /// mode of the coupled channel has none.
+    #[error("physical interpretation needs a TE or TM channel")]
+    CoupledChannel,
 }
 #[derive(Debug)]
 pub enum PointError<E> {
@@ -456,7 +460,10 @@ pub(crate) fn from_signature(
         return Err(InputError::NonFinite);
     }
     let stack = provenance.problem().stack();
-    let pol = provenance.problem().polarisation();
+    let pol = provenance
+        .problem()
+        .polarisation()
+        .ok_or(InputError::CoupledChannel)?;
     let channels =
         exterior_channels(stack, signature.k0, pol).map_err(|_| InputError::NonFinite)?;
     let factors = channels.map(|c| c.factors(pol));
@@ -469,7 +476,7 @@ pub(crate) fn from_signature(
             mu: factors.map(|v| v.1),
         },
         provenance.problem().coordinate(),
-        provenance.problem().polarisation(),
+        pol,
         provenance.radiation(),
         config,
     )?;

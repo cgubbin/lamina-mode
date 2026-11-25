@@ -174,7 +174,9 @@ impl ModePoint {
         };
         let old = self.signature().map_err(|_| BranchFailure::Exterior)?;
         let stack = provenance.stack();
-        let pol = provenance.polarisation();
+        let pol = provenance
+            .polarisation()
+            .ok_or(BranchFailure::InvalidRequest)?;
         let [left, right] = old.open_exteriors().ok_or(BranchFailure::Exterior)?;
         // Continue each accepted root along the physical predictor segment.
         // The caller declares a regular neighbourhood covering these steps.

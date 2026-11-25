@@ -46,7 +46,7 @@ fn positions(point: &ModePoint, xs: &[f64]) -> FieldSampling<f64> {
     result
 }
 fn primary(f: &ModeFields) -> &ndarray::Array1<Complex> {
-    if f.point.provenance().polarisation() == lamina_core::Polarisation::TransverseElectric {
+    if f.point.provenance().polarisation() == Some(lamina_core::Polarisation::TransverseElectric) {
         f.fields.quantity().electric().y()
     } else {
         f.fields.quantity().magnetic().y()
@@ -113,7 +113,7 @@ fn run_inner(out: &Path, full: bool) -> Result<(), Error> {
             let sig = *point.signature().map_err(Clone::clone)?;
             let provenance = point.provenance();
             let stack = &reference::scalar_stack(provenance.stack());
-            let pol = provenance.polarisation();
+            let pol = provenance.polarisation().expect("a scalar channel");
             let spectral = matches!(provenance.direction(), SearchCoordinate::Spectral { .. });
             let variable = if spectral {
                 PoleVariable::K0AtFixedBeta

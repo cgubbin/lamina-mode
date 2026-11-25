@@ -23,7 +23,7 @@ fn modes(wavelength_cm: f64, polarisation: Polarisation) -> GuidedBasis {
         stack(),
         GuidedWindow {
             wavelength: Length::centimetres(wavelength_cm),
-            polarisation,
+            family: polarisation.into(),
             direction: GuidedDirection::Forward,
             abs_beta: [0., 3. * k0],
             cutoff_margin: 1e-8,

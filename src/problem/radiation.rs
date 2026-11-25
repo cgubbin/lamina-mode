@@ -153,7 +153,7 @@ where
         if reference.choices.map(|c| c.is_some()) != self.context.open_sides() {
             return Err(Err::InvalidReference);
         }
-        let pol = self.context.polarisation;
+        let pol = self.context.polarisation().ok_or(Err::InvalidReference)?;
         let channels = exterior_channels(&self.context.stack, C::new(k0, 0.0), pol)
             .map_err(|_| Err::NonFinite)?;
         let expected = anchor_wavevectors(channels, pol, k0, beta, reference.choices, tol)?;
@@ -296,7 +296,7 @@ pub(super) fn frequency_reference(
     if !k0.is_finite() || k0 <= 0.0 || !beta.is_finite() {
         return Err(Err::InvalidReference);
     }
-    let pol = context.polarisation;
+    let pol = context.polarisation().ok_or(Err::InvalidReference)?;
     let channels =
         exterior_channels(&context.stack, C::new(k0, 0.0), pol).map_err(|_| Err::NonFinite)?;
     let choices = choices.map(Some);

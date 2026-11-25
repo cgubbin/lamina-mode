@@ -23,6 +23,7 @@ mod diagnostic;
 mod fields;
 mod group;
 mod guided;
+mod hybrid;
 mod integration;
 mod normalization;
 mod open;
@@ -42,6 +43,7 @@ pub use derivatives::*;
 pub use fields::*;
 pub use group::*;
 pub use guided::*;
+pub use hybrid::*;
 pub use normalization::*;
 pub use open::*;
 pub use overlap::*;
@@ -72,6 +74,7 @@ pub use crate::problem::frequency::{
     ExteriorReferenceValues, FrequencyDomainInput, FrequencyError, FrequencyEvidence,
     FrequencyExclusion, FrequencyReference, FrequencyRegion,
 };
+pub use crate::problem::guided::{GuidedRegionError, GuidedRegionEvidence};
 pub use crate::problem::material::{ConstantExterior, InvalidConstantExterior, ModeStack, Region};
 pub use crate::problem::orchestration::{
     Ambiguity, BranchSignature, CoverageExclusion, DiscoveryConfig, DuplicateGroup, MatchTolerance,

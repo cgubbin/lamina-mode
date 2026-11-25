@@ -334,10 +334,11 @@ fn window(r: &rec::GuidedRequest) -> GuidedWindow {
     // Lengths become cm and wavenumbers cm^-1: multiply rad/m by m per cm.
     GuidedWindow {
         wavelength: Length::centimetres(r.wavelength_m / M_PER_CM),
-        polarisation: match r.polarisation {
+        family: match r.polarisation {
             rec::Polarisation::Te => Polarisation::TransverseElectric,
             rec::Polarisation::Tm => Polarisation::TransverseMagnetic,
-        },
+        }
+        .into(),
         direction: match r.direction {
             rec::Direction::Forward => GuidedDirection::Forward,
             rec::Direction::Backward => GuidedDirection::Backward,
@@ -400,6 +401,8 @@ fn gap(g: &lamina_mode::GuidedGap) -> rec::Gap {
         GuidedLimit::Budget => ("budget", None),
         GuidedLimit::Correction(failure) => ("correction", Some(format!("{failure:?}"))),
         GuidedLimit::OutsideBracket => ("outside_bracket", None),
+        // Argument-principle causes of full-tensor stacks, not in schema 1.
+        other => ("hybrid_count", Some(format!("{other:?}"))),
     };
     rec::Gap {
         abs_beta_rad_per_m: g.abs_beta.map(|b| b / M_PER_CM),

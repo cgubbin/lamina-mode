@@ -250,6 +250,51 @@ pub(crate) fn tensors_and_rates(
     Ok(out)
 }
 
+/// A 3×3 stack-frame tensor, row-major.
+pub(crate) type Tensor = [[C; 3]; 3];
+
+/// All nine stack-frame entries of `[ε, μ]` and of `[∂ε/∂k0, ∂μ/∂k0]` of a
+/// region of any class at complex `k0`.
+pub(crate) fn full_tensors(
+    region: StackRegion,
+    material: &Region,
+    k0: C,
+) -> Result<[[Tensor; 2]; 2], ConstitutiveError> {
+    let diagonal = |entries: [C; 3]| {
+        std::array::from_fn(|row| {
+            std::array::from_fn(|column| if row == column { entries[row] } else { C::ZERO })
+        })
+    };
+    if material.class() != ConstitutiveClass::Full {
+        return tensors_and_rates(region, material, k0)
+            .map(|parts| parts.map(|pair| pair.map(|t| diagonal(t.entries()))));
+    }
+    let k0 = J::variable(arr0(k0), 0).map_err(|_| ConstitutiveError::NonFinite { region })?;
+    let jets = <J as TensorConstitutiveLift<ComplexPlane, Region>>::constitutive_tensors(
+        region, material, &k0,
+    )?;
+    let mut out = [[[[C::ZERO; 3]; 3]; 2]; 2];
+    for (index, tensor) in jets.iter().enumerate() {
+        for (order, slot) in out.iter_mut().enumerate() {
+            let part = |jet: &J| {
+                if order == 0 {
+                    jet.value()[()]
+                } else {
+                    jet.first()[()]
+                }
+            };
+            slot[index] = match tensor {
+                ConstitutiveTensor::Isotropic(jet) => diagonal([part(jet); 3]),
+                ConstitutiveTensor::Diagonal(entries) => diagonal(entries.each_ref().map(part)),
+                ConstitutiveTensor::Full(entries) => {
+                    entries.each_ref().map(|r| r.each_ref().map(part))
+                }
+            };
+        }
+    }
+    Ok(out)
+}
+
 /// `[ε, μ]` of a region at complex `k0`.
 pub(crate) fn tensors(
     region: StackRegion,

@@ -13,6 +13,7 @@ use crate::analytic::{AnalyticChart, CoordinateKind};
 use crate::dispersion::ChartDispersionError;
 pub mod direct;
 pub mod frequency;
+pub(crate) mod guided;
 pub(crate) mod material;
 pub mod orchestration;
 pub mod physical;
@@ -34,7 +35,7 @@ use crate::{
 };
 use argloc::{ArgumentConfig, FunctionBundle};
 use lamina_core::{
-    Backend, ComplexPlane, ConstitutiveError, Layer, ModeJet1, Polarisation, Stack,
+    Backend, Channel, ComplexPlane, ConstitutiveError, Layer, ModeJet1, Polarisation, Stack,
     StackCompileError, StackSide, StretchProfile, Termination, WallKind,
 };
 use lamina_units::Length;
@@ -77,15 +78,20 @@ pub enum ReferenceSelection {
 pub struct ProblemContext {
     pub(crate) constants: Option<[ConstantExterior; 2]>,
     stack: ModeStack,
-    polarisation: Polarisation,
+    channel: Channel,
     coordinate: SearchCoordinate,
 }
 impl ProblemContext {
     pub fn stack(&self) -> &ModeStack {
         &self.stack
     }
-    pub fn polarisation(&self) -> Polarisation {
-        self.polarisation
+    /// The field subspace solved.
+    pub fn channel(&self) -> Channel {
+        self.channel
+    }
+    /// The polarisation of a scalar channel; `None` for the coupled one.
+    pub fn polarisation(&self) -> Option<Polarisation> {
+        self.channel.polarisation()
     }
     pub fn coordinate(&self) -> SearchCoordinate {
         self.coordinate
@@ -251,7 +257,7 @@ where
             context: Arc::new(ProblemContext {
                 constants: None,
                 stack,
-                polarisation,
+                channel: polarisation.into(),
                 coordinate: SearchCoordinate::InPlane { fixed_k0 },
             }),
             map,
@@ -294,7 +300,7 @@ where
             context: Arc::new(ProblemContext {
                 constants: Some([left, right]),
                 stack,
-                polarisation,
+                channel: polarisation.into(),
                 coordinate: SearchCoordinate::Spectral { fixed_k_parallel },
             }),
             map,

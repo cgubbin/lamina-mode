@@ -69,7 +69,8 @@ impl<B: ModalNormalizationBackend<Region> + Clone> NormalizedMode<B> {
             .right_exterior(ExteriorSampling::point(Length::zero()));
         let profile = self.sample_profile(&sampling)?;
         let fields = profile.fields.quantity();
-        let (channel_field, primary) = match provenance.polarisation() {
+        let polarisation = provenance.polarisation().ok_or(InvalidChannel)?;
+        let (channel_field, primary) = match polarisation {
             Polarisation::TransverseElectric => (QnmChannelField::ElectricY, fields.electric().y()),
             Polarisation::TransverseMagnetic => (
                 QnmChannelField::ImpedanceScaledMagneticY,
@@ -78,7 +79,7 @@ impl<B: ModalNormalizationBackend<Region> + Clone> NormalizedMode<B> {
         };
         let roots = signature.open_exteriors().ok_or(IncompatiblePole)?;
         // The admittance κ/t of each exterior's channel: t = μ_xx (TE), ε_xx (TM).
-        let channels = material::exterior_channels(stack, signature.k0, provenance.polarisation())
+        let channels = material::exterior_channels(stack, signature.k0, polarisation)
             .map_err(|_| InvalidChannel)?;
         let exterior_admittances_per_cm =
             std::array::from_fn(|i| roots[i] / channels[i].transverse);
@@ -394,7 +395,10 @@ impl ScatteringReference {
         Ok(Self {
             stack: point.provenance().stack().clone(),
             beta_per_cm: signature.k_parallel.re,
-            polarisation: point.provenance().polarisation(),
+            polarisation: point
+                .provenance()
+                .polarisation()
+                .ok_or(QnmWindowError::ChannelMismatch)?,
         })
     }
 }
@@ -632,7 +636,7 @@ fn reconstruct(
     };
     for (i, pole) in poles.iter().enumerate() {
         if pole.point.provenance().stack() != &stack
-            || pole.point.provenance().polarisation() != pol
+            || pole.point.provenance().polarisation() != Some(pol)
             || pole.signature.k_parallel != beta
             || poles[..i]
                 .iter()

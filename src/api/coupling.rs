@@ -3,7 +3,7 @@
 //! pairing. Regions are isotropic or diagonal in the stack frame; each field
 //! component is weighted by its own permittivity entry.
 
-use super::basis::{BasisFieldError, BasisScope, BasisStatus, ModalBasis, ModeFamily};
+use super::basis::{BasisFieldError, BasisScope, BasisStatus, ModalBasis};
 use super::integration::{Sample, converge};
 use super::*;
 use crate::problem::material::{self, Principal};
@@ -380,7 +380,7 @@ pub fn basis_local_coupling_with<B: ModalFieldBackend<Region> + Clone>(
         .map(|&i| basis.modes[i].point.physical_coordinate())
         .collect();
     let kappa: Vec<_> = modes.iter().map(|&i| kappas(&basis.modes[i])).collect();
-    let ModeFamily::Polarised(polarisation) = basis.request.family;
+    let polarisation = basis.request.family.polarisation().ok_or(Empty)?;
     let partition = split_pmls(
         Layout::partition(&[&layout]),
         &[(&layout, stack, polarisation)],

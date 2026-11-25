@@ -8,7 +8,7 @@ use std::f64::consts::{PI, TAU};
 fn request(pol: Polarisation) -> GuidedWindow {
     GuidedWindow {
         wavelength: Length::centimetres(1.),
-        polarisation: pol,
+        family: pol.into(),
         direction: GuidedDirection::Forward,
         abs_beta: [0., 15.],
         cutoff_margin: 1e-8,
@@ -91,7 +91,7 @@ fn inputs_endpoints_and_empty_interval() {
     req.abs_beta = [11., 11.00001];
     let empty = enumerate_guided_modes(slab(1., 1.), req).unwrap();
     assert!(empty.is_complete() && empty.eligible.is_some() && empty.expected == Some(0));
-    let root = ladder(1., 1., req.polarisation)[0];
+    let root = ladder(1., 1., Polarisation::TransverseElectric)[0];
     req.abs_beta = [root, 13.];
     let endpoint = enumerate_guided_modes(slab(1., 1.), req).unwrap();
     assert_eq!(endpoint.expected, None);

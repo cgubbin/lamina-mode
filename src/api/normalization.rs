@@ -25,6 +25,8 @@ pub enum NormalizationError {
     Residual,
     #[error("invalid recovery settings")]
     InvalidSettings,
+    #[error("scalar pole normalisation needs a TE or TM channel")]
+    CoupledChannel,
 }
 #[derive(Debug, thiserror::Error)]
 #[error("mode normalization failed: {cause}")]
@@ -79,7 +81,10 @@ impl ModePoint {
                 k0: sig.k0,
                 beta: sig.k_parallel,
                 kappa,
-                polarisation: self.provenance().polarisation(),
+                polarisation: self
+                    .provenance()
+                    .polarisation()
+                    .ok_or(NormalizationError::CoupledChannel)?,
                 variable,
             };
             let normalization = backend
