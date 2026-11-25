@@ -42,6 +42,7 @@ __all__ = [
     "GuidedSensitivity",
     "GroupIndex",
     "Layer",
+    "Wall",
     "Stack",
     "Refinement",
     "GuidedRequest",
@@ -246,17 +247,46 @@ class Layer:
         return cls(_material_from_dict(d["material"]), d["thickness_m"])
 
 
+@dataclass(frozen=True)
+class Wall:
+    """A perfect electric (`"pec"`) or perfect magnetic (`"pmc"`) wall at absolute
+    `z_m` in the stack frame (z = 0 at the first interface).
+
+    A PEC wall makes the tangential electric field vanish, a PMC wall the tangential
+    magnetic field. The exterior material fills the gap between the wall and the stack.
+    """
+
+    kind: Literal["pec", "pmc"]
+    z_m: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "z_m", float(self.z_m))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"kind": "wall", "type": self.kind, "z_m": self.z_m}
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any] | None) -> Wall | None:
+        """A wall, or None for an open side (absent or `{"kind": "open"}`)."""
+        if d is None or d.get("kind") == "open":
+            return None
+        return cls(d["type"], d["z_m"])
+
+
 @dataclass(frozen=True, eq=False)
 class Stack:
     """A planar multilayer: left exterior, finite layers along +z, right exterior.
 
     Materials may be given as a `Material`, a `SellmeierMaterial`, or a relative permittivity.
-    Layers may be given as a `Layer` or as a `(material, thickness_m)` pair.
+    Layers may be given as a `Layer` or as a `(material, thickness_m)` pair. Each side is
+    open (None) or closed by a `Wall` on or outside its outermost interface.
     """
 
     left: Material
     layers: tuple[Layer, ...]
     right: Material
+    left_termination: Wall | None = None
+    right_termination: Wall | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "left", _material(self.left))
@@ -277,11 +307,16 @@ class Stack:
         return max(m.refractive_index_at(wavelength_m) for m in materials)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "left": self.left.to_dict(),
             "layers": [l.to_dict() for l in self.layers],
             "right": self.right.to_dict(),
         }
+        for side in ("left_termination", "right_termination"):
+            wall = getattr(self, side)
+            if wall is not None:
+                d[side] = wall.to_dict()
+        return d
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> Stack:
@@ -289,6 +324,8 @@ class Stack:
             _material_from_dict(d["left"]),
             tuple(Layer.from_dict(l) for l in d["layers"]),
             _material_from_dict(d["right"]),
+            Wall.from_dict(d.get("left_termination")),
+            Wall.from_dict(d.get("right_termination")),
         )
 
     def __eq__(self, other: object) -> bool:

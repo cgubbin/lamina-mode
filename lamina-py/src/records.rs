@@ -124,12 +124,46 @@ pub struct Layer {
     pub thickness_m: f64,
 }
 
+/// How one side of the stack ends. Internally tagged by `"kind"`; an open
+/// side is omitted from the record, and an explicit `{"kind": "open"}` reads
+/// as the same open side, so open stacks keep their form and hash
+/// (docs/decisions/0009).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Termination {
+    #[default]
+    Open,
+    /// A perfect electric or magnetic wall at absolute z in the stack frame.
+    Wall {
+        #[serde(rename = "type")]
+        kind: WallType,
+        z_m: f64,
+    },
+}
+
+impl Termination {
+    pub fn is_open(&self) -> bool {
+        *self == Self::Open
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WallType {
+    Pec,
+    Pmc,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Stack {
     pub left: Material,
     pub layers: Vec<Layer>,
     pub right: Material,
+    #[serde(default, skip_serializing_if = "Termination::is_open")]
+    pub left_termination: Termination,
+    #[serde(default, skip_serializing_if = "Termination::is_open")]
+    pub right_termination: Termination,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
