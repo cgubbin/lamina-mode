@@ -100,7 +100,7 @@ pub enum PairingError {
 }
 
 /// Each side's exterior wavevector of a mode, `None` on closed sides.
-fn kappas(mode: &BasisMode) -> Kappas {
+pub(super) fn kappas(mode: &BasisMode) -> Kappas {
     mode.point
         .signature()
         .map_or([None; 2], |s| [s.left, s.right])
@@ -201,12 +201,12 @@ pub fn modal_pairing_with<B: ModalFieldBackend<Region> + Clone>(
                 sampled(
                     backend,
                     modes[operand],
-                    operand,
                     layout,
                     &partition,
                     panels,
                     settings,
                 )
+                .map_err(|e| field_failure(e, operand))
             };
             let (a, b) = (fields(0)?, fields(1)?);
             let u = intervals(&partition, panels, |i| unconjugated(&a[i], &b[i]));
@@ -233,22 +233,24 @@ pub fn modal_pairing_with<B: ModalFieldBackend<Region> + Clone>(
     })
 }
 
-fn sampled<B: ModalFieldBackend<Region> + Clone>(
+fn field_failure(e: BasisFieldError, operand: usize) -> PairingError {
+    match e {
+        BasisFieldError::IllConditioned => PairingError::IllConditioned { operand },
+        BasisFieldError::Recovery(source) => PairingError::Fields { operand, source },
+    }
+}
+
+/// A normalised mode's equivalent-medium samples on `partition` at `panels`.
+pub(super) fn sampled<B: ModalFieldBackend<Region> + Clone>(
     backend: &B,
     mode: &BasisMode,
-    operand: usize,
     layout: &Layout,
     partition: &[f64],
     panels: usize,
     settings: FieldRecoverySettings,
-) -> Result<Vec<Sample>, PairingError> {
+) -> Result<Vec<Sample>, BasisFieldError> {
     let sampling = layout.sampling(partition, panels, false);
-    let mut samples = mode
-        .fields_with(backend.clone(), &sampling, settings)
-        .map_err(|e| match e {
-            BasisFieldError::IllConditioned => PairingError::IllConditioned { operand },
-            BasisFieldError::Recovery(source) => PairingError::Fields { operand, source },
-        })?;
+    let mut samples = mode.fields_with(backend.clone(), &sampling, settings)?;
     equivalent(&mut samples, &layout.stretches(partition, panels));
     Ok(samples)
 }
@@ -307,7 +309,8 @@ pub fn basis_pairing_with<B: ModalFieldBackend<Region> + Clone>(
                         let mode = &basis.modes[i];
                         let layout = &layouts[operand];
                         let settings = basis.request.recovery;
-                        sampled(backend, mode, operand, layout, &partition, panels, settings)
+                        sampled(backend, mode, layout, &partition, panels, settings)
+                            .map_err(|e| field_failure(e, operand))
                     })
                     .collect::<Result<Vec<_>, _>>()
             };
