@@ -226,12 +226,14 @@ fn norm(t: &Tensor) -> f64 {
     t.iter().flatten().map(|v| v.norm_sqr()).sum::<f64>().sqrt()
 }
 
-/// The xy, yx, yz and zy entries of both tensors vanish.
+/// The xy, yx, yz and zy entries of both tensors vanish to round-off of
+/// their norm. At an isotropic exterior's light line four roots meet, so
+/// round-off there would move the numerical roots by its fourth root.
 fn separable(tensors: &[Tensor; 2]) -> bool {
     tensors.iter().all(|t| {
         [(0, 1), (1, 0), (1, 2), (2, 1)]
             .into_iter()
-            .all(|(r, c)| t[r][c] == C::ZERO)
+            .all(|(r, c)| t[r][c].norm() <= 64.0 * f64::EPSILON * norm(t))
     })
 }
 
@@ -294,7 +296,7 @@ impl Exterior {
                     let mean = |xi: C| {
                         split(xi).map_or(C::new(f64::NAN, 0.0), |(o, _)| 0.5 * (o[0] + o[1]))
                     };
-                    let rate = taylor(mean, 1e-3 * scale)[1];
+                    let rate = taylor(|t| mean(xi + t), 1e-3 * scale)[1];
                     let n = 0.5 * (out[0] + out[1]);
                     vec![(sign * n, sign * rate); 2]
                 } else {
@@ -367,6 +369,9 @@ fn gauge(tensors: &[Tensor; 2], xi: C, incoming: [C; 2], scale: f64) -> f64 {
     }
 }
 
+/// Outward wavenumbers of one side with their β-rates.
+type Waves2 = Vec<(C, C)>;
+
 /// The exteriors of a guided chart at fixed real k0: each open side's model,
 /// `None` on a side closed by a wall.
 #[derive(Clone, Debug)]
@@ -401,7 +406,7 @@ impl GuidedExteriors {
 
     /// The outward wavenumbers of each open side at β, in cm⁻¹, with their
     /// β-rates; `None` at a point where a side's roots do not split.
-    fn outward(&self, beta: C) -> Result<[Option<Vec<(C, C)>>; 2], StackSide> {
+    fn outward(&self, beta: C) -> Result<[Option<Waves2>; 2], StackSide> {
         let xi = beta / self.k0;
         let mut out = [None, None];
         for side in 0..2 {
@@ -469,10 +474,10 @@ impl GuidedExteriors {
                                     .map(|(n, _)| n.norm())
                                     .chain(w.incoming.iter().map(|n| n.norm()))
                                     .fold(1.0, f64::max);
-                                w.outgoing.iter().all(|(n, _)| n.im > 1e-12 * scale)
+                                w.outgoing.iter().all(|(n, _)| n.im > DOUBLE_ROOT * scale)
                                     && w.incoming
                                         .iter()
-                                        .all(|n| n.im * SIGNS[side] < -1e-12 * scale)
+                                        .all(|n| n.im * SIGNS[side] < -DOUBLE_ROOT * scale)
                             })
                     };
                     let top = upper / self.k0;
@@ -829,5 +834,41 @@ mod tests {
                 .is_some()
         };
         assert!(probe(line * (1.0 + 1e-6)));
+    }
+
+    #[test]
+    fn regions_over_an_exterior_branch_point_are_refused() {
+        let rect = |lo: f64, hi: f64, h: f64| argloc::Rect {
+            x_min: lo,
+            x_max: hi,
+            y_min: -h,
+            y_max: h,
+        };
+        let exteriors = |tensors: [Tensor; 2]| GuidedExteriors {
+            k0: 1.0,
+            channel: Channel::Coupled,
+            sides: [None, Some(Exterior::new(tensors))],
+        };
+        // A separable exterior: across its light line ξ = 1.5 the outgoing
+        // pair meets the real axis.
+        let separable = exteriors([diagonal([2.25; 3]), diagonal([1.0; 3])]);
+        assert!(separable.region(rect(1.6, 2.0, 0.05)).is_ok());
+        assert_eq!(
+            separable.region(rect(1.4, 2.0, 0.05)),
+            Err(GuidedRegionError::PairContinuity {
+                side: StackSide::Right
+            })
+        );
+        // A general exterior: about its light line its roots do not split.
+        let general = exteriors([rotated(2.25, 3.1, 0.6, true), diagonal([1.0; 3])]);
+        let line = general.light_line(3.0).unwrap();
+        assert!(general.region(rect(line * 1.05, 2.5, 0.01)).is_ok());
+        let refused = general
+            .region(rect(line * 0.95, line * 1.05, 0.01))
+            .unwrap_err();
+        assert!(matches!(
+            refused,
+            GuidedRegionError::PairContinuity { .. } | GuidedRegionError::BranchClearance { .. }
+        ));
     }
 }

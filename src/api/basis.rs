@@ -643,6 +643,11 @@ pub(super) trait Cells {
     fn beta(&self, z: Complex) -> Option<Complex>;
     /// The core backend named on accepted modes.
     fn backend(&self) -> &'static str;
+    /// The scale of the characteristic at `seed` against which a root's
+    /// residual is judged, when the cells set one.
+    fn residual_scale(&self, _domain: &Self::Domain, _seed: Complex) -> Option<f64> {
+        None
+    }
 }
 
 /// The cells of a modal basis: the direct β chart, or the conformal chart
@@ -942,7 +947,10 @@ impl<X: Cells> Search<X> {
         // The residual limit relative to the PML scale of the characteristic
         // at the seed.
         let beta = self.beta(seed).unwrap_or(seed);
-        let scale = p::direct::pml_log_scale(&self.pml_sides, beta).exp();
+        let scale = match self.cells.residual_scale(&domain, seed) {
+            Some(cells) => cells,
+            None => p::direct::pml_log_scale(&self.pml_sides, beta).exp(),
+        };
         let refinement = crate::refinement::RefinementConfig::from(RefinementConfig {
             residual_atol: self.refinement.residual_atol * scale,
             ..self.refinement

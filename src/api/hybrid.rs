@@ -149,6 +149,13 @@ where
     fn backend(&self) -> &'static str {
         std::any::type_name::<B>()
     }
+    /// |∂F/∂β| |β| at the seed: a root's residual is judged as a relative
+    /// change of β, whatever the gauge of the coupled characteristic.
+    fn residual_scale(&self, domain: &Self::Domain, seed: Complex) -> Option<f64> {
+        let (_, derivative) = self.evaluate(domain, seed)?;
+        let scale = derivative.norm() * seed.norm().max(1.0);
+        (scale.is_finite() && scale > 0.0).then_some(scale)
+    }
 }
 
 fn hermitian(t: &Tensor) -> Matrix3<Complex> {
@@ -169,7 +176,7 @@ fn bound(region: StackRegion, tensors: &[Tensor; 2], k0: f64) -> Result<f64, Enu
             });
         }
         let values = ((m + m.adjoint()) * Complex::new(0.5, 0.0)).symmetric_eigenvalues();
-        if values.iter().any(|v| !(*v > 0.0)) {
+        if values.iter().any(|v| v.is_nan() || *v <= 0.0) {
             return Err(EnumerationError::Tensor {
                 region,
                 cause: TensorCause::NotPositiveDefinite,
@@ -480,9 +487,17 @@ where
         merged.gauge_conditioning = merged.gauge_conditioning.min(region.gauge_conditioning);
         let mut used = std::any::type_name::<B>();
         let mut outcome = cell(backend, stack, req, channel, k, bounds)?;
-        if matches!(outcome, Cell::Failed) && used != std::any::type_name::<Transfer4>() {
-            used = std::any::type_name::<Transfer4>();
-            outcome = cell(&Transfer4::new(), stack, req, channel, k, bounds)?;
+        // Where the selected backend cannot count or correct, Transfer4.
+        let unfinished = |outcome: &Cell| match outcome {
+            Cell::Failed => usize::MAX,
+            Cell::Counted { gaps, .. } => gaps.len(),
+            Cell::BoundaryRoot(_) => 0,
+        };
+        if unfinished(&outcome) > 0 && used != std::any::type_name::<Transfer4>() {
+            let other = cell(&Transfer4::new(), stack, req, channel, k, bounds)?;
+            if unfinished(&other) < unfinished(&outcome) {
+                (used, outcome) = (std::any::type_name::<Transfer4>(), other);
+            }
         }
         match outcome {
             Cell::Counted {
@@ -613,5 +628,80 @@ fn family<B: GuidedBackend>(backend: &B, stack: &ModeStack, point: &ModePoint) -
         (label, off)
     } else {
         (ModeLabel::Hybrid, off)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lamina_core::{AnalyticalTensorMaterialHandle, Constant, Rotation, Stack};
+    use lamina_materials::PrincipalAxes;
+    use std::f64::consts::TAU;
+
+    fn window(abs_beta: [f64; 2]) -> GuidedWindow {
+        GuidedWindow {
+            wavelength: Length::centimetres(1.0),
+            family: ModeFamily::All,
+            direction: GuidedDirection::Forward,
+            abs_beta,
+            cutoff_margin: 1e-3 * TAU,
+            phase_tolerance: 1e-11,
+            max_subdivisions: 1000,
+            refinement: Default::default(),
+            assumption: AnalyticAssumption::CallerAssumedHolomorphicPoleFree,
+        }
+    }
+
+    fn oriented(principal: [f64; 3], rotation: Rotation<f64>) -> Region {
+        let axis = |i: usize| Constant::dielectric(principal[i]);
+        Region::oriented(
+            AnalyticalTensorMaterialHandle::new(PrincipalAxes::biaxial(axis(0), axis(1), axis(2))),
+            rotation,
+        )
+    }
+
+    #[test]
+    fn the_guided_upper_bound_encloses_every_mode() {
+        let k = TAU;
+        let clad = || -> Region {
+            lamina_core::AnalyticalMaterialHandle::new(Constant::dielectric(2.1)).into()
+        };
+        let fixtures = [
+            // Biaxial, principal axes rotated off every stack axis.
+            oriented([3.0, 4.5, 6.0], Rotation::from_euler(0.4, 0.7, 0.2)),
+            // Rotated uniaxial.
+            oriented([4.0, 4.0, 6.25], Rotation::from_optic_axis(0.9, 0.5)),
+        ];
+        for core in fixtures {
+            let stack: ModeStack = Stack::builder(clad(), clad())
+                .layer(core, Length::centimetres(1.1))
+                .finalise();
+            let req = window([0.0, 4.0 * k]);
+            let basis = hybrid_guided_modes(Transfer4::new(), stack.clone(), req, Channel::Coupled)
+                .unwrap();
+            assert!(basis.is_complete(), "{:?}", basis.unresolved);
+            assert!(!basis.modes.is_empty());
+            let bound = basis.upper_bound;
+            // The window was widened past the bound and clipped to it.
+            assert_eq!(basis.eligible.unwrap()[1], bound);
+            let top = basis.modes[0].physical_coordinate().re;
+            assert!(top < bound, "{top} {bound}");
+            // No zero of the coupled characteristic above the bound.
+            let above = count(
+                &Transfer4::new(),
+                &stack,
+                &req,
+                Channel::Coupled,
+                k,
+                [bound, 1.5 * bound],
+                Some(basis.light_line),
+            )
+            .unwrap();
+            assert_eq!(above.expected, Some(0), "{:?}", above.unresolved);
+            println!(
+                "upper bound {bound:.6}: highest mode {top:.6} ({:.3e} below), none in [bound, 1.5 bound]",
+                (bound - top) / bound
+            );
+        }
     }
 }
