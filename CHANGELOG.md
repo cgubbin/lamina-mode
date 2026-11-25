@@ -29,6 +29,16 @@ Added:
   internally tagged by `"kind"` and omitted when open, so every open-stack
   record keeps its hash (docs/decisions/0009).
 
+Fixed:
+
+- A solve whose discovery failed on a chart (for example a direct β rectangle
+  with an edge on the core light line, where lamina-core returns
+  `NonFiniteOutput`) returned a report with no sign that it was incomplete.
+  `SolveReport::unresolved` now lists each failed chart, stopped discovery,
+  unresolved leaf and unaccepted estimate as an `UnresolvedRegion` with its
+  `UnresolvedCause`, and `SolveReport::is_complete` holds only when there are
+  none and reconciliation raised no diagnostic.
+
 Changed (breaking):
 
 - `BranchSignature::left`/`right`, `PhysicalData::kappa`,

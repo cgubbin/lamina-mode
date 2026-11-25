@@ -247,8 +247,32 @@ pub struct ChartOutcomes {
     pub provenance: Provenance,
     pub candidates: Option<Vec<CandidateOutcome>>,
 }
+/// Why part of a plan's charts lacks complete evidence.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum UnresolvedCause {
+    /// Discovery of the chart failed: none of its region was searched.
+    Discovery(Diagnostic),
+    /// Discovery stopped before it converged.
+    Stopped(Termination),
+    /// A discovery leaf kept a score above the tolerance, or a non-finite one.
+    Leaf { score: f64 },
+    /// Refinement did not accept this estimate.
+    Candidate {
+        index: usize,
+        status: CandidateStatus,
+    },
+}
+/// A region of one chart, in its native coordinates, without complete evidence.
+#[derive(Clone, Debug)]
+pub struct UnresolvedRegion {
+    pub chart: usize,
+    pub bounds: Rect<f64>,
+    pub cause: UnresolvedCause,
+}
 /// Owned result of one finite plan. Discovery is shared once; chart/candidate and
-/// group indices refer to the original stable order. No completeness flag exists.
+/// group indices refer to the original stable order. A failed or partial chart
+/// stays in the report and is listed by [`SolveReport::unresolved`].
 #[derive(Clone, Debug)]
 pub struct SolveReport {
     backend: &'static str,
@@ -293,6 +317,66 @@ impl SolveReport {
     }
     pub fn matching_config(&self) -> MatchConfig {
         self.matching
+    }
+    /// Every failed chart, stopped discovery, unresolved leaf and unaccepted
+    /// estimate, in chart order.
+    pub fn unresolved(&self) -> Vec<UnresolvedRegion> {
+        let tolerance = self.discovery.config().score_tolerance;
+        let mut unresolved = Vec::new();
+        for (chart, (entry, outcomes)) in self.discovery.entries().zip(&self.charts).enumerate() {
+            let region = outcomes.provenance.requested_bounds();
+            let ((x_min, x_max), (y_min, y_max)) =
+                (region.real_bounds(), region.imaginary_bounds());
+            let requested = Rect {
+                x_min,
+                x_max,
+                y_min,
+                y_max,
+            };
+            let mut push = |bounds, cause| {
+                unresolved.push(UnresolvedRegion {
+                    chart,
+                    bounds,
+                    cause,
+                })
+            };
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(diagnostic) => {
+                    push(requested, UnresolvedCause::Discovery(diagnostic.clone()));
+                    continue;
+                }
+            };
+            if *entry.termination() != Termination::Converged {
+                push(requested, UnresolvedCause::Stopped(*entry.termination()));
+            }
+            for leaf in entry.leaves() {
+                let score = leaf.data.score;
+                if !score.is_finite() || score > tolerance {
+                    push(leaf.bounds, UnresolvedCause::Leaf { score });
+                }
+            }
+            for outcome in outcomes.candidates.iter().flatten() {
+                if !matches!(outcome.status, CandidateStatus::Accepted) {
+                    let bounds = entry
+                        .estimates()
+                        .nth(outcome.index)
+                        .map_or(requested, |estimate| estimate.raw().enclosure);
+                    let cause = UnresolvedCause::Candidate {
+                        index: outcome.index,
+                        status: outcome.status.clone(),
+                    };
+                    push(bounds, cause);
+                }
+            }
+        }
+        unresolved
+    }
+    /// Numerical coverage of every chart's requested region at the stated
+    /// tolerances: nothing unresolved and no reconciliation diagnostic. Exclusions
+    /// outside the charts are not covered.
+    pub fn is_complete(&self) -> bool {
+        self.diagnostics.is_empty() && self.unresolved().is_empty()
     }
     pub fn describe_points(
         &self,

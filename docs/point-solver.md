@@ -139,7 +139,11 @@ acceptance. It is neither a globally unique mode identity nor a continued branch
 `groups()` references all contributing observations; no multiplicity is summed or
 erased. Opposite or ambiguous branches remain separate. `exclusions()`, `geometry()`
 and reconciliation `diagnostics()` retain local scope limits. Success in an overlap
-does not erase a failed chart. There is no inferred global completeness flag.
+does not erase a failed chart. `unresolved()` lists, with its chart, native region
+and cause, every failed discovery, discovery stopped before convergence, leaf above
+the score tolerance and estimate refinement did not accept; `is_complete()` holds
+only when that list and the reconciliation diagnostics are empty. It covers the
+charts' requested regions, never the exclusions.
 
 ## Diagnostics and interpretation
 
