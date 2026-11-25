@@ -38,6 +38,8 @@ pub enum GuidedOverlapError {
     },
     #[error("overlap quadrature exceeded its accuracy or sampling budget")]
     Quadrature,
+    #[error("pairings need stacks open on both sides")]
+    ClosedStack,
 }
 
 pub(super) fn interface_positions(
@@ -46,6 +48,9 @@ pub(super) fn interface_positions(
 ) -> Result<Vec<f64>, GuidedOverlapError> {
     if !origin.is_finite() {
         return Err(GuidedOverlapError::Registration);
+    }
+    if !point.provenance().stack().is_open() {
+        return Err(GuidedOverlapError::ClosedStack);
     }
     let mut positions = vec![origin];
     for layer in point.provenance().stack().iter() {
@@ -222,7 +227,7 @@ fn integrate_guided_flux<B: ModalFieldBackend + Clone>(
     partition.dedup();
     let roots = modes.map(|point| {
         let sig = point.signature().expect("accepted signature");
-        [sig.left.im, sig.right.im]
+        sig.open_exteriors().expect("an open stack").map(|r| r.im)
     });
     let mut previous: Option<Complex> = None;
     for level in 0..11 {
@@ -381,7 +386,7 @@ fn differentiate_overlap<B: lamina_core::ModalDerivativeBackend>(
     let sensitivities = [recover(0)?, recover(1)?];
     let decay = modes.map(|point| {
         let sig = point.signature().expect("accepted guided point");
-        [sig.left.im, sig.right.im]
+        sig.open_exteriors().expect("an open stack").map(|r| r.im)
     });
     let decay_rate = sensitivities
         .each_ref()

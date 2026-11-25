@@ -37,7 +37,7 @@ pub fn cavity(pol: Polarisation, direct: bool) -> Result<ModePoint, Error> {
         RadiationReference {
             native_coordinate: Complex::new(anchor, -std::f64::consts::FRAC_PI_2),
             coordinate: 5.5,
-            choices: [RadiationChoice::OutgoingOrDecaying; 2],
+            choices: [Some(RadiationChoice::OutgoingOrDecaying); 2],
             tolerance: RadiationTolerance::default(),
         },
         ConformalChartConfig::default(),
@@ -126,8 +126,8 @@ pub fn dispersive(pol: Polarisation, magnetic: bool) -> Result<ModePoint, Error>
         let sig = BranchSignature {
             k0: k,
             k_parallel: c(0.),
-            left: k,
-            right: kr,
+            left: Some(k),
+            right: Some(kr),
         };
         green::Green::new(&stack, sig, true, k, pol).wronskian()
     };

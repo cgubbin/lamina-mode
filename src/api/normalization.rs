@@ -72,10 +72,13 @@ impl ModePoint {
             let sig = self
                 .signature()
                 .map_err(|e| NormalizationError::Branch(e.clone()))?;
+            let kappa = sig.open_exteriors().ok_or(NormalizationError::Core(
+                PoleNormalizationError::ClosedStack,
+            ))?;
             let input = PoleNormalizationInput {
                 k0: sig.k0,
                 beta: sig.k_parallel,
-                kappa: [sig.left, sig.right],
+                kappa,
                 polarisation: self.provenance().polarisation(),
                 variable,
             };

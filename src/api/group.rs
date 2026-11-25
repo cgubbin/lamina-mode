@@ -13,10 +13,8 @@
 //! is signed like β: positive for forward modes.
 use super::*;
 use lamina_core::{
-    DerivativeOrder, EvaluateDifferentiableMeromorphicMaterial, EvaluateMeromorphicMaterial,
-    ExteriorSampling, FieldSampling, LayerSampling, Scalar,
+    DerivativeOrder, EvaluateDifferentiableMeromorphicMaterial, EvaluateMeromorphicMaterial, Scalar,
 };
-use lamina_units::Length;
 
 /// A group index and the evidence that certifies it.
 #[derive(Clone, Debug)]
@@ -83,15 +81,17 @@ impl ModePoint {
         if k.re <= 0.
             || k.im.abs() > tol * k.re
             || beta.im.abs() > tol * beta.re.abs()
-            || [sig.left, sig.right]
+            || sig
+                .exteriors()
                 .iter()
+                .flatten()
                 .any(|r| r.im <= tol * k.re || r.re.abs() > tol * r.im)
         {
             return Err(Ineligible);
         }
         let provenance = self.provenance();
         let stack = provenance.stack();
-        let layers = stack.layers_left_to_right().len();
+        let layers = stack.len();
 
         // Total derivative along the root as the wavelength changes.
         let direction = GuidedPerturbation::new(
@@ -115,9 +115,7 @@ impl ModePoint {
 
         // Dispersive energy weights per region: left exterior, layers, right exterior.
         let at = Scalar(Complex::new(k.re, 0.));
-        let weights = std::iter::once(stack.left_exterior())
-            .chain(stack.layers_left_to_right().iter().map(|l| l.material()))
-            .chain(std::iter::once(stack.right_exterior()))
+        let weights = super::power::region_materials(stack)
             .map(|m| {
                 let e = m.evaluate_relative_permittivity_complex(at);
                 let mu = m.evaluate_relative_permeability_complex(at);
@@ -134,40 +132,17 @@ impl ModePoint {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        // Composite Simpson in each layer and analytic exterior tails. The
-        // integrands oscillate at twice the transverse wavenumber, so start at
-        // eight intervals per radian. Simpson's error falls as h^4, so each
-        // halving is Richardson-extrapolated, and the result is accepted when
-        // successive extrapolations agree.
-        let grid = stack
-            .layers_left_to_right()
-            .iter()
-            .zip(&weights[1..])
-            .map(|(layer, &(_, _, n2))| {
-                let d = layer.thickness().as_centimetres();
-                let phase = d * (n2 * k.re * k.re - beta.re * beta.re).abs().sqrt();
-                if !phase.is_finite() || phase > 4096. {
-                    return Err(Quadrature);
-                }
-                Ok((d, 8 * (phase.ceil() as usize).max(2)))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        // Composite Simpson in each layer and wall gap, and analytic tails of
+        // open exteriors. The integrands oscillate at twice the transverse
+        // wavenumber, so start at eight intervals per radian. Simpson's error
+        // falls as h^4, so each halving is Richardson-extrapolated, and the
+        // result is accepted when successive extrapolations agree.
+        let grid = super::power::ProfileGrid::new(stack, k, beta, 8, 2).ok_or(Quadrature)?;
+        let decay = sig.exteriors().map(|r| r.map(|r| 2. * r.im));
         let mut previous: Option<(f64, f64)> = None;
         let mut previous_estimate: Option<f64> = None;
         for level in 0..8 {
-            let edge = || ExteriorSampling::point(Length::centimetres(0.));
-            let mut sampling = FieldSampling::new().left_exterior(edge());
-            let mut budget = 2;
-            for (i, &(_, base)) in grid.iter().enumerate() {
-                let count = (base << level) + 1;
-                budget += count;
-                if budget > 131072 {
-                    return Err(Quadrature);
-                }
-                sampling =
-                    sampling.layer(i, LayerSampling::uniform_with_boundaries(count, true, true));
-            }
-            sampling = sampling.right_exterior(edge());
+            let sampling = grid.sampling(level).ok_or(Quadrature)?;
             let recovered = self.recover_fields_with(backend.clone(), &sampling, settings)?;
             let fields = recovered.fields.quantity();
             let (e, h) = (fields.electric(), fields.magnetic());
@@ -178,22 +153,20 @@ impl ModePoint {
                 let h2 = h.x()[i].norm_sqr() + h.y()[i].norm_sqr() + h.z()[i].norm_sqr();
                 0.25 * (we * e2 + wm * h2)
             };
-            let last = e.y().len() - 1;
-            let mut power = flux(0) / (2. * sig.left.im) + flux(last) / (2. * sig.right.im);
-            let mut stored = energy(0, weights[0]) / (2. * sig.left.im)
-                + energy(last, weights[layers + 1]) / (2. * sig.right.im);
-            let mut offset = 1;
-            for (layer, &(d, base)) in grid.iter().enumerate() {
-                let n = base << level;
-                let simpson = |f: &dyn Fn(usize) -> f64| {
-                    let inner: f64 = (1..n)
-                        .map(|j| f(offset + j) * if j % 2 == 1 { 4. } else { 2. })
-                        .sum();
-                    d * (f(offset) + f(offset + n) + inner) / (3. * n as f64)
-                };
-                power += simpson(&flux);
-                stored += simpson(&|i| energy(i, weights[layer + 1]));
-                offset += n + 1;
+            let (mut power, mut stored) = (0., 0.);
+            for span in grid.spans(level) {
+                let weight = weights[span.region];
+                match span.intervals {
+                    None => {
+                        let decay = decay[usize::from(span.region > 0)].expect("open");
+                        power += flux(span.first) / decay;
+                        stored += energy(span.first, weight) / decay;
+                    }
+                    Some(_) => {
+                        power += span.simpson(flux);
+                        stored += span.simpson(|i| energy(i, weight));
+                    }
+                }
             }
             let extrapolated = previous.map(|(p, w)| {
                 let richardson = |fine: f64, coarse: f64| fine + (fine - coarse) / 15.;

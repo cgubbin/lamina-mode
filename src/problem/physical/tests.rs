@@ -6,7 +6,7 @@ fn data(beta: C, signs: [f64; 2], eps: [f64; 2]) -> PhysicalData {
     PhysicalData {
         k0: c(1.0),
         beta,
-        kappa: [0, 1].map(|j| C::new(0.0, 1.0) * (beta * beta - c(eps[j])).sqrt() * signs[j]),
+        kappa: [0, 1].map(|j| Some(C::new(0.0, 1.0) * (beta * beta - c(eps[j])).sqrt() * signs[j])),
         epsilon: eps.map(c),
         mu: [c(1.0); 2],
     }
@@ -44,11 +44,10 @@ fn all_eight_dielectric_sectors_follow_independent_alpha_signs() {
             ] {
                 let d = data(C::new(2.0, imag), signs, eps);
                 for j in 0..2 {
-                    assert!(
-                        (d.alpha()[j] * d.alpha()[j] - d.beta * d.beta + c(eps[j])).norm() < 1e-12
-                    );
-                    assert_eq!(d.alpha()[j].re.signum(), signs[j]);
-                    assert_eq!(d.alpha()[j].im.signum(), imag.signum() * signs[j]);
+                    let alpha = d.alpha()[j].unwrap();
+                    assert!((alpha * alpha - d.beta * d.beta + c(eps[j])).norm() < 1e-12);
+                    assert_eq!(alpha.re.signum(), signs[j]);
+                    assert_eq!(alpha.im.signum(), imag.signum() * signs[j]);
                 }
                 let result = interpret(
                     d,
@@ -100,7 +99,7 @@ fn guided_cutoff_improper_and_unsupported_states_remain_explicit() {
         Boundary(BoundaryReason::Cutoff)
     );
     let mut inconsistent = guided;
-    inconsistent.kappa[0] += c(0.1);
+    inconsistent.kappa[0] = inconsistent.kappa[0].map(|k| k + c(0.1));
     assert_eq!(
         describe(inconsistent).interpretation.classification,
         Boundary(BoundaryReason::InconsistentEvidence)
@@ -167,7 +166,7 @@ fn component_bands_scale_dimensionally_and_validate_inputs() {
     let scaled = run(PhysicalData {
         k0: d.k0 * scale,
         beta: d.beta * scale,
-        kappa: d.kappa.map(|v| v * scale),
+        kappa: d.kappa.map(|v| v.map(|v| v * scale)),
         ..d
     });
     assert!(
@@ -251,7 +250,7 @@ fn spectral_temporal_components_do_not_assign_paper_labels_or_flux() {
         let d = PhysicalData {
             k0: C::new(2.0, imag),
             beta: c(0.0),
-            kappa: [C::new(2.0, imag); 2],
+            kappa: [Some(C::new(2.0, imag)); 2],
             epsilon: [c(1.0); 2],
             mu: [c(1.0); 2],
         };

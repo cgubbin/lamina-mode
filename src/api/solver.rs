@@ -12,6 +12,7 @@ type J = p::J;
 type I = ComplexInPlaneMap<J>;
 type W = ComplexWavenumberMap<J>;
 type S<B> = p::Compiled<B>;
+type D = p::direct::DirectChart;
 /// Fixed real k0 propagation solver over a supplied core analytical stack.
 #[derive(Clone, Debug)]
 pub struct PropagationProblem<B = Scatter2> {
@@ -31,6 +32,7 @@ pub struct FrequencyProblem<B = Scatter2> {
 #[derive(Clone, Debug)]
 enum DomainKind<B> {
     Propagation(p::ProblemDomain<I, S<B>>),
+    Direct(p::direct::DirectDomain<S<B>>),
     Conformal(p::ProblemDomain<W, S<B>>),
     Frequency(p::frequency::FrequencyDomain<S<B>>),
 }
@@ -44,6 +46,7 @@ impl<B> Domain<B> {
     pub fn provenance(&self) -> Provenance {
         let inner = match &self.inner {
             DomainKind::Propagation(d) => d.provenance(),
+            DomainKind::Direct(d) => d.provenance(),
             DomainKind::Conformal(d) => d.provenance(),
             DomainKind::Frequency(d) => d.provenance(),
         };
@@ -55,6 +58,7 @@ impl<B> Domain<B> {
 #[derive(Clone, Debug)]
 enum PlanKind<B> {
     Propagation(p::orchestration::ChartPlan<I, S<B>>),
+    Direct(p::orchestration::ChartPlan<I, S<B>, D>),
     Conformal(p::orchestration::ChartPlan<W, S<B>>),
     Frequency(p::orchestration::ChartPlan<(), S<B>, p::frequency::FrequencyChart>),
 }
@@ -72,7 +76,7 @@ pub struct Evaluation {
     pub coordinate_kind: CoordinateKind,
 }
 macro_rules! common_problem {
-    ($name:ident,$variant:ident) => {
+    ($name:ident, $($variant:ident),+) => {
         impl<B, E> $name<B>
         where
             B: Backend<J, ComplexPlane, Entries = E> + Clone,
@@ -85,18 +89,27 @@ macro_rules! common_problem {
                 domains: Vec<Domain<B>>,
                 exclusions: Vec<CoverageExclusion>,
             ) -> Result<Plan<B>, Diagnostic> {
-                let domains = domains
-                    .into_iter()
-                    .map(|d| match d.inner {
-                        DomainKind::$variant(d) => Ok(d),
-                        _ => Err(Diagnostic::new(Stage::Domain, StrategyMismatch)),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                p::orchestration::ChartPlan::explicit(self.inner.clone(), domains, exclusions)
-                    .map(|inner| Plan {
-                        inner: PlanKind::$variant(inner),
-                    })
-                    .map_err(|e| Diagnostic::new(Stage::Domain, e))
+                $(
+                    if domains.iter().all(|d| matches!(d.inner, DomainKind::$variant(_))) {
+                        let domains = domains
+                            .into_iter()
+                            .filter_map(|d| match d.inner {
+                                DomainKind::$variant(d) => Some(d),
+                                _ => None,
+                            })
+                            .collect();
+                        return p::orchestration::ChartPlan::explicit(
+                            self.inner.clone(),
+                            domains,
+                            exclusions,
+                        )
+                        .map(|inner| Plan {
+                            inner: PlanKind::$variant(inner),
+                        })
+                        .map_err(|e| Diagnostic::new(Stage::Domain, e));
+                    }
+                )+
+                Err(Diagnostic::new(Stage::Domain, StrategyMismatch))
             }
             /// Checked value and derivative on the domain's existing native branch.
             pub fn evaluate(
@@ -104,29 +117,34 @@ macro_rules! common_problem {
                 domain: &Domain<B>,
                 native_coordinate: Complex,
             ) -> Result<Evaluation, Diagnostic> {
-                let DomainKind::$variant(d) = &domain.inner else {
-                    return Err(Diagnostic::new(Stage::Evaluation, StrategyMismatch));
+                let (b, coordinate_kind) = match &domain.inner {
+                    $(
+                        DomainKind::$variant(d) => (
+                            self.inner.evaluate(d, native_coordinate).map_err(|e| {
+                                let foreign = matches!(e, p::ExecutionError::ForeignDomain);
+                                let mut diagnostic = Diagnostic::checked::<
+                                    _,
+                                    <B as Backend<J, ComplexPlane>>::Error,
+                                >(Stage::Evaluation, e);
+                                diagnostic.foreign |= foreign;
+                                diagnostic
+                            })?,
+                            d.provenance().coordinate_kind(),
+                        ),
+                    )+
+                    _ => return Err(Diagnostic::new(Stage::Evaluation, StrategyMismatch)),
                 };
-                let b = self.inner.evaluate(d, native_coordinate).map_err(|e| {
-                    let foreign = matches!(e, p::ExecutionError::ForeignDomain);
-                    let mut diagnostic = Diagnostic::checked::<
-                        _,
-                        <B as Backend<J, ComplexPlane>>::Error,
-                    >(Stage::Evaluation, e);
-                    diagnostic.foreign |= foreign;
-                    diagnostic
-                })?;
                 Ok(Evaluation {
                     value: *b.value(),
                     derivative: *b.derivative(),
-                    coordinate_kind: d.provenance().coordinate_kind(),
+                    coordinate_kind,
                 })
             }
         }
     };
 }
 // Generate explicit-plan calls directly, without a new backend/chart trait.
-common_problem!(PropagationProblem, Propagation);
+common_problem!(PropagationProblem, Propagation, Direct);
 common_problem!(ConformalSpectralProblem, Conformal);
 common_problem!(FrequencyProblem, Frequency);
 impl PropagationProblem {
@@ -231,6 +249,21 @@ where
             })
             .map_err(|e| Diagnostic::new(Stage::Domain, e))
     }
+    /// β rectangle in cm^-1 for a stack closed by walls on both sides, whose
+    /// characteristic is entire and even in β: no sheet or radiation reference.
+    /// The declaration covers the characteristic on the whole evaluation halo.
+    pub fn direct_domain(
+        &self,
+        bounds: ConformalRegion<f64>,
+        assumption: AnalyticAssumption,
+    ) -> Result<Domain<B>, Diagnostic> {
+        self.inner
+            .direct_domain(bounds, assumption)
+            .map(|d| Domain {
+                inner: DomainKind::Direct(d),
+            })
+            .map_err(|e| Diagnostic::new(Stage::Domain, e))
+    }
 }
 impl<B, E> ConformalSpectralProblem<B>
 where
@@ -298,6 +331,7 @@ macro_rules! each_plan {
     ($self:ident,$plan:ident,$body:expr) => {
         match &$self.inner {
             PlanKind::Propagation($plan) => $body,
+            PlanKind::Direct($plan) => $body,
             PlanKind::Conformal($plan) => $body,
             PlanKind::Frequency($plan) => $body,
         }

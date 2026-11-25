@@ -263,7 +263,7 @@ impl ModeDeterminantSolver<J> for Solver {
         self.calls.fetch_add(1, Ordering::SeqCst);
         // For this map kappa_L/k0=i*(exp(z)-r exp(-z)); use exterior values
         // only to distinguish disjoint domains in this synthetic injected fault.
-        let value = exterior.left().value()[()].im;
+        let value = exterior.left().unwrap().value()[()].im;
         if self
             .fail_band
             .is_some_and(|(lo, hi)| value > lo && value < hi)
@@ -531,8 +531,8 @@ fn signature() -> BranchSignature {
     BranchSignature {
         k0: c(2.0),
         k_parallel: c(3.5),
-        left: C::new(0.0, 2.0),
-        right: C::new(0.0, 1.0),
+        left: Some(C::new(0.0, 2.0)),
+        right: Some(C::new(0.0, 1.0)),
     }
 }
 #[test]
@@ -570,12 +570,12 @@ fn matching_preserves_radiation_branches_order_and_signature_failures() {
     );
     for sign in [
         BranchSignature {
-            left: -signature().left,
-            right: -signature().right,
+            left: signature().left.map(|k| -k),
+            right: signature().right.map(|k| -k),
             ..signature()
         },
         BranchSignature {
-            left: -signature().left,
+            left: signature().left.map(|k| -k),
             ..signature()
         },
         BranchSignature {
@@ -600,7 +600,7 @@ fn matching_preserves_radiation_branches_order_and_signature_failures() {
         assert_eq!(groups.len(), 2);
     }
     let near = BranchSignature {
-        left: c(1e-12),
+        left: Some(c(1e-12)),
         ..signature()
     };
     let a = observation(0, c(0.0), c(3.5), Ok(near));
@@ -848,12 +848,12 @@ fn overlapping_physical_te_tm_guided_and_normal_spectral_roots() {
         let opposite = p.map.map_raw(J::lift_constant(ndarray::arr0(shifted)));
         for (out, inc) in [
             (
-                first.exterior_wavevectors().left(),
-                opposite.exterior_wavevectors().left(),
+                first.exterior_wavevectors().left().unwrap(),
+                opposite.exterior_wavevectors().left().unwrap(),
             ),
             (
-                first.exterior_wavevectors().right(),
-                opposite.exterior_wavevectors().right(),
+                first.exterior_wavevectors().right().unwrap(),
+                opposite.exterior_wavevectors().right().unwrap(),
             ),
         ] {
             assert!((out.value()[()] - expected).norm() < 1e-10);
@@ -957,9 +957,9 @@ fn canonical_spectral_lower_upper_keep_physical_te_tm_evidence() {
                 .expect("selected-sheet scalar root missing");
             let signature = observation.signature().unwrap();
             if index == 0 {
-                assert!(signature.left.re < 0.0 && signature.right.re > 0.0)
+                assert!(signature.left.unwrap().re < 0.0 && signature.right.unwrap().re > 0.0)
             } else {
-                assert!(signature.left.re > 0.0 && signature.right.re < 0.0)
+                assert!(signature.left.unwrap().re > 0.0 && signature.right.unwrap().re < 0.0)
             }
             assert_eq!(chart.index(), index);
             assert!(chart.refinement().is_some());

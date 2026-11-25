@@ -76,7 +76,7 @@ impl<B: ModalNormalizationBackend + Clone> NormalizedMode<B> {
             ),
         };
         let materials = [stack.left_exterior(), stack.right_exterior()];
-        let roots = [signature.left, signature.right];
+        let roots = signature.open_exteriors().ok_or(IncompatiblePole)?;
         let exterior_admittances_per_cm = std::array::from_fn(|i| {
             let coordinate = Scalar(signature.k0);
             let factor = match channel_field {
@@ -651,8 +651,12 @@ fn reconstruct(
             return Err(InvalidInput);
         }
         let (roots, _) = channels.at(pole.signature.k0, beta_per_cm, field)?;
-        if !channel_close(pole.signature.left, roots[0])
-            || !channel_close(pole.signature.right, roots[1])
+        if !pole
+            .signature
+            .exteriors()
+            .into_iter()
+            .zip(roots)
+            .all(|(stored, root)| stored.is_some_and(|stored| channel_close(stored, root)))
         {
             return Err(ChannelMismatch);
         }

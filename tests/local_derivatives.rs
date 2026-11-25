@@ -101,9 +101,9 @@ fn propagation_root_at(
         let mu = material.evaluate_relative_permeability_complex(Scalar(Complex::new(k0, 0.)));
         let root = (epsilon * mu * k0 * k0 - beta_guess * beta_guess).sqrt();
         let old_root = if std::ptr::eq(material, stack.left_exterior()) {
-            old.left
+            old.left.unwrap()
         } else {
-            old.right
+            old.right.unwrap()
         };
         if (root - old_root).norm() <= (-root - old_root).norm() {
             root
@@ -159,8 +159,8 @@ fn temporal_root_at_beta(
                 } else {
                     1
                 };
-                if (root - [old.left, old.right][index]).norm()
-                    <= (-root - [old.left, old.right][index]).norm()
+                if (root - old.open_exteriors().unwrap()[index]).norm()
+                    <= (-root - old.open_exteriors().unwrap()[index]).norm()
                 {
                     root
                 } else {
@@ -170,8 +170,8 @@ fn temporal_root_at_beta(
             let signature = BranchSignature {
                 k0,
                 k_parallel: beta,
-                left: branches[0],
-                right: branches[1],
+                left: Some(branches[0]),
+                right: Some(branches[1]),
             };
             reference::Green::new(
                 &stack,
@@ -202,8 +202,8 @@ fn temporal_root_at_beta(
         } else {
             1
         };
-        if (root - [old.left, old.right][index]).norm()
-            <= (-root - [old.left, old.right][index]).norm()
+        if (root - old.open_exteriors().unwrap()[index]).norm()
+            <= (-root - old.open_exteriors().unwrap()[index]).norm()
         {
             root
         } else {
@@ -255,14 +255,14 @@ fn physical_coordinate_partials_match_branch_anchored_finite_differences() {
                 stack,
                 signature.k0 + h,
                 signature.k_parallel,
-                [signature.left, signature.right],
+                signature.open_exteriors().unwrap(),
                 pol,
             ) - characteristic(
                 &Scatter2::new(),
                 stack,
                 signature.k0 - h,
                 signature.k_parallel,
-                [signature.left, signature.right],
+                signature.open_exteriors().unwrap(),
                 pol,
             )) / (2. * h);
             let fb = (characteristic(
@@ -270,14 +270,14 @@ fn physical_coordinate_partials_match_branch_anchored_finite_differences() {
                 stack,
                 signature.k0,
                 signature.k_parallel + h,
-                [signature.left, signature.right],
+                signature.open_exteriors().unwrap(),
                 pol,
             ) - characteristic(
                 &Scatter2::new(),
                 stack,
                 signature.k0,
                 signature.k_parallel - h,
-                [signature.left, signature.right],
+                signature.open_exteriors().unwrap(),
                 pol,
             )) / (2. * h);
             errors_k0.push((fk - partial(&report, PhysicalParameter::K0)).norm());
@@ -329,8 +329,9 @@ fn accepted_native_derivatives_follow_frequency_conformal_and_propagation_chain_
     let signature = *propagation.signature().unwrap();
     let report = local(&propagation, &[PhysicalParameter::Beta]);
     let dz_dbeta = -signature.k_parallel
-        * (Complex::new(1., 0.) / signature.left + Complex::new(1., 0.) / signature.right)
-        / (signature.left + signature.right);
+        * (Complex::new(1., 0.) / signature.left.unwrap()
+            + Complex::new(1., 0.) / signature.right.unwrap())
+        / (signature.left.unwrap() + signature.right.unwrap());
     close(
         propagation.evidence().derivative * dz_dbeta,
         partial(&report, PhysicalParameter::Beta),
@@ -373,14 +374,14 @@ fn plasmon_and_film_physical_partials_match_independent_finite_differences() {
                 stack,
                 k_plus,
                 b_plus,
-                [signature.left, signature.right],
+                signature.open_exteriors().unwrap(),
                 pol,
             ) - characteristic(
                 &Scatter2::new(),
                 stack,
                 k_minus,
                 b_minus,
-                [signature.left, signature.right],
+                signature.open_exteriors().unwrap(),
                 pol,
             )) / (2. * h);
             close(partial(&report, parameter), fd, 2e-4);
@@ -491,14 +492,14 @@ fn thickness_partial_matches_fixed_coordinate_finite_difference_and_slope_is_gua
         &displaced(h),
         signature.k0,
         signature.k_parallel,
-        [signature.left, signature.right],
+        signature.open_exteriors().unwrap(),
         provenance.polarisation(),
     ) - characteristic(
         &Scatter2::new(),
         &displaced(-h),
         signature.k0,
         signature.k_parallel,
-        [signature.left, signature.right],
+        signature.open_exteriors().unwrap(),
         provenance.polarisation(),
     )) / (2. * h);
     close(
@@ -607,7 +608,7 @@ fn near_zero_slope_denominator_is_reported_without_losing_partials() {
 #[test]
 fn exterior_cutoff_is_a_typed_partial_failure_and_keeps_other_partials() {
     let point = fixtures::guided(Polarisation::TransverseElectric).unwrap();
-    let left = point.signature().unwrap().left.norm();
+    let left = point.signature().unwrap().left.unwrap().norm();
     let report = point
         .local_derivatives_with(
             Scatter2::new(),
@@ -717,7 +718,7 @@ fn guided_power_is_phase_fixed_and_independent_of_seed_scale() {
         let q = (4. * sig.k0.re.powi(2) - sig.k_parallel.re.powi(2)).sqrt();
         let tm = pol == Polarisation::TransverseMagnetic;
         let weight = |epsilon| if tm { epsilon } else { 1. };
-        let a = sig.left.im * weight(4.) / q;
+        let a = sig.left.unwrap().im * weight(4.) / q;
         let d = p.provenance().stack().layers_left_to_right()[0]
             .thickness()
             .as_centimetres();
@@ -726,9 +727,9 @@ fn guided_power_is_phase_fixed_and_independent_of_seed_scale() {
             + (1. - a * a) * (2. * v).sin() / (4. * q)
             + a * v.sin().powi(2) / q;
         let right = v.cos() + a * v.sin();
-        let integral = 1. / (2. * sig.left.im)
+        let integral = 1. / (2. * sig.left.unwrap().im)
             + core / weight(4.)
-            + right * right / (2. * sig.right.im * weight(2.25));
+            + right * right / (2. * sig.right.unwrap().im * weight(2.25));
         let watts =
             x.norm_sqr() * 0.01 / 376.730313412 * sig.k_parallel.re / (2. * sig.k0.re) * integral;
         assert!((watts - 1.).abs() < 1e-7, "{pol:?} power {watts}");

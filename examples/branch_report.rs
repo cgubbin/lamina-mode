@@ -157,6 +157,7 @@ fn run_case(
     )?;
     for (i, p) in trace.points.iter().enumerate() {
         let s = p.signature().map_err(Clone::clone)?;
+        let [left, right] = s.open_exteriors().ok_or("an open stack")?;
         let d = p
             .local_derivatives_with(
                 Scatter2::new(),
@@ -179,8 +180,7 @@ fn run_case(
             } else {
                 (s.k0, plasmon::omega_exact(s.k_parallel.re / plasmon::KP))
             };
-            let boundary =
-                (s.left + s.right / plasmon::metal(s.k0 / plasmon::KP)).norm() / plasmon::KP;
+            let boundary = (left + right / plasmon::metal(s.k0 / plasmon::KP)).norm() / plasmon::KP;
             let transfer = p
                 .local_derivatives_with(
                     lamina_core::Transfer2::new(),
@@ -194,7 +194,7 @@ fn run_case(
                 if spatial { "beta" } else { "omega" },
                 k / plasmon::KP,
                 reference,
-                [s.left, s.right],
+                [left, right],
                 boundary,
                 backend,
             )?;
@@ -220,10 +220,10 @@ fn run_case(
             ev.value.norm(),
             d.re,
             d.im,
-            s.left.re,
-            s.left.im,
-            s.right.re,
-            s.right.im,
+            left.re,
+            left.im,
+            right.re,
+            right.im,
             p.backend(),
             comparison,
             ev.residual_limit,

@@ -106,7 +106,7 @@ pub fn guided_local_coupling_with<B: ModalFieldBackend + Clone>(
         .iter()
         .map(|mode| {
             let s = mode.signature().expect("validated signature");
-            [s.left.im, s.right.im]
+            s.open_exteriors().expect("an open stack").map(|r| r.im)
         })
         .collect();
 

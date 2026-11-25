@@ -252,6 +252,7 @@ fn run_inner(out: &Path, full: bool) -> Result<(), Error> {
             }
             require(partition_error < 1e-8, "exterior partition mismatch")?;
             let n = &mode.normalization;
+            let [left, right] = sig.open_exteriors().ok_or("an open stack")?;
             writeln!(
                 coordinates,
                 "{name},{variable:?},{pol:?},{},{},{},{},{},{},{},{}",
@@ -259,10 +260,10 @@ fn run_inner(out: &Path, full: bool) -> Result<(), Error> {
                 sig.k0.im,
                 sig.k_parallel.re,
                 sig.k_parallel.im,
-                sig.left.re,
-                sig.left.im,
-                sig.right.re,
-                sig.right.im
+                left.re,
+                left.im,
+                right.re,
+                right.im
             )?;
             for (i, value) in n.layers.iter().enumerate() {
                 writeln!(contributions, "{name},layer_{i},{},{}", value.re, value.im)?;
