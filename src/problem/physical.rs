@@ -91,7 +91,7 @@ impl<E: std::error::Error + 'static> std::error::Error for PointError<E> {
     }
 }
 /// Physical coordinates and exterior data of a point. `kappa` holds the
-/// exterior wavevector of each open side; a side closed by a wall has none.
+/// exterior wavevector of each open side; a side closed by a wall or a PML has none.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PhysicalData {
     pub k0: C,
@@ -132,16 +132,26 @@ pub enum ExteriorBehaviour {
     Decay,
     Growth,
     Boundary,
-    /// Closed by a wall: no exterior wave.
+    /// Closed by a wall or a PML: no exterior wave.
     Closed,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Evolution {
     Attenuation,
     Amplification,
     TemporalDecay,
     TemporalGrowth,
     Boundary,
+    /// A side is closed by a PML, an analytic continuation rather than a
+    /// passive medium: the sign of Im β at the level of its truncation says
+    /// nothing about gain or loss, and none is inferred. `truncation` is the
+    /// largest |exp(2iκ̃ℓ)| over the PML sides, ℓ = g + τ the complex length
+    /// from the outermost interface to the backing wall and κ̃ the root of
+    /// κ² = εμk0² − β² decaying over it: the relative size of the PML's
+    /// perturbation of the open stack's characteristic.
+    PmlTruncation {
+        truncation: f64,
+    },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unsupported {
@@ -160,7 +170,7 @@ pub enum Flux {
         threshold: f64,
     },
     Unsupported(Unsupported),
-    /// Closed by a wall: no power crosses it.
+    /// Closed by a wall or a PML: no power crosses it.
     Closed,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,7 +184,7 @@ pub enum ModeType {
     TwoSidedSource,
     Absorptive,
     Gain,
-    /// A mode of a stack closed by walls on both sides.
+    /// A mode of a stack closed on both sides, by walls or PMLs.
     Closed,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -342,6 +352,7 @@ fn interpret(
     })
 }
 /// Classify from the open sides alone; `open` lists them in left/right order.
+/// With no open side the type is `Closed`.
 fn classify(
     data: &PhysicalData,
     open: &[usize],
@@ -377,6 +388,16 @@ fn classify(
         if !finite(residual) || residual.norm() > limit {
             return Boundary(InconsistentEvidence);
         }
+    }
+    // Beside a PML the evolution says nothing, so the open side's exterior
+    // and flux decide.
+    if let (Evolution::PmlTruncation { .. }, &[j]) = (evolution, open) {
+        return match (exterior[j], flux[j]) {
+            (Decay, _) => Classified(Guided),
+            (Growth, O) => Classified([LeftLeaky, RightLeaky][j]),
+            (Growth, I) => Classified([LeftSource, RightSource][j]),
+            _ => Boundary(NearSectorBoundary),
+        };
     }
     if evolution == Evolution::Boundary {
         if open.iter().all(|&j| {
@@ -433,8 +454,9 @@ pub(crate) fn from_signature(
     {
         return Err(InputError::NonFinite);
     }
-    let factors = exterior_factors(provenance.problem().stack(), signature.k0);
-    interpret(
+    let stack = provenance.problem().stack();
+    let factors = exterior_factors(stack, signature.k0);
+    let mut details = interpret(
         PhysicalData {
             k0: signature.k0,
             beta: signature.k_parallel,
@@ -446,7 +468,44 @@ pub(crate) fn from_signature(
         provenance.problem().polarisation(),
         provenance.radiation(),
         config,
-    )
+    )?;
+    let (k0, beta) = (signature.k0, signature.k_parallel);
+    let truncation = pmls(stack)
+        .into_iter()
+        .zip(factors)
+        .filter_map(|(pml, (epsilon, mu))| {
+            let (gap, tau) = pml?;
+            let kappa = (epsilon * mu * k0 * k0 - beta * beta).sqrt();
+            Some((-2.0 * (kappa * (gap + tau)).im.abs()).exp())
+        })
+        .reduce(f64::max);
+    if let Some(truncation) = truncation {
+        let interpretation = &mut details.interpretation;
+        interpretation.evolution = Evolution::PmlTruncation { truncation };
+        // Beside an open side, the type follows from that side alone.
+        if !matches!(
+            interpretation.classification,
+            Classification::Unsupported(_)
+        ) {
+            let open: Vec<usize> = (0..2)
+                .filter(|&j| details.data.kappa[j].is_some())
+                .collect();
+            let directions = interpretation.flux.map(|flux| match flux {
+                Flux::Supported { direction, .. } => direction,
+                _ => Sign::Boundary,
+            });
+            interpretation.classification = classify(
+                &details.data,
+                &open,
+                interpretation.exterior,
+                interpretation.evolution,
+                directions,
+                interpretation.wavenumber_threshold,
+                config.cutoff,
+            );
+        }
+    }
+    Ok(details)
 }
 impl<M, S> ModalProblem<M, S>
 where

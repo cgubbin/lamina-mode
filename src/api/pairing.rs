@@ -68,6 +68,8 @@ pub enum PairingError {
     },
     #[error("pairing quadrature exceeded its accuracy or sampling budget")]
     Quadrature,
+    #[error(transparent)]
+    Pml(#[from] PmlIntegral),
 }
 
 /// Both stacks' layouts, when their wavelengths and walls agree.
@@ -82,6 +84,7 @@ fn compatible(
         return Err(PairingError::IncompatibleWavelength);
     }
     let layout = |i: usize| {
+        crate::problem::walls(stacks[i]).map_err(|side| PmlIntegral { side })?;
         Layout::new(stacks[i], registration.origins_cm[i]).ok_or(PairingError::Registration)
     };
     let layouts = [layout(0)?, layout(1)?];

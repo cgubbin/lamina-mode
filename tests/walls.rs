@@ -2,8 +2,8 @@
 //! one-wall images, classification, refusals, and fields and derivatives with
 //! the walls fixed in the stack frame.
 use lamina_core::{
-    AnalyticalMaterialStack, Constant, ExteriorSampling, FieldSampling, LayerSampling, Pml,
-    Polarisation, Scatter2, Stack, StackCompileError, StackSide, StretchProfile, Wall, WallKind,
+    AnalyticalMaterialStack, Constant, ExteriorSampling, FieldSampling, LayerSampling,
+    Polarisation, Scatter2, Stack, StackCompileError, Wall, WallKind,
 };
 use lamina_mode::*;
 use lamina_units::Length;
@@ -662,40 +662,4 @@ fn leaky_modes_of_a_slab_on_a_wall_are_images_too() {
             image.len()
         );
     }
-}
-
-#[test]
-fn terminations_other_than_walls_are_refused_with_their_side() {
-    let pml = Pml::new(
-        cm(1.2),
-        cm(0.5),
-        StretchProfile::polynomial(2., Complex::new(0., 3.)),
-        PEC,
-    );
-    let stack =
-        Stack::from_analytical_materials(Constant::dielectric(CLAD), Constant::dielectric(CLAD))
-            .analytical_layer(Constant::dielectric(CORE), cm(1.))
-            .left_termination(Wall::perfect_electric(cm(-0.2)))
-            .right_termination(pml)
-            .finalise();
-    let refused = |error: &Diagnostic| {
-        error.find_source::<ConstructionError>().is_some_and(|e| {
-            matches!(
-                e,
-                ConstructionError::UnsupportedTermination {
-                    side: StackSide::Right
-                }
-            )
-        })
-    };
-    assert!(refused(
-        &PropagationProblem::new(stack.clone(), K, TE).unwrap_err()
-    ));
-    assert!(refused(
-        &FrequencyProblem::new(stack.clone(), K, TM).unwrap_err()
-    ));
-    assert!(matches!(
-        enumerate_guided_modes(stack, window(TE, [1.6 * K, 1.999 * K])),
-        Err(EnumerationError::Problem(_))
-    ));
 }

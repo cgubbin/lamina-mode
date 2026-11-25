@@ -14,7 +14,7 @@ use num_traits::{Float, FromPrimitive, float::FloatCore};
 pub enum CoordinateKind {
     Conformal,
     Frequency,
-    /// β itself, for a stack closed by walls on both sides.
+    /// β itself, for a stack closed on both sides, by walls or PMLs.
     Wavenumber,
 }
 impl CoordinateKind {

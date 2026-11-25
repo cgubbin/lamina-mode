@@ -35,7 +35,7 @@ use crate::{
 use argloc::{ArgumentConfig, FunctionBundle};
 use lamina_core::{
     AnalyticalMaterialHandle, AnalyticalMaterialStack, Backend, ComplexPlane, Layer, ModeJet1,
-    Polarisation, Stack, StackCompileError, StackSide, Termination, WallKind,
+    Polarisation, Stack, StackCompileError, StackSide, StretchProfile, Termination, WallKind,
 };
 use lamina_units::Length;
 pub use material::ConstantExterior;
@@ -90,7 +90,8 @@ impl ProblemContext {
     pub fn coordinate(&self) -> SearchCoordinate {
         self.coordinate
     }
-    /// Whether each side, left then right, is open rather than closed by a wall.
+    /// Whether each side, left then right, is open rather than closed by a
+    /// wall or a PML.
     pub(crate) fn open_sides(&self) -> [bool; 2] {
         open_sides(&self.stack)
     }
@@ -98,43 +99,66 @@ impl ProblemContext {
 pub(crate) fn open_sides<M>(stack: &Stack<M, f64>) -> [bool; 2] {
     [stack.left_termination(), stack.right_termination()].map(|t| t.is_open())
 }
-/// Each side's wall and its gap from the outermost interface in cm, `None`
-/// when open. The right gap is formed as lamina-core validates it, in the
-/// wall's unit when the layers share it, so a wall on the interface has none.
-/// Any other termination is refused, naming its side.
-pub(crate) fn walls<M>(
-    stack: &Stack<M, f64>,
-) -> Result<[Option<(WallKind, f64)>; 2], ProblemError> {
-    let gap = |termination: &Termination<f64>, right: bool| match termination {
-        Termination::Open => Ok(None),
-        Termination::Wall(wall) => {
-            let position = wall.position();
-            let unit = position.unit();
-            let gap = if !right {
-                -position.as_centimetres()
-            } else if stack.iter().all(|layer| layer.thickness().unit() == unit) {
-                let total = stack.iter().fold(0.0, |t, l| t + l.thickness().value());
-                Length::new(position.value() - total, unit).as_centimetres()
-            } else {
-                let total = stack
-                    .iter()
-                    .fold(0.0, |t, l| t + l.thickness().as_centimetres());
-                position.as_centimetres() - total
-            };
-            Ok(Some((wall.kind(), gap.max(0.0))))
+/// Refuse any termination other than an open side, a wall or a PML, naming
+/// its side.
+pub(crate) fn check_terminations<M>(stack: &Stack<M, f64>) -> Result<(), ProblemError> {
+    for (side, termination) in sides(stack) {
+        if !matches!(
+            termination,
+            Termination::Open | Termination::Wall(_) | Termination::Pml(_)
+        ) {
+            return Err(ProblemError::UnsupportedTermination { side });
         }
-        _ => Err(ProblemError::UnsupportedTermination {
-            side: if right {
-                StackSide::Right
-            } else {
-                StackSide::Left
-            },
-        }),
+    }
+    Ok(())
+}
+fn sides<M>(stack: &Stack<M, f64>) -> [(StackSide, &Termination<f64>); 2] {
+    [
+        (StackSide::Left, stack.left_termination()),
+        (StackSide::Right, stack.right_termination()),
+    ]
+}
+/// The gap in cm from the outermost interface of `side` to a termination at
+/// `position`. The right gap is formed as lamina-core validates it, in the
+/// termination's unit when the layers share it, so one on the interface has
+/// none.
+fn gap_cm<M>(stack: &Stack<M, f64>, side: StackSide, position: Length<f64>) -> f64 {
+    let unit = position.unit();
+    let gap = if side == StackSide::Left {
+        -position.as_centimetres()
+    } else if stack.iter().all(|layer| layer.thickness().unit() == unit) {
+        let total = stack.iter().fold(0.0, |t, l| t + l.thickness().value());
+        Length::new(position.value() - total, unit).as_centimetres()
+    } else {
+        let total = stack
+            .iter()
+            .fold(0.0, |t, l| t + l.thickness().as_centimetres());
+        position.as_centimetres() - total
     };
-    Ok([
-        gap(stack.left_termination(), false)?,
-        gap(stack.right_termination(), true)?,
-    ])
+    gap.max(0.0)
+}
+/// Each side's wall and its gap from the outermost interface in cm, `None`
+/// when open. Any other termination, a PML included, is refused with its side.
+pub(crate) fn walls<M>(stack: &Stack<M, f64>) -> Result<[Option<(WallKind, f64)>; 2], StackSide> {
+    let gap = |(side, termination): (StackSide, &Termination<f64>)| match termination {
+        Termination::Open => Ok(None),
+        Termination::Wall(wall) => Ok(Some((wall.kind(), gap_cm(stack, side, wall.position())))),
+        _ => Err(side),
+    };
+    let [left, right] = sides(stack);
+    Ok([gap(left)?, gap(right)?])
+}
+/// Each PML side's gap from its outermost interface and its complex
+/// thickness τ = d (1 + c/(m+1)), both in cm; `None` on other sides.
+pub(crate) fn pmls<M>(stack: &Stack<M, f64>) -> [Option<(f64, C)>; 2] {
+    sides(stack).map(|(side, termination)| match termination {
+        Termination::Pml(pml) => {
+            let StretchProfile::Polynomial { order, strength } = *pml.profile();
+            let tau = pml.thickness().as_centimetres() * (1.0 + strength / (order + 1.0));
+            Some((gap_cm(stack, side, pml.start()), tau))
+        }
+        _ => None,
+    })
 }
 #[derive(Debug, thiserror::Error)]
 pub enum ProblemError {
@@ -144,11 +168,9 @@ pub enum ProblemError {
     Spectral(#[from] WavenumberMapError),
     #[error("optical stack compilation failed: {0}")]
     Stack(#[from] StackCompileError<f64>),
-    #[error("this strategy needs a stack open on both sides: a wall termination closes one")]
+    #[error("this strategy needs a stack open on both sides: a wall or a PML closes one")]
     ClosedSide,
-    #[error(
-        "the {side:?} side is closed by a termination other than a wall, which is not supported"
-    )]
+    #[error("the {side:?} side is closed by a termination that is not supported")]
     UnsupportedTermination { side: StackSide },
 }
 #[derive(Clone, Debug, thiserror::Error)]
@@ -180,7 +202,7 @@ where
         }
         // Only open sides carry a branch: with one open side, both map
         // constants are that side's material (r = 0).
-        walls(&stack)?;
+        check_terminations(&stack)?;
         let open = open_sides(&stack);
         let factors = radiation::exterior_factors(&stack, C::new(fixed_k0, 0.0));
         let [(el, ml), (er, mr)] = match open {

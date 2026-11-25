@@ -44,6 +44,8 @@ pub enum EnumerationError {
     Thickness(usize),
     #[error("physical propagation problem: {0}")]
     Problem(String),
+    #[error("guided enumeration needs open or walled sides; the {side:?} side is closed by a PML")]
+    Termination { side: lamina_core::StackSide },
 }
 #[derive(Debug)]
 pub enum GuidedLimit {
@@ -209,7 +211,7 @@ pub(super) fn search_guided_modes(
         medium(stack.left_exterior(), 0)?,
         medium(stack.right_exterior(), stack.len() + 1)?,
     ];
-    let walls = p::walls(&stack).map_err(|e| EnumerationError::Problem(e.to_string()))?;
+    let walls = p::walls(&stack).map_err(|side| EnumerationError::Termination { side })?;
     let ends = [0, 1].map(|side| match walls[side] {
         None => End::Open(exteriors[side]),
         Some((kind, _)) => End::Wall {

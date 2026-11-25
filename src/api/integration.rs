@@ -29,7 +29,8 @@ pub(super) struct Layout {
 
 impl Layout {
     /// `None` for a non-finite origin, an unrepresentable interface spacing
-    /// or a termination other than a wall.
+    /// or a termination other than a wall; callers refuse a PML side first,
+    /// naming it.
     pub fn new(stack: &AnalyticalMaterialStack<Complex>, origin: f64) -> Option<Self> {
         if !origin.is_finite() {
             return None;

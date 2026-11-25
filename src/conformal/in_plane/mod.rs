@@ -241,7 +241,7 @@ pub struct ComplexInPlaneMap<A: ScalarAlgebra> {
     // Ordinary scalar data used for domain validation.
     branch_roots: [A::Scalar; 2],
 
-    // Sides that carry an exterior wavevector; a side closed by a wall has none.
+    // Sides that carry an exterior wavevector; a side closed by a wall or a PML has none.
     open: [bool; 2],
 }
 

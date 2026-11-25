@@ -241,7 +241,7 @@ pub enum BatchRefinementError {
     Matching(#[from] InvalidMatchConfig),
 }
 /// Physical coordinates of a point and the exterior wavevector of each open
-/// side; a side closed by a wall carries none.
+/// side; a side closed by a wall or a PML carries none.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BranchSignature {
     pub k0: C,
