@@ -8,6 +8,7 @@ use pyo3::create_exception;
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
 
+mod basis;
 mod pair;
 mod records;
 mod sens;
@@ -206,6 +207,60 @@ impl NativeBasis {
     }
 }
 
+/// A solved modal basis whose modes stay available for sampling and pairing.
+#[pyclass(frozen, module = "lamina._native")]
+struct NativeModalBasis {
+    solved: basis::SolvedBasis,
+}
+
+#[pymethods]
+impl NativeModalBasis {
+    /// Canonical serialised basis.
+    fn record_json(&self) -> PyResult<String> {
+        json(&self.solved.record)
+    }
+
+    /// Normalised fields of one mode at the given z positions (m), serialised.
+    fn profile(&self, py: Python<'_>, mode_index: usize, z_m: Vec<f64>) -> PyResult<String> {
+        let record = py
+            .detach(|| basis::profile(&self.solved, mode_index, &z_m))
+            .map_err(raise)?;
+        json(&record)
+    }
+}
+
+/// Solve a serialised modal basis input. Returns the native basis.
+#[pyfunction]
+fn modal_basis(py: Python<'_>, input_json: &str) -> PyResult<NativeModalBasis> {
+    let (input, _) =
+        rec::canonicalise::<rec::ModalBasisInput>(input_json).map_err(SchemaError::new_err)?;
+    let solved = py.detach(|| basis::solve(input)).map_err(raise)?;
+    Ok(NativeModalBasis { solved })
+}
+
+/// Pairing matrices between two modal bases, serialised.
+#[pyfunction]
+fn basis_pairing(
+    py: Python<'_>,
+    first: PyRef<'_, NativeModalBasis>,
+    second: PyRef<'_, NativeModalBasis>,
+    origins_m: [f64; 2],
+) -> PyResult<String> {
+    let (a, b) = (&first.solved, &second.solved);
+    let record = py
+        .detach(|| basis::pairing(a, b, origins_m))
+        .map_err(raise)?;
+    json(&record)
+}
+
+/// Validate and normalise a serialised modal basis input without solving it.
+#[pyfunction]
+fn normalise_modal_basis_input(input_json: &str) -> PyResult<String> {
+    let (input, _) =
+        rec::canonicalise::<rec::ModalBasisInput>(input_json).map_err(SchemaError::new_err)?;
+    json(&basis::normalise(input).map_err(raise)?)
+}
+
 /// Power overlap of two modes, serialised.
 #[pyfunction]
 fn power_overlap(
@@ -300,6 +355,10 @@ fn canonical(kind: &str, json: &str) -> PyResult<(String, String)> {
         "guided_reciprocity" => go::<rec::Reciprocity>(json),
         "guided_local_coupling" => go::<rec::LocalCoupling>(json),
         "guided_projection" => go::<rec::FieldProjection>(json),
+        "modal_basis_input" => go::<rec::ModalBasisInput>(json),
+        "modal_basis" => go::<rec::ModalBasis>(json),
+        "modal_profile" => go::<rec::ModalProfile>(json),
+        "basis_pairing" => go::<rec::BasisPairing>(json),
         other => Err(format!("unknown record kind {other:?}")),
     }
     .map_err(SchemaError::new_err)
@@ -332,6 +391,13 @@ fn default_refinement() -> PyResult<String> {
         .map_err(|e| SchemaError::new_err(e.to_string()))
 }
 
+/// The definitions every modal basis, profile and basis pairing carries, serialised.
+#[pyfunction]
+fn definitions() -> PyResult<String> {
+    serde_json::to_string(&rec::Definitions::current())
+        .map_err(|e| SchemaError::new_err(e.to_string()))
+}
+
 /// The conventions every result of this schema version carries, serialised.
 #[pyfunction]
 fn conventions() -> PyResult<String> {
@@ -352,6 +418,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("DerivativesFailed", py.get_type::<DerivativesFailed>())?;
     m.add("IntegrationFailed", py.get_type::<IntegrationFailed>())?;
     m.add_class::<NativeBasis>()?;
+    m.add_class::<NativeModalBasis>()?;
+    m.add_function(wrap_pyfunction!(modal_basis, m)?)?;
+    m.add_function(wrap_pyfunction!(basis_pairing, m)?)?;
+    m.add_function(wrap_pyfunction!(normalise_modal_basis_input, m)?)?;
     m.add_function(wrap_pyfunction!(enumerate_guided_modes, m)?)?;
     m.add_function(wrap_pyfunction!(power_overlap, m)?)?;
     m.add_function(wrap_pyfunction!(power_overlap_sensitivity, m)?)?;
@@ -361,5 +431,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(normalise_input, m)?)?;
     m.add_function(wrap_pyfunction!(default_refinement, m)?)?;
     m.add_function(wrap_pyfunction!(conventions, m)?)?;
+    m.add_function(wrap_pyfunction!(definitions, m)?)?;
     Ok(())
 }

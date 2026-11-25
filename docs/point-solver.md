@@ -21,6 +21,19 @@ and `FrequencyProblem` on any walled stack, fail with typed errors. A walled
 side is classified `Closed` with no flux; with one open side the mode type
 follows from that side alone, and with none it is `ModeType::Closed`.
 
+For a stack walled on both sides, `modal_basis_in_window_with` returns a complete
+modal basis in a window: every mode in a β rectangle (`ModalWindow::Wavenumber`,
+or `ModalWindow::forward`), guided, radiation-like, evanescent and complex, with
+the count from the argument principle over the window boundary, every
+region left unresolved as a `BasisGap` with its `BasisLimit`, and a
+`BasisStatus` that is `Complete` only when that list is empty, the counted and
+found modes agree and every mode is normalised. Modes have unit unconjugated self-pairing
+⟨f, f⟩ = ¼ ∫ (E × H + E × H) · x̂ dz = 1 W/m, a sign rule at the first interface,
+a fixed order and unconjugated Löwdin bases of near-degenerate groups.
+`modal_pairing_with` and `basis_pairing_with` pair modes and bases of stacks
+whose walls coincide, with both the unconjugated pairing and the conjugated
+product (docs/decisions/0011).
+
 `new` uses core Scatter2. `with_backend` accepts an explicit core backend, including
 supported Transfer2 evaluation; there is no backend or strategy fallback. Problems
 use complex f64 scalars. Physical k0, beta and exterior kappa use vacuum angular

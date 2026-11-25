@@ -2,7 +2,9 @@
 
 Enumerate the guided modes of a planar multilayer of constant real materials,
 sample their unit-power fields, evaluate their local derivatives and pair
-modes with each other and with supplied fields. Every quantity is SI with its
+modes with each other and with supplied fields. For a stack closed by walls,
+find every mode in a window of the complex β plane as a counted, normalised
+modal basis, and pair two such bases. Every quantity is SI with its
 unit in its name: lengths in metres, wavenumbers in rad/m, fields in V/m and
 A/m, power in W per metre of invariant width.
 
@@ -60,7 +62,17 @@ __all__ = [
     "Reciprocity",
     "LocalCoupling",
     "FieldProjection",
+    "DEFINITIONS",
+    "BetaWindow",
+    "ModalBasisInput",
+    "UnresolvedRegion",
+    "BasisMode",
+    "ModalBasis",
+    "ModalProfile",
+    "BasisPairing",
     "enumerate_guided_modes",
+    "modal_basis",
+    "basis_pairing",
     "power_overlap",
     "power_overlap_sensitivity",
     "reciprocity",
@@ -1630,3 +1642,435 @@ def enumerate_guided_modes(stack: Stack, request: GuidedRequest) -> GuidedBasis:
     basis = GuidedBasis.from_dict(json.loads(native.record_json()))
     object.__setattr__(basis, "_native", native)
     return basis
+
+
+# ---------------------------------------------------------------- modal bases
+
+DEFINITIONS: Mapping[str, str] = MappingProxyType(json.loads(_native.definitions()))
+"""The pairing, normalisation, sign, ordering and near-degenerate definitions
+every modal basis, profile and basis pairing carries."""
+
+_Rect = tuple[tuple[float, float], tuple[float, float]]
+
+
+def _rect(r: Sequence[Sequence[float]]) -> _Rect:
+    return ((float(r[0][0]), float(r[0][1])), (float(r[1][0]), float(r[1][1])))
+
+
+def _bounds(pair: Sequence[float]) -> tuple[float, float]:
+    low, high = pair
+    return (float(low), float(high))
+
+
+@dataclass(frozen=True)
+class BetaWindow:
+    """A rectangle of the complex β plane in rad/m, for stacks closed on both
+    sides: Re β in `re_rad_per_m`, Im β in `im_rad_per_m`, each ascending."""
+
+    re_rad_per_m: tuple[float, float]
+    im_rad_per_m: tuple[float, float]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "re_rad_per_m", _bounds(self.re_rad_per_m))
+        object.__setattr__(self, "im_rad_per_m", _bounds(self.im_rad_per_m))
+
+    @classmethod
+    def forward(
+        cls, beta_max_rad_per_m: float, decay_max_rad_per_m: float, margin_rad_per_m: float
+    ) -> BetaWindow:
+        """Re β in [−margin, beta_max], Im β in [−margin, decay_max]: real and
+        imaginary roots of a lossless stack lie strictly inside, and the window
+        meets its mirror image only in the square |Re β|, |Im β| ≤ margin."""
+        return cls((-margin_rad_per_m, beta_max_rad_per_m), (-margin_rad_per_m, decay_max_rad_per_m))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": "wavenumber",
+            "re_rad_per_m": list(self.re_rad_per_m),
+            "im_rad_per_m": list(self.im_rad_per_m),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> BetaWindow:
+        if d.get("kind") != "wavenumber":
+            raise InvalidInput(f"not a wavenumber window: {d.get('kind')!r}")
+        return cls(tuple(d["re_rad_per_m"]), tuple(d["im_rad_per_m"]))
+
+
+@dataclass(frozen=True, eq=False)
+class ModalBasisInput(_Record):
+    """The canonical input of a modal basis, with the near-degeneracy gap resolved."""
+
+    stack: Stack
+    wavelength_m: float
+    polarisation: Literal["TE", "TM"]
+    window: BetaWindow
+    degeneracy_gap_rad_per_m: float | None = None
+    self_pairing_rtol: float = 1e-8
+    _kind = "modal_basis_input"
+
+    def resolve(self) -> ModalBasisInput:
+        """Validate, resolving the default gap (1e-6 k0)."""
+        canonical = _native.normalise_modal_basis_input(_dumps(self.to_dict()))
+        return ModalBasisInput.from_dict(json.loads(canonical))
+
+    def to_dict(self) -> dict[str, Any]:
+        gap = self.degeneracy_gap_rad_per_m
+        return {
+            "schema": "lamina.modal_basis_input",
+            "schema_version": SCHEMA_VERSION,
+            "stack": self.stack.to_dict(),
+            "wavelength_m": float(self.wavelength_m),
+            "polarisation": self.polarisation,
+            "window": self.window.to_dict(),
+            "degeneracy_gap_rad_per_m": None if gap is None else float(gap),
+            "self_pairing_rtol": float(self.self_pairing_rtol),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> ModalBasisInput:
+        return cls(
+            Stack.from_dict(d["stack"]),
+            d["wavelength_m"],
+            d["polarisation"],
+            BetaWindow.from_dict(d["window"]),
+            d["degeneracy_gap_rad_per_m"],
+            d["self_pairing_rtol"],
+        )
+
+
+@dataclass(frozen=True)
+class UnresolvedRegion:
+    """A region of the window that did not end as accepted modes, and why:
+    "boundary_root", "non_integer_count", "budget", "refinement",
+    "multiplicity" or "cutoff". `bounds` is in the chart's coordinate (rad/m
+    on the wavenumber chart); `count` is the number of zeros counted inside."""
+
+    bounds: _Rect
+    beta_image_rad_per_m: _Rect
+    count: int | None
+    cause: str
+    detail: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "bounds": [list(b) for b in self.bounds],
+            "beta_image_rad_per_m": [list(b) for b in self.beta_image_rad_per_m],
+            "count": self.count,
+            "cause": self.cause,
+            "detail": self.detail,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> UnresolvedRegion:
+        return cls(_rect(d["bounds"]), _rect(d["beta_image_rad_per_m"]), d["count"], d["cause"], d["detail"])
+
+
+@dataclass(frozen=True)
+class BasisMode:
+    """One mode of a modal basis. `normalisation` is "unit" (⟨f, f⟩ = 1 W/m)
+    or "ill_conditioned" (|⟨u, u⟩| below the threshold of the field scale: no
+    normalised fields). `sign_margin` is |Re ℓ| / max |Ey + Z0 Hy|."""
+
+    index: int
+    beta_rad_per_m: complex
+    n_eff: complex
+    mode_type: str
+    direction: Literal["forward", "backward"]
+    sheet: tuple[str | None, str | None]
+    residual: float
+    self_pairing_raw_w_per_m: complex
+    normalisation: Literal["unit", "ill_conditioned"]
+    self_pairing_ratio: float
+    sign_reference: Literal["first_interface", "wall_on_first_interface"]
+    sign_margin: float | None
+    sign_ambiguous: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            **self.__dict__,
+            "beta_rad_per_m": _pair(self.beta_rad_per_m),
+            "n_eff": _pair(self.n_eff),
+            "sheet": list(self.sheet),
+            "self_pairing_raw_w_per_m": _pair(self.self_pairing_raw_w_per_m),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> BasisMode:
+        return cls(**{
+            **d,
+            "beta_rad_per_m": _c(d["beta_rad_per_m"]),
+            "n_eff": _c(d["n_eff"]),
+            "sheet": tuple(d["sheet"]),
+            "self_pairing_raw_w_per_m": _c(d["self_pairing_raw_w_per_m"]),
+        })
+
+
+@dataclass(frozen=True, eq=False)
+class ModalBasis(_Record):
+    """Every mode of a stack closed by walls in a β window, with its evidence.
+
+    `expected` is the count from the argument principle over the window
+    boundary and `found` the distinct accepted modes. `status` is "complete"
+    when they agree, nothing is unresolved and every mode is normalised;
+    "count_failed" when the boundary count failed; else "incomplete". Modes
+    are in the order of `definitions["ordering"]`; `groups` lists the
+    near-degenerate groups, whose members form an unconjugated Löwdin basis.
+    """
+
+    conventions: Mapping[str, str]
+    definitions: Mapping[str, str]
+    assumption: str
+    input: ModalBasisInput
+    input_hash: str
+    k0_rad_per_m: float
+    chart: str
+    window_beta_image_rad_per_m: _Rect
+    scope: str
+    status: Literal["complete", "incomplete", "count_failed"]
+    expected: int | None
+    found: int
+    unresolved: tuple[UnresolvedRegion, ...]
+    groups: tuple[tuple[int, ...], ...]
+    modes: tuple[BasisMode, ...]
+    _kind = "modal_basis"
+
+    @property
+    def is_complete(self) -> bool:
+        return self.status == "complete"
+
+    @property
+    def beta_rad_per_m(self) -> np.ndarray:
+        return _readonly(np.array([m.beta_rad_per_m for m in self.modes], dtype=complex))
+
+    def __len__(self) -> int:
+        return len(self.modes)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": "lamina.modal_basis",
+            "schema_version": SCHEMA_VERSION,
+            "conventions": dict(self.conventions),
+            "definitions": dict(self.definitions),
+            "assumption": self.assumption,
+            "input": self.input.to_dict(),
+            "input_hash": self.input_hash,
+            "k0_rad_per_m": self.k0_rad_per_m,
+            "chart": self.chart,
+            "window_beta_image_rad_per_m": [list(b) for b in self.window_beta_image_rad_per_m],
+            "scope": self.scope,
+            "status": self.status,
+            "expected": self.expected,
+            "found": self.found,
+            "unresolved": [r.to_dict() for r in self.unresolved],
+            "groups": [list(g) for g in self.groups],
+            "modes": [m.to_dict() for m in self.modes],
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> ModalBasis:
+        return cls(
+            MappingProxyType(dict(d["conventions"])),
+            MappingProxyType(dict(d["definitions"])),
+            d["assumption"],
+            ModalBasisInput.from_dict(d["input"]),
+            d["input_hash"],
+            d["k0_rad_per_m"],
+            d["chart"],
+            _rect(d["window_beta_image_rad_per_m"]),
+            d["scope"],
+            d["status"],
+            d["expected"],
+            d["found"],
+            tuple(UnresolvedRegion.from_dict(r) for r in d["unresolved"]),
+            tuple(tuple(g) for g in d["groups"]),
+            tuple(BasisMode.from_dict(m) for m in d["modes"]),
+        )
+
+    def _solver(self) -> Any:
+        native = self.__dict__.get("_native")
+        if native is None:
+            # A deserialised basis: re-solve its input and insist on the same result.
+            native = _native.modal_basis(self.input.to_json())
+            if native.record_json() != self.to_json():
+                raise LaminaError("re-solving the stored input did not reproduce this basis")
+            object.__setattr__(self, "_native", native)
+        return native
+
+    def profile(self, mode: int, z_m: Sequence[float] | np.ndarray) -> ModalProfile:
+        """Normalised E and H of one mode at positions z (m), with each sample's
+        region. A position beyond a wall, or an ill-conditioned mode, raises
+        `InvalidInput`."""
+        z = np.ascontiguousarray(z_m, dtype=float).ravel()
+        return ModalProfile.from_dict(json.loads(self._solver().profile(int(mode), z.tolist())))
+
+
+@dataclass(frozen=True, eq=False)
+class ModalProfile(_Record):
+    """Normalised fields of one basis mode; arrays have shape (n, 3): (x, y, z).
+    `region` names each sample's region: "layer", "gap" or "exterior"."""
+
+    conventions: Mapping[str, str]
+    definitions: Mapping[str, str]
+    input_hash: str
+    mode_index: int
+    beta_rad_per_m: complex
+    z_m: np.ndarray
+    region: tuple[str, ...]
+    electric_v_per_m: np.ndarray
+    magnetic_a_per_m: np.ndarray
+    _kind = "modal_profile"
+
+    def to_dict(self) -> dict[str, Any]:
+        e, h = self.electric_v_per_m, self.magnetic_a_per_m
+        return {
+            "schema": "lamina.modal_profile",
+            "schema_version": SCHEMA_VERSION,
+            "conventions": dict(self.conventions),
+            "definitions": dict(self.definitions),
+            "input_hash": self.input_hash,
+            "mode_index": self.mode_index,
+            "beta_rad_per_m": _pair(self.beta_rad_per_m),
+            "z_m": self.z_m.tolist(),
+            "region": list(self.region),
+            "electric_real": e.real.tolist(),
+            "electric_imag": e.imag.tolist(),
+            "magnetic_real": h.real.tolist(),
+            "magnetic_imag": h.imag.tolist(),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> ModalProfile:
+        return cls(
+            MappingProxyType(dict(d["conventions"])),
+            MappingProxyType(dict(d["definitions"])),
+            d["input_hash"],
+            d["mode_index"],
+            _c(d["beta_rad_per_m"]),
+            _readonly(np.asarray(d["z_m"], dtype=float)),
+            tuple(d["region"]),
+            _components(d["electric_real"], d["electric_imag"]),
+            _components(d["magnetic_real"], d["magnetic_imag"]),
+        )
+
+
+@dataclass(frozen=True, eq=False)
+class BasisPairing(_Record):
+    """Both pairing matrices between the normalised modes of two bases, in W/m:
+    row i is mode `rows[i]` of the first basis, column j mode `columns[j]` of
+    the second. Absent conjugated entries are nan, with their cause in
+    `conjugated_absent`. `leading_condition_numbers[k]` is the condition number
+    of the unconjugated matrix's leading (k + 1) × (k + 1) block and
+    `self_defects` each basis's max |G − I| on the same grid."""
+
+    conventions: Mapping[str, str]
+    definitions: Mapping[str, str]
+    first_input_hash: str
+    second_input_hash: str
+    origins_m: tuple[float, float]
+    rows: tuple[int, ...]
+    columns: tuple[int, ...]
+    unconjugated_w_per_m: np.ndarray
+    conjugated_w_per_m: np.ndarray
+    conjugated_absent: tuple[tuple[str | None, ...], ...]
+    singular_values_w_per_m: np.ndarray
+    leading_condition_numbers: np.ndarray
+    self_defects: tuple[float, float]
+    sample_count: int
+    quadrature_change_w_per_m: float
+    status: tuple[str, str]
+    scope: tuple[str, str]
+    _kind = "basis_pairing"
+
+    def to_dict(self) -> dict[str, Any]:
+        u, c = self.unconjugated_w_per_m, self.conjugated_w_per_m
+        present = np.array([[a is None for a in row] for row in self.conjugated_absent], dtype=bool)
+        present = present.reshape(c.shape)
+        return {
+            "schema": "lamina.basis_pairing",
+            "schema_version": SCHEMA_VERSION,
+            "conventions": dict(self.conventions),
+            "definitions": dict(self.definitions),
+            "first_input_hash": self.first_input_hash,
+            "second_input_hash": self.second_input_hash,
+            "origins_m": list(self.origins_m),
+            "rows": list(self.rows),
+            "columns": list(self.columns),
+            "unconjugated_real": u.real.tolist(),
+            "unconjugated_imag": u.imag.tolist(),
+            "conjugated_real": _optional_rows(c.real, present),
+            "conjugated_imag": _optional_rows(c.imag, present),
+            "conjugated_absent": [list(row) for row in self.conjugated_absent],
+            "singular_values_w_per_m": self.singular_values_w_per_m.tolist(),
+            "leading_condition_numbers": self.leading_condition_numbers.tolist(),
+            "self_defects": list(self.self_defects),
+            "sample_count": self.sample_count,
+            "quadrature_change_w_per_m": self.quadrature_change_w_per_m,
+            "status": list(self.status),
+            "scope": list(self.scope),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> BasisPairing:
+        shape = (len(d["rows"]), len(d["columns"]))
+        conjugated = _optional_matrix(d["conjugated_real"]).reshape(shape) + 1j * _optional_matrix(
+            d["conjugated_imag"]
+        ).reshape(shape)
+        return cls(
+            MappingProxyType(dict(d["conventions"])),
+            MappingProxyType(dict(d["definitions"])),
+            d["first_input_hash"],
+            d["second_input_hash"],
+            tuple(d["origins_m"]),
+            tuple(d["rows"]),
+            tuple(d["columns"]),
+            _readonly(_complex_matrix(d["unconjugated_real"], d["unconjugated_imag"]).reshape(shape)),
+            _readonly(conjugated),
+            tuple(tuple(row) for row in d["conjugated_absent"]),
+            _readonly(np.asarray(d["singular_values_w_per_m"], dtype=float)),
+            _readonly(np.asarray(d["leading_condition_numbers"], dtype=float)),
+            tuple(d["self_defects"]),
+            d["sample_count"],
+            d["quadrature_change_w_per_m"],
+            tuple(d["status"]),
+            tuple(d["scope"]),
+        )
+
+
+def modal_basis(
+    stack: Stack,
+    wavelength_m: float,
+    polarisation: Literal["TE", "TM"],
+    window: BetaWindow,
+    *,
+    degeneracy_gap_rad_per_m: float | None = None,
+    self_pairing_rtol: float = 1e-8,
+) -> ModalBasis:
+    """Every mode of `stack`, closed by walls on both sides, in `window`.
+
+    An incomplete basis is a result, not an error: read `status`, `expected`,
+    `found` and `unresolved` together. Invalid inputs, including a stack with
+    an open side, raise `InvalidInput`; a self-pairing quadrature over its
+    budget raises `IntegrationFailed` and field recovery `FieldsFailed`.
+    """
+    resolved = ModalBasisInput(
+        stack, wavelength_m, polarisation, window, degeneracy_gap_rad_per_m, self_pairing_rtol
+    ).resolve()
+    native = _native.modal_basis(resolved.to_json())
+    basis = ModalBasis.from_dict(json.loads(native.record_json()))
+    object.__setattr__(basis, "_native", native)
+    return basis
+
+
+def basis_pairing(
+    first: ModalBasis, second: ModalBasis, origins_m: tuple[float, float] = (0.0, 0.0)
+) -> BasisPairing:
+    """Both pairing matrices between two modal bases at one wavelength.
+
+    `origins_m` places each stack's first interface in a common frame; the
+    walls must then coincide in kind and position (materials may differ).
+    Otherwise, or at different wavelengths, `InvalidInput`; a quadrature over
+    its budget raises `IntegrationFailed` and field recovery `FieldsFailed`.
+    """
+    text = _native.basis_pairing(first._solver(), second._solver(), _origins(origins_m))
+    return BasisPairing.from_dict(json.loads(text))

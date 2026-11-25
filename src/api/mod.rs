@@ -16,14 +16,17 @@
 //!     let _ = problem.domain(input); // an explicit AnalyticAssumption is required
 //! }
 //! ```
+mod basis;
 mod coupling;
 mod derivatives;
 mod diagnostic;
 mod fields;
 mod group;
 mod guided;
+mod integration;
 mod normalization;
 mod overlap;
+mod pairing;
 mod power;
 mod profile;
 mod projection;
@@ -32,6 +35,7 @@ mod qnm_poles;
 mod qnm_scattering;
 mod sensitivity;
 mod tracking;
+pub use basis::*;
 pub use coupling::*;
 pub use derivatives::*;
 pub use fields::*;
@@ -39,6 +43,7 @@ pub use group::*;
 pub use guided::*;
 pub use normalization::*;
 pub use overlap::*;
+pub use pairing::*;
 pub use power::*;
 pub use profile::*;
 pub use projection::*;

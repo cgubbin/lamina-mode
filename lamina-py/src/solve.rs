@@ -79,7 +79,7 @@ pub(crate) fn c2(z: Complex) -> C2 {
     [z.re, z.im]
 }
 
-fn finite_positive(name: &str, v: f64) -> Result<f64, Failure> {
+pub(crate) fn finite_positive(name: &str, v: f64) -> Result<f64, Failure> {
     if v.is_finite() && v > 0. {
         Ok(v)
     } else {
@@ -93,7 +93,40 @@ fn finite_positive(name: &str, v: f64) -> Result<f64, Failure> {
 /// one canonical form.
 pub fn normalise(mut input: rec::GuidedInput) -> Result<rec::GuidedInput, Failure> {
     rec::check_identity(&input).map_err(Failure::Invalid)?;
-    let wavelength = input.request.wavelength_m;
+    normalise_stack(&mut input.stack, input.request.wavelength_m)?;
+    let r = &mut input.request;
+    finite_positive("wavelength_m", r.wavelength_m)?;
+    finite_positive("cutoff_margin_rad_per_m", r.cutoff_margin_rad_per_m)?;
+    finite_positive("phase_tolerance", r.phase_tolerance)?;
+    let [lo, hi] = r.abs_beta_rad_per_m;
+    if !(lo.is_finite() && hi.is_finite() && lo >= 0. && lo < hi) {
+        return Err(Failure::Invalid(format!(
+            "abs_beta_rad_per_m must satisfy 0 <= low < high, got [{lo}, {hi}]"
+        )));
+    }
+    // Adding +0.0 maps -0.0 to +0.0 and leaves every other value unchanged.
+    r.abs_beta_rad_per_m = [lo + 0., hi + 0.];
+    let f = &r.refinement;
+    let tolerances = [
+        f.residual_atol,
+        f.residual_rtol,
+        f.native_atol,
+        f.native_rtol,
+    ];
+    if !tolerances.iter().all(|t| t.is_finite() && *t >= 0.)
+        || f.residual_atol + f.residual_rtol <= 0.
+    {
+        return Err(Failure::Invalid(
+            "refinement tolerances must be finite and non-negative, with a positive residual limit"
+                .into(),
+        ));
+    }
+    Ok(input)
+}
+
+/// Validate a stack at `wavelength` and normalise the signed zeros of its
+/// wall positions.
+pub(crate) fn normalise_stack(stack: &mut rec::Stack, wavelength: f64) -> Result<(), Failure> {
     let material = |name: &str, m: &rec::Material| -> Result<(), Failure> {
         match m {
             rec::Material::Constant(c) => {
@@ -137,17 +170,16 @@ pub fn normalise(mut input: rec::GuidedInput) -> Result<rec::GuidedInput, Failur
         }
         Ok(())
     };
-    material("left exterior", &input.stack.left)?;
-    material("right exterior", &input.stack.right)?;
-    for (i, layer) in input.stack.layers.iter().enumerate() {
+    material("left exterior", &stack.left)?;
+    material("right exterior", &stack.right)?;
+    for (i, layer) in stack.layers.iter().enumerate() {
         material(&format!("layer {i}"), &layer.material)?;
         finite_positive(&format!("layer {i} thickness_m"), layer.thickness_m)?;
     }
     // Walls lie on or outside the outermost interface of their side: z ≤ 0
     // on the left, z ≥ L on the right, with L summed left to right as in
     // `Stack.interfaces_m`.
-    let length = total_m(&input.stack);
-    let stack = &mut input.stack;
+    let length = total_m(stack);
     for (side, termination, interface) in [
         ("left", &mut stack.left_termination, 0.),
         ("right", &mut stack.right_termination, length),
@@ -167,34 +199,7 @@ pub fn normalise(mut input: rec::GuidedInput) -> Result<rec::GuidedInput, Failur
             *z_m += 0.;
         }
     }
-    let r = &mut input.request;
-    finite_positive("wavelength_m", r.wavelength_m)?;
-    finite_positive("cutoff_margin_rad_per_m", r.cutoff_margin_rad_per_m)?;
-    finite_positive("phase_tolerance", r.phase_tolerance)?;
-    let [lo, hi] = r.abs_beta_rad_per_m;
-    if !(lo.is_finite() && hi.is_finite() && lo >= 0. && lo < hi) {
-        return Err(Failure::Invalid(format!(
-            "abs_beta_rad_per_m must satisfy 0 <= low < high, got [{lo}, {hi}]"
-        )));
-    }
-    // Adding +0.0 maps -0.0 to +0.0 and leaves every other value unchanged.
-    r.abs_beta_rad_per_m = [lo + 0., hi + 0.];
-    let f = &r.refinement;
-    let tolerances = [
-        f.residual_atol,
-        f.residual_rtol,
-        f.native_atol,
-        f.native_rtol,
-    ];
-    if !tolerances.iter().all(|t| t.is_finite() && *t >= 0.)
-        || f.residual_atol + f.residual_rtol <= 0.
-    {
-        return Err(Failure::Invalid(
-            "refinement tolerances must be finite and non-negative, with a positive residual limit"
-                .into(),
-        ));
-    }
-    Ok(input)
+    Ok(())
 }
 
 fn handle(m: &rec::Material) -> Result<AnalyticalMaterialHandle<Complex>, Failure> {
@@ -245,7 +250,7 @@ fn walls(spec: &rec::Stack) -> [Option<(Wall<f64>, f64)>; 2] {
     ]
 }
 
-fn stack(spec: &rec::Stack) -> Result<AnalyticalMaterialStack<Complex>, Failure> {
+pub(crate) fn stack(spec: &rec::Stack) -> Result<AnalyticalMaterialStack<Complex>, Failure> {
     let mut builder = StackBuilder::new(handle(&spec.left)?, handle(&spec.right)?);
     for layer in &spec.layers {
         builder = builder.layer(
