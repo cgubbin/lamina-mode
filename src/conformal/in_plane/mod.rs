@@ -243,6 +243,10 @@ pub struct ComplexInPlaneMap<A: ScalarAlgebra> {
 
     // Sides that carry an exterior wavevector; a side closed by a wall or a PML has none.
     open: [bool; 2],
+
+    // √s per side for an exterior whose wavevector is κ = √s κ_χ, with
+    // s = t/n of the polarisation's channel; absent when s = 1.
+    root_scales: [Option<A::Scalar>; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -297,12 +301,20 @@ where
             s: A::lift_constant(arr0(s)),
             branch_roots,
             open: [true; 2],
+            root_scales: [None; 2],
         })
     }
 
     /// Report exterior wavevectors for the `open` sides only, left then right.
     pub(crate) fn with_open_sides(mut self, open: [bool; 2]) -> Self {
         self.open = open;
+        self
+    }
+
+    /// Scale each side's exterior wavevector by the principal `√s`, for
+    /// `κ² = s (χ k0² − kx²)`. The branch points, at `kx² = χ k0²`, do not move.
+    pub(crate) fn with_exterior_scales(mut self, scales: [Option<A::Scalar>; 2]) -> Self {
+        self.root_scales = scales.map(|s| s.map(|s| s.sqrt()));
         self
     }
 
@@ -466,6 +478,13 @@ where
         let kappa_left = exp_z.subtract(&r_exp_minus_z).multiply(&self.k0).scale(i);
 
         let kappa_right = exp_z.add(&r_exp_minus_z).multiply(&self.k0).scale(i);
+
+        let scaled = |kappa: A, root: Option<A::Scalar>| match root {
+            Some(root) => kappa.scale(root),
+            None => kappa,
+        };
+        let kappa_left = scaled(kappa_left, self.root_scales[0]);
+        let kappa_right = scaled(kappa_right, self.root_scales[1]);
 
         ConformalPoint::new(
             CanonicalCoordinates::new(self.k0.clone(), kx),

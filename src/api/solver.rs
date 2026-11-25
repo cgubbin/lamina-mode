@@ -4,8 +4,8 @@ use crate::{
     problem as p,
 };
 use lamina_core::{
-    AnalyticalMaterialHandle, AnalyticalMaterialStack, Backend, ComplexPlane, Layer,
-    PlaneWaveDeterminant, Polarisation, ProjectPlaneWaveModeDeterminant, Scatter2,
+    Backend, ComplexPlane, Layer, PlaneWaveDeterminant, Polarisation,
+    ProjectPlaneWaveModeDeterminant, Scatter2,
 };
 use std::sync::Arc;
 type J = p::J;
@@ -149,7 +149,7 @@ common_problem!(ConformalSpectralProblem, Conformal);
 common_problem!(FrequencyProblem, Frequency);
 impl PropagationProblem {
     pub fn new(
-        stack: AnalyticalMaterialStack<Complex>,
+        stack: impl Into<ModeStack>,
         fixed_k0: f64,
         pol: Polarisation,
     ) -> Result<Self, Diagnostic> {
@@ -158,7 +158,7 @@ impl PropagationProblem {
 }
 impl FrequencyProblem {
     pub fn new(
-        stack: AnalyticalMaterialStack<Complex>,
+        stack: impl Into<ModeStack>,
         fixed_beta: f64,
         pol: Polarisation,
     ) -> Result<Self, Diagnostic> {
@@ -169,7 +169,7 @@ impl ConformalSpectralProblem {
     pub fn new(
         left: ConstantExterior,
         right: ConstantExterior,
-        layers: impl IntoIterator<Item = Layer<AnalyticalMaterialHandle<Complex>, f64>>,
+        layers: impl IntoIterator<Item = Layer<impl Into<Region>, f64>>,
         fixed_beta: f64,
         pol: Polarisation,
     ) -> Result<Self, Diagnostic> {
@@ -226,7 +226,7 @@ where
     E: ProjectPlaneWaveModeDeterminant<Determinant = PlaneWaveDeterminant<J>>,
 {
     pub fn with_backend(
-        stack: AnalyticalMaterialStack<Complex>,
+        stack: impl Into<ModeStack>,
         fixed_k0: f64,
         pol: Polarisation,
         backend: B,
@@ -275,7 +275,7 @@ where
     pub fn with_backend(
         left: ConstantExterior,
         right: ConstantExterior,
-        layers: impl IntoIterator<Item = Layer<AnalyticalMaterialHandle<Complex>, f64>>,
+        layers: impl IntoIterator<Item = Layer<impl Into<Region>, f64>>,
         fixed_beta: f64,
         pol: Polarisation,
         backend: B,
@@ -305,7 +305,7 @@ where
     E: ProjectPlaneWaveModeDeterminant<Determinant = PlaneWaveDeterminant<J>>,
 {
     pub fn with_backend(
-        stack: AnalyticalMaterialStack<Complex>,
+        stack: impl Into<ModeStack>,
         fixed_beta: f64,
         pol: Polarisation,
         backend: B,

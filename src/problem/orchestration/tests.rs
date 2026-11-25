@@ -114,7 +114,7 @@ fn canonical_plans_match_existing_geometry_and_record_exclusions() {
     let p = SpectralProblem::spectral(
         exterior(1.0),
         exterior(2.25),
-        [],
+        [] as [lamina_core::Layer<crate::problem::Region, f64>; 0],
         1.5,
         Polarisation::TransverseMagnetic,
         Scatter2::new(),
@@ -161,7 +161,7 @@ fn degenerate_canonical_geometry_keeps_typed_cause_and_accepts_explicit_plans() 
         let p = SpectralProblem::spectral(
             exterior(1.0),
             exterior(1.0),
-            [],
+            [] as [lamina_core::Layer<crate::problem::Region, f64>; 0],
             fixed,
             Polarisation::TransverseElectric,
             Scatter2::new(),
@@ -214,11 +214,7 @@ fn degenerate_canonical_geometry_keeps_typed_cause_and_accepts_explicit_plans() 
         CanonicalPlanError::Geometry(InPlaneSearchError::SymmetricExterior)
     ));
     let lossy = ConstantExterior::new(C::new(1.0, 0.1), c(1.0)).unwrap();
-    let stack = Stack::builder(
-        AnalyticalMaterialHandle::new(lossy),
-        AnalyticalMaterialHandle::new(exterior(2.25)),
-    )
-    .finalise();
+    let stack = Stack::builder(lossy.region(), exterior(2.25).region()).finalise();
     let p = InPlaneProblem::in_plane(
         stack,
         2.0,
@@ -816,7 +812,7 @@ fn overlapping_physical_te_tm_guided_and_normal_spectral_roots() {
             exterior(1.0),
             exterior(1.0),
             [Layer::new(
-                AnalyticalMaterialHandle::new(Constant::dielectric(4.0)),
+                lamina_core::AnalyticalMaterialHandle::new(Constant::dielectric(4.0)),
                 lamina_core::units::Length::centimetres(thickness),
             )],
             0.0,
@@ -898,7 +894,7 @@ fn canonical_spectral_lower_upper_keep_physical_te_tm_evidence() {
             exterior(1.0),
             exterior(2.25),
             [Layer::new(
-                AnalyticalMaterialHandle::new(Constant::dielectric(4.0)),
+                lamina_core::AnalyticalMaterialHandle::new(Constant::dielectric(4.0)),
                 lamina_core::units::Length::centimetres(0.3),
             )],
             1.5,

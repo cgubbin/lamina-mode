@@ -1,7 +1,6 @@
 //! Centered local design derivatives of a tracked QNM reconstruction.
 
 use super::*;
-use lamina_core::AnalyticalMaterialStack;
 
 type Matrix = [[Complex; 2]; 2];
 
@@ -78,9 +77,9 @@ pub struct QnmDesignSensitivity {
 /// Build a centered design derivative from a reconciled base and a parameterized
 /// stack. The parameter offset is relative to the base geometry. The two
 /// exterior materials and the transverse channel reference convention are fixed.
-pub fn differentiate_qnm_design(
+pub fn differentiate_qnm_design<S: Into<ModeStack>>(
     source: &QnmPoleSet,
-    stack_at_offset: impl Fn(f64) -> AnalyticalMaterialStack<Complex>,
+    stack_at_offset: impl Fn(f64) -> S,
     settings: QnmDesignSettings,
 ) -> Result<QnmDesignSensitivity, QnmDesignError> {
     use QnmDesignError::*;

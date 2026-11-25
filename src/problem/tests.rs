@@ -1,9 +1,9 @@
 use super::*;
 use lamina_core::{
-    CanonicalCoordinates, ComplexScalar, Constant, DerivativeOrder, DeterminantEvaluationError,
-    DifferentiableMaterial, DifferentiableMeromorphicMaterial, EvaluateMeromorphicMaterial,
-    ExteriorWavevectors, Material, MeromorphicMaterial, Sampled, Scalar, ScalarAlgebra, Scatter2,
-    SeedJet,
+    AnalyticalMaterialHandle, AnalyticalMaterialStack, CanonicalCoordinates, ComplexScalar,
+    Constant, DerivativeOrder, DeterminantEvaluationError, DifferentiableMaterial,
+    DifferentiableMeromorphicMaterial, EvaluateMeromorphicMaterial, ExteriorWavevectors, Material,
+    MeromorphicMaterial, Sampled, Scalar, ScalarAlgebra, Scatter2, SeedJet,
 };
 use lamina_units::Length;
 use ndarray::arr0;
@@ -242,34 +242,36 @@ fn in_plane_uses_stack_exteriors_at_fixed_spectral_point() {
 fn complex_constant_material_preserves_individual_factors_and_zero_derivatives() {
     let e = C::new(2.0, 0.2);
     let m = C::new(1.3, -0.1);
-    let material = ConstantExterior::new(e, m).unwrap();
+    use material::Principal::{Diagonal, Isotropic};
+    let isotropic = ConstantExterior::new(e, m).unwrap().region();
+    let diagonal = ConstantExterior::diagonal([e, 2.0 * e, 3.0 * e], [m, 2.0 * m, 3.0 * m])
+        .unwrap()
+        .region();
+    assert_eq!(diagonal.class(), lamina_core::ConstitutiveClass::Diagonal);
+    let region = lamina_core::StackRegion::LeftExterior;
     for k in [c(2.0), C::new(1.0, 0.4)] {
-        assert_eq!(material.relative_permittivity::<_, C>(Scalar(k.re)), e);
-        assert_eq!(material.relative_permeability::<_, C>(Scalar(k.re)), m);
-        assert_eq!(material.relative_permittivity_complex::<_, C>(Scalar(k)), e);
-        assert_eq!(material.relative_permeability_complex::<_, C>(Scalar(k)), m);
-        for order in [DerivativeOrder::First, DerivativeOrder::Second] {
-            assert_eq!(
-                material.relative_permittivity_derivative::<_, C>(Scalar(k.re), order),
-                c(0.0)
-            );
-            assert_eq!(
-                material.relative_permeability_derivative::<_, C>(Scalar(k.re), order),
-                c(0.0)
-            );
-            assert_eq!(
-                material.relative_permittivity_complex_derivative::<_, C>(Scalar(k), order),
-                c(0.0)
-            );
-            assert_eq!(
-                material.relative_permeability_complex_derivative::<_, C>(Scalar(k), order),
-                c(0.0)
-            );
-        }
+        let handle = isotropic.scalar().unwrap();
+        assert_eq!(handle.evaluate_relative_permittivity_complex(Scalar(k)), e);
+        assert_eq!(handle.evaluate_relative_permeability_complex(Scalar(k)), m);
+        assert_eq!(
+            material::tensors_and_rates(region, &isotropic, k).unwrap(),
+            [[Isotropic(e), Isotropic(m)], [Isotropic(c(0.0)); 2]]
+        );
+        assert_eq!(
+            material::tensors_and_rates(region, &diagonal, k).unwrap(),
+            [
+                [
+                    Diagonal([e, 2.0 * e, 3.0 * e]),
+                    Diagonal([m, 2.0 * m, 3.0 * m])
+                ],
+                [Diagonal([c(0.0); 3]); 2]
+            ]
+        );
     }
     for invalid in [c(0.0), c(f64::NAN), C::new(1.0, f64::INFINITY)] {
         assert!(ConstantExterior::new(invalid, m).is_err());
         assert!(ConstantExterior::new(e, invalid).is_err());
+        assert!(ConstantExterior::diagonal([e, e, invalid], [m; 3]).is_err());
     }
 }
 #[test]
@@ -301,14 +303,14 @@ fn spectral_keeps_dispersive_layers_and_shared_complex_exterior_materials() {
             )
             .unwrap();
         let k = C::new(1.7, 0.3);
-        let l = p.context().stack().left_exterior();
+        let l = p.context().stack().left_exterior().scalar().unwrap();
         assert_eq!(
             l.evaluate_relative_permittivity_complex(Scalar(k)),
-            left.epsilon()
+            left.epsilon()[0]
         );
         assert_eq!(
             l.evaluate_relative_permeability_complex(Scalar(k)),
-            left.mu()
+            left.mu()[0]
         );
         compare(&p, &d, C::new(0.05, 0.4));
     }
@@ -317,7 +319,7 @@ fn spectral_keeps_dispersive_layers_and_shared_complex_exterior_materials() {
             SpectralProblem::spectral(
                 exterior(1.0),
                 exterior(2.25),
-                [],
+                [] as [lamina_core::Layer<crate::problem::Region, f64>; 0],
                 fixed,
                 Polarisation::TransverseElectric,
                 Scatter2::new()
@@ -737,6 +739,7 @@ where
             point.exterior_wavevectors().right().unwrap(),
         ),
     ] {
+        let material = material.scalar().unwrap();
         let chi = material.evaluate_relative_permittivity_complex(Scalar(k0))
             * material.evaluate_relative_permeability_complex(Scalar(k0));
         assert!((kappa.value()[()].powi(2) + kp * kp - chi * k0 * k0).norm() < 1e-9);
@@ -826,7 +829,7 @@ fn chart_and_spectral_construction_keep_original_causes() {
     let error = SpectralProblem::spectral(
         tiny,
         exterior(1.0),
-        [],
+        [] as [lamina_core::Layer<crate::problem::Region, f64>; 0],
         1.5,
         Polarisation::TransverseElectric,
         Scatter2::new(),
@@ -1099,4 +1102,72 @@ fn refinement_preserves_opposite_coordinate_sheet() {
         root.provenance().reference_coordinate(),
         d.provenance().reference_coordinate()
     );
+}
+#[test]
+fn diagonal_exteriors_scale_kappa_and_keep_branch_points_at_their_lines() {
+    use crate::conformal::RawConformalMap;
+    let k0 = 2.0;
+    let left =
+        ConstantExterior::diagonal([c(2.0), c(2.5), c(3.0)], [c(1.1), c(1.0), c(0.8)]).unwrap();
+    let right =
+        ConstantExterior::diagonal([c(1.5), c(1.2), c(1.0)], [c(1.0), c(1.3), c(1.2)]).unwrap();
+    let core = || {
+        Layer::new(
+            Region::from(AnalyticalMaterialHandle::new(Constant::dielectric(4.0))),
+            Length::centimetres(0.3),
+        )
+    };
+    for pol in [
+        Polarisation::TransverseElectric,
+        Polarisation::TransverseMagnetic,
+    ] {
+        let channels = [left.channel(pol), right.channel(pol)];
+        assert!(channels.iter().all(|c| c.scale().is_some()));
+        let stack = Stack::builder(left.region(), right.region())
+            .layer(core().into_parts().0, Length::centimetres(0.3))
+            .finalise();
+        let in_plane = InPlaneProblem::in_plane(stack, k0, pol, Scatter2::new()).unwrap();
+        let spectral =
+            SpectralProblem::spectral(left, right, [core()], 3.0, pol, Scatter2::new()).unwrap();
+        // κ² = s (χ k0² − kx²) on each side, wherever the charts map.
+        for z in [C::new(0.3, 0.1), C::new(-0.2, 0.4), C::new(0.7, -0.3)] {
+            let z = J::lift_constant(arr0(z));
+            for point in [
+                in_plane.map.map_raw(z.clone()),
+                spectral.map.map_raw(z.clone()),
+            ] {
+                let k = point.coordinates().vacuum_angular_wavenumber().value()[()];
+                let b = point.coordinates().parallel_angular_wavenumber().value()[()];
+                let exterior = point.exterior_wavevectors();
+                for (kappa, channel) in [exterior.left(), exterior.right()]
+                    .into_iter()
+                    .zip(channels)
+                {
+                    let kappa = kappa.unwrap().value()[()];
+                    let expected = channel.kappa_squared(k, b);
+                    assert!((kappa * kappa - expected).norm() < 1e-12 * expected.norm().max(1.0));
+                }
+            }
+        }
+        // The guided sheet: real β above both lines decays on both sides, and
+        // the outer line, where one κ vanishes, is a branch point of the chart.
+        let lines = channels.map(|c| k0 * c.chi().re.sqrt());
+        let (outer, inner) = if lines[0] > lines[1] { (0, 1) } else { (1, 0) };
+        for beta in [lines[outer] * 1.3, lines[outer]] {
+            let alpha = |line: f64| (beta * beta - line * line).sqrt();
+            let z = ((alpha(lines[0]) + alpha(lines[1])) / (2.0 * k0)).ln();
+            let point = in_plane.map.map_raw(J::lift_constant(arr0(c(z))));
+            let b = point.coordinates().parallel_angular_wavenumber().value()[()];
+            assert!((b - beta).norm() < 1e-12 * beta);
+            let exterior = point.exterior_wavevectors();
+            let kappa = [exterior.left(), exterior.right()].map(|k| k.unwrap().value()[()]);
+            let s = channels[inner].scale().unwrap().re;
+            assert!((kappa[inner] - C::new(0.0, s.sqrt() * alpha(lines[inner]))).norm() < 1e-12);
+            if beta == lines[outer] {
+                assert!(kappa[outer].norm() < 1e-6);
+            } else {
+                assert!(kappa[outer].im > 0.0 && kappa[outer].re.abs() < 1e-12);
+            }
+        }
+    }
 }

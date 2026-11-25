@@ -158,10 +158,7 @@ fn rescaled(d: &Direction, unit: &str, factor: f64) -> Result<GuidedPerturbation
         p.wavelength_rate() * factor,
         p.regional_rates()
             .iter()
-            .map(|r| ConstitutiveRate {
-                relative_permittivity: r.relative_permittivity * factor,
-                relative_permeability: r.relative_permeability * factor,
-            })
+            .map(|r| r.scaled(factor))
             .collect(),
     )
     .map_err(|e| Failure::Invalid(format!("parameter direction: {e:?}")))

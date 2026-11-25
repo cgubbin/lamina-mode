@@ -1,8 +1,9 @@
 //! Real-anchor radiation verification, separate from the coordinate square root.
 //! The anchor must be strictly inside the requested chart. Verification establishes
 //! the selected analytic continuation, not material analyticity or global coverage.
+use super::material::{Channel, exterior_channels};
 use super::*;
-use lamina_core::{EvaluateMeromorphicMaterial, ScalarAlgebra};
+use lamina_core::ScalarAlgebra;
 use ndarray::arr0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,7 +88,7 @@ pub enum RadiationReferenceError<E: std::error::Error + 'static> {
         "radiation reference must be finite, real in physical coordinates, and strictly inside the requested chart with k0>0"
     )]
     InvalidReference,
-    #[error("exterior {side} requires positive real epsilon and mu=1")]
+    #[error("exterior {side} requires an isotropic channel with positive real epsilon and mu=1")]
     UnsupportedMaterial { side: usize },
     #[error("exterior {side} is within the cutoff boundary band")]
     Cutoff { side: usize },
@@ -101,16 +102,6 @@ pub enum RadiationReferenceError<E: std::error::Error + 'static> {
     NonFinite,
     #[error("radiation chart construction failed: {0}")]
     Chart(#[source] ConformalChartError<E>),
-}
-/// Actual bound material values, never supplied independently by a caller.
-pub(super) fn exterior_factors(stack: &AnalyticalMaterialStack<C>, k0: C) -> [(C, C); 2] {
-    let k = lamina_core::Scalar(k0);
-    [stack.left_exterior(), stack.right_exterior()].map(|m| {
-        (
-            m.evaluate_relative_permittivity_complex(k),
-            m.evaluate_relative_permeability_complex(k),
-        )
-    })
 }
 pub(super) fn positive_dielectric(e: C, m: C) -> bool {
     e.re.is_finite() && e.im == 0.0 && e.re > 0.0 && m == C::new(1.0, 0.0)
@@ -162,8 +153,10 @@ where
         if reference.choices.map(|c| c.is_some()) != self.context.open_sides() {
             return Err(Err::InvalidReference);
         }
-        let factors = exterior_factors(&self.context.stack, C::new(k0, 0.0));
-        let expected = anchor_wavevectors(factors, k0, beta, reference.choices, tol)?;
+        let pol = self.context.polarisation;
+        let channels = exterior_channels(&self.context.stack, C::new(k0, 0.0), pol)
+            .map_err(|_| Err::NonFinite)?;
+        let expected = anchor_wavevectors(channels, pol, k0, beta, reference.choices, tol)?;
         let mut domain = self
             .domain(
                 requested,
@@ -224,7 +217,7 @@ where
             reference,
             k0,
             beta,
-            epsilon: factors.map(|(e, _)| e.re),
+            epsilon: channels.map(|c| c.factors(pol).0.re),
             observed,
         });
         Ok(domain)
@@ -234,7 +227,8 @@ where
 /// The exterior wavevector each open side's choice selects at a real anchor;
 /// a closed side, with no choice, has none.
 fn anchor_wavevectors<E: std::error::Error + 'static>(
-    factors: [(C, C); 2],
+    channels: [Channel; 2],
+    pol: Polarisation,
     k0: f64,
     beta: f64,
     choices: [Option<RadiationChoice>; 2],
@@ -242,12 +236,13 @@ fn anchor_wavevectors<E: std::error::Error + 'static>(
 ) -> Result<[Option<C>; 2], RadiationReferenceError<E>> {
     use RadiationReferenceError as Err;
     let mut selected = [None; 2];
-    for (side, ((e, m), choice)) in factors.into_iter().zip(choices).enumerate() {
+    for (side, (channel, choice)) in channels.into_iter().zip(choices).enumerate() {
         let Some(choice) = choice else { continue };
-        if !finite(e) || !finite(m) {
+        let (e, m) = channel.factors(pol);
+        if !channel.entries().into_iter().all(finite) {
             return Err(Err::NonFinite);
         }
-        if !positive_dielectric(e, m) {
+        if channel.scale().is_some() || !positive_dielectric(e, m) {
             return Err(Err::UnsupportedMaterial { side });
         }
         let q = e.re * k0 * k0 - beta * beta;
@@ -292,9 +287,11 @@ pub(super) fn frequency_reference(
     if !k0.is_finite() || k0 <= 0.0 || !beta.is_finite() {
         return Err(Err::InvalidReference);
     }
-    let factors = exterior_factors(&context.stack, C::new(k0, 0.0));
+    let pol = context.polarisation;
+    let channels =
+        exterior_channels(&context.stack, C::new(k0, 0.0), pol).map_err(|_| Err::NonFinite)?;
     let choices = choices.map(Some);
-    let observed = anchor_wavevectors(factors, k0, beta, choices, tolerance)?;
+    let observed = anchor_wavevectors(channels, pol, k0, beta, choices, tolerance)?;
     Ok(VerifiedRadiationReference {
         reference: RadiationReference {
             z: C::new(k0, 0.0),
@@ -304,7 +301,7 @@ pub(super) fn frequency_reference(
         },
         k0,
         beta,
-        epsilon: factors.map(|v| v.0.re),
+        epsilon: channels.map(|c| c.factors(pol).0.re),
         observed,
     })
 }

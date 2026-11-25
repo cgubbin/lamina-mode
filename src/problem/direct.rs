@@ -28,6 +28,8 @@ pub enum DirectChartError {
          outside the representable range"
     )]
     PmlScale { side: StackSide, log_magnitude: i64 },
+    #[error(transparent)]
+    Constitutive(#[from] ConstitutiveError),
 }
 
 /// Largest accepted magnitude of the log-scale of the characteristic. The
@@ -44,11 +46,12 @@ const PML_SCALE_SAMPLES: usize = 256;
 /// lies on the boundary, sampled here, and the least is at least Σ −Im(κ_ref τ).
 /// The refusal names the side with the largest share.
 fn check_pml_scale(
-    stack: &AnalyticalMaterialStack<C>,
+    stack: &ModeStack,
+    polarisation: Polarisation,
     k0: f64,
     region: ConformalRegion<f64>,
 ) -> Result<(), DirectChartError> {
-    let pmls = pml_sides(stack, k0);
+    let pmls = pml_sides(stack, polarisation, k0)?;
     let (x0, x1) = region.real_bounds();
     let (y0, y1) = region.imaginary_bounds();
     let corners = [
@@ -66,14 +69,11 @@ fn check_pml_scale(
     let peak = boundary
         .map(|beta| {
             pmls.iter()
-                .map(|&(side, chi, tau)| (side, share(chi, tau, beta)))
+                .map(|pml| (pml.side, pml.share(beta)))
                 .collect::<Vec<_>>()
         })
         .max_by(|a, b| total(a).total_cmp(&total(b)));
-    let lower = pmls
-        .iter()
-        .map(|&(side, chi, tau)| (side, floor(chi, tau)))
-        .collect();
+    let lower = pmls.iter().map(|pml| (pml.side, pml.floor())).collect();
     for shares in peak.into_iter().chain([lower]) {
         let log_scale = total(&shares);
         if let Some(&(side, _)) = shares.iter().max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
@@ -92,47 +92,69 @@ fn check_pml_scale(
     Ok(())
 }
 
-/// Each PML side with its material's κ_ref² = εμk0² and its complex
-/// thickness τ.
-fn pml_sides(stack: &AnalyticalMaterialStack<C>, k0: f64) -> Vec<(StackSide, C, C)> {
-    let factors = radiation::exterior_factors(stack, C::new(k0, 0.0));
-    [StackSide::Left, StackSide::Right]
+/// A PML side: its exterior's channel, with κ² = s (χ k0² − β²), and its
+/// complex thickness τ.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PmlSide {
+    side: StackSide,
+    /// χ k0², the reference κ² before the channel's scale.
+    chi_k0: C,
+    scale: Option<C>,
+    tau: C,
+}
+
+impl PmlSide {
+    /// κ² = s (χ k0² − β²).
+    fn kappa_squared(&self, beta: C) -> C {
+        let q = self.chi_k0 - beta * beta;
+        self.scale.map_or(q, |s| s * q)
+    }
+
+    /// The side's share −Im(κ_ref τ) of the least log-scale, κ_ref = κ(β = 0).
+    fn floor(&self) -> f64 {
+        let reference = self.scale.map_or(self.chi_k0, |s| s * self.chi_k0);
+        -(reference.sqrt() * self.tau).im
+    }
+
+    /// The side's share −Im(κ_ref τ) + |Im(κ τ)| of the log-scale at β.
+    fn share(&self, beta: C) -> f64 {
+        self.floor() + (self.kappa_squared(beta).sqrt() * self.tau).im.abs()
+    }
+}
+
+/// Each PML side of `stack` for `polarisation` at real `k0`.
+pub(crate) fn pml_sides(
+    stack: &ModeStack,
+    polarisation: Polarisation,
+    k0: f64,
+) -> Result<Vec<PmlSide>, ConstitutiveError> {
+    let channels = material::exterior_channels(stack, C::new(k0, 0.0), polarisation)?;
+    Ok([StackSide::Left, StackSide::Right]
         .into_iter()
         .zip(pmls(stack))
-        .zip(factors)
-        .filter_map(|((side, pml), (epsilon, mu))| {
-            pml.map(|(_, tau)| (side, epsilon * mu * k0 * k0, tau))
+        .zip(channels)
+        .filter_map(|((side, pml), channel)| {
+            pml.map(|(_, tau)| PmlSide {
+                side,
+                chi_k0: channel.chi() * k0 * k0,
+                scale: channel.scale(),
+                tau,
+            })
         })
-        .collect()
-}
-
-/// A PML side's share −Im(κ_ref τ) of the least log-scale.
-fn floor(chi: C, tau: C) -> f64 {
-    -(chi.sqrt() * tau).im
-}
-
-/// A PML side's share −Im(κ_ref τ) + |Im(κ τ)| of the log-scale at β.
-fn share(chi: C, tau: C, beta: C) -> f64 {
-    floor(chi, tau) + ((chi - beta * beta).sqrt() * tau).im.abs()
+        .collect())
 }
 
 /// The log-scale Σ [−Im(κ_ref τ) + |Im(κ τ)|] of the characteristic at β:
 /// zero without PMLs.
-pub(crate) fn pml_log_scale(stack: &AnalyticalMaterialStack<C>, k0: f64, beta: C) -> f64 {
-    pml_sides(stack, k0)
-        .iter()
-        .map(|&(_, chi, tau)| share(chi, tau, beta))
-        .sum()
+pub(crate) fn pml_log_scale(sides: &[PmlSide], beta: C) -> f64 {
+    sides.iter().map(|side| side.share(beta)).sum()
 }
 
 /// The least log-scale Σ −Im(κ_ref τ) of the characteristic over every β:
 /// where the PML sides' transfer is of order one, near the rotated
 /// continuum, the characteristic is of order exp of this. Zero without PMLs.
-pub(crate) fn pml_log_floor(stack: &AnalyticalMaterialStack<C>, k0: f64) -> f64 {
-    pml_sides(stack, k0)
-        .iter()
-        .map(|&(_, chi, tau)| floor(chi, tau))
-        .sum()
+pub(crate) fn pml_log_floor(sides: &[PmlSide]) -> f64 {
+    sides.iter().map(PmlSide::floor).sum()
 }
 
 /// A β rectangle in cm^-1 at fixed real k0.
@@ -205,6 +227,7 @@ impl<S: ModeDeterminantSolver<J> + Clone> ModalProblem<ComplexInPlaneMap<J>, S> 
         ))?;
         check_pml_scale(
             &self.context.stack,
+            self.context.polarisation,
             k0,
             *search.dispersion().chart().region(),
         )?;

@@ -34,17 +34,17 @@ use crate::{
 };
 use argloc::{ArgumentConfig, FunctionBundle};
 use lamina_core::{
-    AnalyticalMaterialHandle, AnalyticalMaterialStack, Backend, ComplexPlane, Layer, ModeJet1,
-    Polarisation, Stack, StackCompileError, StackSide, StretchProfile, Termination, WallKind,
+    Backend, ComplexPlane, ConstitutiveError, Layer, ModeJet1, Polarisation, Stack,
+    StackCompileError, StackSide, StretchProfile, Termination, WallKind,
 };
 use lamina_units::Length;
-pub use material::ConstantExterior;
+pub use material::{ConstantExterior, ModeStack, Region};
 use nalgebra::Complex;
 use ndarray::Ix0;
 use std::sync::Arc;
 pub type C = Complex<f64>;
 pub type J = ModeJet1<C, Ix0>;
-pub(crate) type Compiled<B> = CompiledPlaneWaveModeSolver<J, AnalyticalMaterialHandle<C>, B>;
+pub(crate) type Compiled<B> = CompiledPlaneWaveModeSolver<J, Region, B>;
 pub type InPlaneProblem<B> = ModalProblem<ComplexInPlaneMap<J>, Compiled<B>>;
 pub type SpectralProblem<B> = ModalProblem<ComplexWavenumberMap<J>, Compiled<B>>;
 type RegionError<M> = <M as ValidateConformalRegion<f64>>::Error;
@@ -76,12 +76,12 @@ pub enum ReferenceSelection {
 #[derive(Debug)]
 pub struct ProblemContext {
     pub(crate) constants: Option<[ConstantExterior; 2]>,
-    stack: AnalyticalMaterialStack<C>,
+    stack: ModeStack,
     polarisation: Polarisation,
     coordinate: SearchCoordinate,
 }
 impl ProblemContext {
-    pub fn stack(&self) -> &AnalyticalMaterialStack<C> {
+    pub fn stack(&self) -> &ModeStack {
         &self.stack
     }
     pub fn polarisation(&self) -> Polarisation {
@@ -195,6 +195,8 @@ pub enum ProblemError {
     ClosedSide,
     #[error("the {side:?} side is closed by a termination that is not supported")]
     UnsupportedTermination { side: StackSide },
+    #[error(transparent)]
+    Constitutive(#[from] ConstitutiveError),
 }
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum ExecutionError<E: std::error::Error + 'static> {
@@ -215,25 +217,35 @@ where
     B: Backend<J, ComplexPlane>,
 {
     pub fn in_plane(
-        stack: AnalyticalMaterialStack<C>,
+        stack: impl Into<ModeStack>,
         fixed_k0: f64,
         polarisation: Polarisation,
         backend: B,
     ) -> Result<Self, ProblemError> {
+        let stack = stack.into();
         if !fixed_k0.is_finite() || fixed_k0 == 0.0 {
             return Err(InPlaneMapError::InvalidWavenumber.into());
         }
         // Only open sides carry a branch: with one open side, both map
-        // constants are that side's material (r = 0).
+        // constants are that side's channel (r = 0).
         check_terminations(&stack)?;
+        material::check_regions(&stack)?;
         let open = open_sides(&stack);
-        let factors = radiation::exterior_factors(&stack, C::new(fixed_k0, 0.0));
-        let [(el, ml), (er, mr)] = match open {
-            [true, false] => [factors[0]; 2],
-            [false, true] => [factors[1]; 2],
-            _ => factors,
+        let channels = material::exterior_channels(&stack, C::new(fixed_k0, 0.0), polarisation)?;
+        let [left, right] = match open {
+            [true, false] => [channels[0]; 2],
+            [false, true] => [channels[1]; 2],
+            _ => channels,
         };
-        let map = ComplexInPlaneMap::new(fixed_k0, el, ml, er, mr)?.with_open_sides(open);
+        let map = ComplexInPlaneMap::new(
+            fixed_k0,
+            left.invariant,
+            left.normal,
+            right.invariant,
+            right.normal,
+        )?
+        .with_open_sides(open)
+        .with_exterior_scales([left.scale(), right.scale()]);
         let solver = Compiled::compile(&stack, backend, polarisation)?;
         Ok(Self {
             context: Arc::new(ProblemContext {
@@ -253,30 +265,30 @@ where
 {
     /// Only constant descriptors can supply exteriors; arbitrary analytical
     /// layers remain dispersive. No full-stack-plus-replacement-constants form.
-    pub fn spectral(
+    pub fn spectral<M: Into<Region>>(
         left: ConstantExterior,
         right: ConstantExterior,
-        layers: impl IntoIterator<Item = Layer<AnalyticalMaterialHandle<C>, f64>>,
+        layers: impl IntoIterator<Item = Layer<M, f64>>,
         fixed_k_parallel: f64,
         polarisation: Polarisation,
         backend: B,
     ) -> Result<Self, ProblemError> {
+        let [l, r] = [left, right].map(|side| side.channel(polarisation));
         let map = ComplexWavenumberMap::new(
             fixed_k_parallel,
-            left.epsilon(),
-            left.mu(),
-            right.epsilon(),
-            right.mu(),
-        )?;
-        let mut builder = Stack::builder(
-            AnalyticalMaterialHandle::new(left),
-            AnalyticalMaterialHandle::new(right),
-        );
+            l.invariant,
+            l.normal,
+            r.invariant,
+            r.normal,
+        )?
+        .with_exterior_scales([l.scale(), r.scale()]);
+        let mut builder = Stack::builder(left.region(), right.region());
         for layer in layers {
             let (material, thickness) = layer.into_parts();
-            builder = builder.layer(material, thickness);
+            builder = builder.layer(material.into(), thickness);
         }
         let stack = builder.finalise();
+        material::check_regions(&stack)?;
         let solver = Compiled::compile(&stack, backend, polarisation)?;
         Ok(Self {
             context: Arc::new(ProblemContext {

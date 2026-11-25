@@ -8,12 +8,13 @@ fn cm(x: f64) -> Length<f64> {
     Length::centimetres(x)
 }
 
-fn walled(kind: WallKind) -> AnalyticalMaterialStack<Complex> {
+fn walled(kind: WallKind) -> ModeStack {
     Stack::from_analytical_materials(Constant::dielectric(2.25), Constant::dielectric(1.0))
         .analytical_layer(Constant::dielectric(4.0), cm(0.6))
         .left_termination(Wall::new(kind, cm(-0.4)))
         .right_termination(Wall::new(kind, cm(1.1)))
         .finalise()
+        .into()
 }
 
 fn request(polarisation: Polarisation) -> ModalBasisRequest {

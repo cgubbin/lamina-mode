@@ -46,7 +46,7 @@ pub struct NormalizedMode<B> {
 impl ModePoint {
     /// Explicit local analytic declaration is required even if the source search
     /// had a declaration. Scalar unit-delta pole convention; not a 3D mode volume.
-    pub fn normalize_with<B: ModalNormalizationBackend + Clone>(
+    pub fn normalize_with<B: ModalNormalizationBackend<Region> + Clone>(
         &self,
         backend: B,
         variable: PoleVariable,
@@ -108,7 +108,7 @@ impl ModePoint {
         })
     }
 }
-impl<B: ModalNormalizationBackend + Clone> NormalizedMode<B> {
+impl<B: ModalNormalizationBackend<Region> + Clone> NormalizedMode<B> {
     /// Sample normalized E/H with one common scale, preserving core positions.
     /// Re-evaluates normalization to detect changes in the retained material.
     pub fn fields(

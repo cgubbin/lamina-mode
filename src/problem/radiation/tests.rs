@@ -77,7 +77,7 @@ fn real_references_verify_open_closed_and_reversed_channels_for_both_maps() {
         let p = SpectralProblem::spectral(
             ext(1.0),
             ext(2.25),
-            [],
+            [] as [lamina_core::Layer<crate::problem::Region, f64>; 0],
             1.5,
             Polarisation::TransverseMagnetic,
             Scatter2::new(),
@@ -108,7 +108,7 @@ fn invalid_references_fail_without_reselecting_a_sheet() {
     let p = SpectralProblem::spectral(
         ext(1.0),
         ext(1.0),
-        [],
+        [] as [lamina_core::Layer<crate::problem::Region, f64>; 0],
         0.0,
         Polarisation::TransverseElectric,
         Scatter2::new(),
@@ -202,7 +202,7 @@ fn invalid_references_fail_without_reselecting_a_sheet() {
         let p = SpectralProblem::spectral(
             ConstantExterior::new(e, m).unwrap(),
             ext(1.0),
-            [],
+            [] as [lamina_core::Layer<crate::problem::Region, f64>; 0],
             0.0,
             Polarisation::TransverseElectric,
             Scatter2::new(),
@@ -216,7 +216,7 @@ fn invalid_references_fail_without_reselecting_a_sheet() {
     let p = SpectralProblem::spectral(
         ext(1.0),
         ext(2.25),
-        [],
+        [] as [lamina_core::Layer<crate::problem::Region, f64>; 0],
         1.5,
         Polarisation::TransverseElectric,
         Scatter2::new(),
@@ -263,7 +263,7 @@ fn anchored_cavity_preserves_reference_through_search_refinement_and_batch() {
             ext(1.0),
             ext(1.0),
             [Layer::new(
-                AnalyticalMaterialHandle::new(Constant::dielectric(4.0)),
+                lamina_core::AnalyticalMaterialHandle::new(Constant::dielectric(4.0)),
                 lamina_core::units::Length::centimetres(d),
             )],
             0.0,
@@ -340,8 +340,15 @@ fn anchored_cavity_preserves_reference_through_search_refinement_and_batch() {
         ] {
             assert_eq!(provenance.radiation(), domain.provenance().radiation());
         }
-        let other =
-            SpectralProblem::spectral(ext(1.0), ext(1.0), [], 0.0, pol, Scatter2::new()).unwrap();
+        let other = SpectralProblem::spectral(
+            ext(1.0),
+            ext(1.0),
+            [] as [lamina_core::Layer<crate::problem::Region, f64>; 0],
+            0.0,
+            pol,
+            Scatter2::new(),
+        )
+        .unwrap();
         assert!(matches!(
             other.evaluate(&domain, z),
             Err(ExecutionError::ForeignDomain)
@@ -369,7 +376,7 @@ fn incoming_frequency_continuation_is_verified_other_not_outgoing() {
         ext(1.0),
         ext(1.0),
         [Layer::new(
-            AnalyticalMaterialHandle::new(Constant::dielectric(4.0)),
+            lamina_core::AnalyticalMaterialHandle::new(Constant::dielectric(4.0)),
             lamina_core::units::Length::centimetres(d),
         )],
         0.0,

@@ -129,7 +129,7 @@ fn complete_norm_predicts_independent_residues_and_invariances() {
         let center = if spectral { sig.k0 } else { sig.k_parallel };
         let radius = center.norm() * 1e-4;
         let provenance = point.provenance();
-        let stack = provenance.stack();
+        let stack = &reference::scalar_stack(provenance.stack());
         let direct =
             reference::contour_residue(stack, sig, spectral, pol, [z[0], z[2]], radius, 128);
         let refined =
@@ -296,7 +296,7 @@ fn check_scattering_contours(residues: &QnmScatteringResidue) {
     let sig = residues.signature;
     let provenance = residues.point.provenance();
     let pol = provenance.polarisation();
-    let stack = provenance.stack();
+    let stack = &reference::scalar_stack(provenance.stack());
     let solver = ComplexPlaneEvaluator::<J, _, _>::compile(stack, Scatter2::new()).unwrap();
     let mut max_error = 0.0_f64;
     for (radius, count) in [(0.03, 64), (0.015, 128)] {

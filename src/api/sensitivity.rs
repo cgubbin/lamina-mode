@@ -1,17 +1,23 @@
 //! Physical parameter directions for guided-mode sensitivities.
 
-use super::Complex;
-use lamina_core::{
-    AnalyticalMaterialStack, DerivativeOrder, EvaluateDifferentiableMeromorphicMaterial,
-    FieldPosition, Scalar,
-};
+use super::{Complex, ModeStack};
+use crate::problem::material::{self, Channel, Principal, Rates, Tensors};
+use lamina_core::FieldPosition;
 
-/// An explicit constitutive rate at fixed vacuum wavelength.
-/// Both relative material properties are dimensionless.
+/// An explicit constitutive rate at fixed vacuum wavelength, in the stack
+/// frame. Both relative material properties are dimensionless.
+///
+/// The rate of the diagonal entry `ε_ii` is `relative_permittivity +
+/// permittivity_entries[i]`, and likewise for μ. A rate whose entry parts
+/// vanish is isotropic.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ConstitutiveRate {
     pub relative_permittivity: f64,
     pub relative_permeability: f64,
+    /// Further rates of the diagonal entries `(xx, yy, zz)` of ε.
+    pub permittivity_entries: [f64; 3],
+    /// Further rates of the diagonal entries `(xx, yy, zz)` of μ.
+    pub permeability_entries: [f64; 3],
 }
 
 /// An invalid physical parameter direction or selector.
@@ -27,6 +33,48 @@ pub enum DirectionError {
 }
 
 impl ConstitutiveRate {
+    /// Rates of the diagonal entries `(xx, yy, zz)` of ε and μ.
+    pub fn diagonal(permittivity: [f64; 3], permeability: [f64; 3]) -> Self {
+        Self {
+            permittivity_entries: permittivity,
+            permeability_entries: permeability,
+            ..Self::default()
+        }
+    }
+
+    /// Every rate multiplied by `factor`.
+    pub fn scaled(&self, factor: f64) -> Self {
+        Self {
+            relative_permittivity: self.relative_permittivity * factor,
+            relative_permeability: self.relative_permeability * factor,
+            permittivity_entries: self.permittivity_entries.map(|r| r * factor),
+            permeability_entries: self.permeability_entries.map(|r| r * factor),
+        }
+    }
+
+    /// `[ε', μ']` in the stack frame.
+    pub(crate) fn tensors(&self) -> Tensors<f64> {
+        let tensor = |isotropic: f64, entries: [f64; 3]| {
+            if entries == [0.0; 3] {
+                Principal::Isotropic(isotropic)
+            } else {
+                Principal::Diagonal(entries.map(|entry| isotropic + entry))
+            }
+        };
+        [
+            tensor(self.relative_permittivity, self.permittivity_entries),
+            tensor(self.relative_permeability, self.permeability_entries),
+        ]
+    }
+
+    fn is_finite(&self) -> bool {
+        [self.relative_permittivity, self.relative_permeability]
+            .iter()
+            .chain(&self.permittivity_entries)
+            .chain(&self.permeability_entries)
+            .all(|v| v.is_finite())
+    }
+
     /// Converts a real index rate to a permittivity rate for a nonmagnetic dielectric.
     pub fn nonmagnetic_index(index: f64, rate: f64) -> Result<Self, DirectionError> {
         let epsilon_rate = 2.0 * index * rate;
@@ -35,7 +83,7 @@ impl ConstitutiveRate {
         }
         Ok(Self {
             relative_permittivity: epsilon_rate,
-            relative_permeability: 0.0,
+            ..Self::default()
         })
     }
 }
@@ -77,9 +125,7 @@ impl GuidedPerturbation {
             || interface_velocities
                 .windows(2)
                 .any(|v| !(v[1] - v[0]).is_finite())
-            || regional_rates.iter().any(|v| {
-                !v.relative_permittivity.is_finite() || !v.relative_permeability.is_finite()
-            })
+            || regional_rates.iter().any(|v| !v.is_finite())
         {
             return Err(DirectionError::InvalidRate);
         }
@@ -137,10 +183,11 @@ impl GuidedPerturbation {
         Ok(rate)
     }
 
-    /// Combines fixed-wavelength rates and dispersion in left-to-right region order.
+    /// Combines fixed-wavelength rates and dispersion in left-to-right region
+    /// order. A tensor region's dispersion enters its entry rates.
     pub fn total_regional_rates(
         &self,
-        stack: &AnalyticalMaterialStack<Complex>,
+        stack: &ModeStack,
         k0: f64,
     ) -> Result<Vec<ConstitutiveRate>, DirectionError> {
         if stack.layers_left_to_right().len() != self.thickness_rates().len() {
@@ -150,37 +197,36 @@ impl GuidedPerturbation {
         if rate == 0.0 {
             return Ok(self.regional_rates.clone());
         }
-        let coordinate = Scalar(Complex::new(k0, 0.0));
-        let order = DerivativeOrder::First;
-        super::power::region_materials(stack)
+        let coordinate = Complex::new(k0, 0.0);
+        material::regions(stack)
             .zip(&self.regional_rates)
-            .map(|(material, explicit)| {
-                let epsilon = material
-                    .evaluate_relative_permittivity_complex_derivative(coordinate, order)
-                    * rate;
-                let mu = material
-                    .evaluate_relative_permeability_complex_derivative(coordinate, order)
-                    * rate;
-                let relative_permittivity = explicit.relative_permittivity + epsilon.re;
-                let relative_permeability = explicit.relative_permeability + mu.re;
-                if [
-                    relative_permittivity,
-                    relative_permeability,
-                    epsilon.im,
-                    mu.im,
-                ]
-                .iter()
-                .any(|v| !v.is_finite())
-                {
+            .map(|((region, material), explicit)| {
+                let [_, dispersion] = material::tensors_and_rates(region, material, coordinate)
+                    .map_err(|_| DirectionError::InvalidRate)?;
+                let [epsilon, mu] = dispersion.map(|t| t.map(|v| v * rate));
+                let mut total = *explicit;
+                match (epsilon, mu) {
+                    (Principal::Isotropic(epsilon), Principal::Isotropic(mu)) => {
+                        total.relative_permittivity += epsilon.re;
+                        total.relative_permeability += mu.re;
+                    }
+                    _ => {
+                        for (axis, (e, m)) in
+                            epsilon.entries().into_iter().zip(mu.entries()).enumerate()
+                        {
+                            total.permittivity_entries[axis] += e.re;
+                            total.permeability_entries[axis] += m.re;
+                        }
+                    }
+                }
+                let seen = epsilon.entries().into_iter().chain(mu.entries());
+                if !total.is_finite() || seen.clone().any(|v| !v.im.is_finite()) {
                     return Err(DirectionError::InvalidRate);
                 }
-                if epsilon.im != 0.0 || mu.im != 0.0 {
+                if seen.into_iter().any(|v| v.im != 0.0) {
                     return Err(DirectionError::LossInducingRate);
                 }
-                Ok(ConstitutiveRate {
-                    relative_permittivity,
-                    relative_permeability,
-                })
+                Ok(total)
             })
             .collect()
     }
@@ -240,7 +286,7 @@ pub struct GuidedBetaSensitivity {
     coordinates: lamina_core::CanonicalCoordinates<DirectionalJet>,
     exterior: lamina_core::ExteriorWavevectors<DirectionalJet>,
     thickness_rates: Vec<f64>,
-    material_rates: Vec<(Complex, Complex)>,
+    material_rates: Vec<Rates>,
 }
 
 type DirectionalJet = lamina_core::ModeJet1<Complex, ndarray::Ix0>;
@@ -311,8 +357,8 @@ impl super::ModePoint {
         slope_settings: super::ImplicitSlopeSettings,
     ) -> Result<GuidedBetaSensitivity, GuidedBetaError> {
         use lamina_core::{
-            CanonicalCoordinates, EvaluateMeromorphicMaterial, ExteriorWavevectors,
-            ModalCharacteristicDirection, ModeJet1, ScalarAlgebra, SeedJet,
+            CanonicalCoordinates, ExteriorWavevectors, ModalCharacteristicDirection, ModeJet1,
+            ScalarAlgebra, SeedJet,
         };
         use ndarray::{Ix0, arr0};
         type J = ModeJet1<Complex, Ix0>;
@@ -353,27 +399,25 @@ impl super::ModePoint {
         let rates = direction
             .total_regional_rates(stack, k.re)
             .map_err(Direction)?;
-        let at = Scalar(Complex::new(k.re, 0.0));
-        let values: Vec<_> = super::power::region_materials(stack)
-            .map(|m| {
-                (
-                    m.evaluate_relative_permittivity_complex(at),
-                    m.evaluate_relative_permeability_complex(at),
-                )
-            })
-            .collect();
-        if values.iter().any(|&(e, m)| {
-            [e, m]
+        let polarisation = provenance.polarisation();
+        let at = Complex::new(k.re, 0.0);
+        let channels = material::regions(stack)
+            .map(|(region, m)| material::tensors(region, m, at))
+            .map(|tensors| tensors.map(|t| Channel::of(&t, polarisation)))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| Ineligible)?;
+        // Only the entries this polarisation sees enter.
+        if channels.iter().any(|c| {
+            c.entries()
                 .iter()
                 .any(|v| !v.re.is_finite() || v.re <= 0.0 || v.im != 0.0)
         }) {
             return Err(Ineligible);
         }
-        let exterior_regions = [0, values.len() - 1];
+        let exterior_regions = [0, channels.len() - 1];
         for (side, (root, &region)) in roots.iter().zip(&exterior_regions).enumerate() {
             let Some(root) = *root else { continue };
-            let (e, m) = values[region];
-            let q = e * m * k * k - beta * beta;
+            let q = channels[region].kappa_squared(k, beta);
             let square = root * root;
             let relative_defect =
                 (square - q).norm() / square.norm().max(q.norm()).max(f64::MIN_POSITIVE);
@@ -395,45 +439,40 @@ impl super::ModePoint {
                     .scale(rate),
             )
         };
-        let coordinate_jets =
-            |k_rate: f64, beta_rate: Complex, constitutive_rates: &[(Complex, Complex)]| {
-                let [left, right] = std::array::from_fn(|side| {
-                    let root = roots[side]?;
-                    let region = exterior_regions[side];
-                    let (e, m) = values[region];
-                    let (de, dm) = constitutive_rates[region];
-                    let q_rate = (de * m + e * dm) * k * k + 2.0 * e * m * k * k_rate
-                        - 2.0 * beta * beta_rate;
-                    Some(seed(root, q_rate / (2.0 * root)))
-                });
-                (
-                    CanonicalCoordinates::new(seed(k, k_rate.into()), seed(beta, beta_rate)),
-                    ExteriorWavevectors::from_options(left, right),
-                )
-            };
-        let evaluate = |k_rate: f64,
-                        beta_rate: f64,
-                        thickness_rates: &[f64],
-                        constitutive_rates: &[(Complex, Complex)]| {
-            let (coordinates, exterior) =
-                coordinate_jets(k_rate, beta_rate.into(), constitutive_rates);
-            backend
-                .directional_characteristic(ModalCharacteristicDirection {
-                    stack,
-                    coordinates: &coordinates,
-                    exterior: &exterior,
-                    polarisation: provenance.polarisation(),
-                    thickness_rates,
-                    constitutive_rates,
-                })
-                .map_err(Evaluation)
+        let coordinate_jets = |k_rate: f64, beta_rate: Complex, constitutive_rates: &[Rates]| {
+            let [left, right] = std::array::from_fn(|side| {
+                let root = roots[side]?;
+                let region = exterior_regions[side];
+                let rate = Channel::of(&constitutive_rates[region].0, polarisation);
+                let q_rate = channels[region].kappa_squared_rate(&rate, k, k_rate, beta, beta_rate);
+                Some(seed(root, q_rate / (2.0 * root)))
+            });
+            (
+                CanonicalCoordinates::new(seed(k, k_rate.into()), seed(beta, beta_rate)),
+                ExteriorWavevectors::from_options(left, right),
+            )
         };
+        let evaluate =
+            |k_rate: f64, beta_rate: f64, thickness_rates: &[f64], constitutive_rates: &[Rates]| {
+                let (coordinates, exterior) =
+                    coordinate_jets(k_rate, beta_rate.into(), constitutive_rates);
+                backend
+                    .directional_characteristic(ModalCharacteristicDirection {
+                        stack,
+                        coordinates: &coordinates,
+                        exterior: &exterior,
+                        polarisation,
+                        thickness_rates,
+                        constitutive_rates,
+                    })
+                    .map_err(Evaluation)
+            };
 
         let beta_jet = evaluate(
             0.0,
             1.0,
             &vec![0.0; stack.len()],
-            &vec![(Complex::ZERO, Complex::ZERO); rates.len()],
+            &vec![Rates::ZERO; rates.len()],
         )?;
         let denominator = beta_jet.first()[()];
         let threshold = slope_settings.denominator_atol
@@ -450,12 +489,7 @@ impl super::ModePoint {
         let thickness_rates: Vec<_> = direction.thickness_rates().collect();
         let material_rates: Vec<_> = rates
             .iter()
-            .map(|rate| {
-                (
-                    rate.relative_permittivity.into(),
-                    rate.relative_permeability.into(),
-                )
-            })
+            .map(|rate| Rates(rate.tensors().map(|t| t.map(Complex::from))))
             .collect();
         let k_rate = direction.k0_rate(k.re).map_err(Direction)?;
         let numerator = evaluate(k_rate, 0.0, &thickness_rates, &material_rates)?.first()[()];
@@ -522,9 +556,7 @@ impl GuidedBetaSensitivity {
         amplitude: Complex,
         mesh_velocities: Option<&[f64]>,
     ) -> Result<Vec<GuidedFieldSample>, GuidedBetaError> {
-        use lamina_core::{
-            EvaluateMeromorphicMaterial, OwnedModeFields, Polarisation, ResolvedLayerPosition,
-        };
+        use lamina_core::{OwnedModeFields, Polarisation, ResolvedLayerPosition};
         fn components(fields: &OwnedModeFields, index: usize) -> [Complex; 6] {
             let fields = fields.quantity();
             let e = fields.electric();
@@ -550,14 +582,10 @@ impl GuidedBetaSensitivity {
             .map_err(|_| GuidedBetaError::Ineligible)?;
         let k = sig.k0;
         let beta = sig.k_parallel;
-        let materials: Vec<_> = super::power::region_materials(stack)
-            .map(|material| {
-                (
-                    material.evaluate_relative_permittivity_complex(Scalar(k)),
-                    material.evaluate_relative_permeability_complex(Scalar(k)),
-                )
-            })
-            .collect();
+        let materials = material::regions(stack)
+            .map(|(region, m)| material::tensors(region, m, k))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| GuidedBetaError::Ineligible)?;
         let fixed_lab = frame == GuidedObservationFrame::FixedLab;
         Ok(recovered
             .fields
@@ -623,28 +651,32 @@ impl GuidedBetaSensitivity {
                     {
                         return Err(GuidedObservationError::MovingInterface { interface });
                     }
-                    let (e, m) = materials[region];
-                    let q = e * m * k * k - beta * beta;
+                    // ∂z of the fields from Maxwell's equations in the region:
+                    // t weights the primary field's normal derivative, n its
+                    // normal field.
+                    let channel = Channel::of(&materials[region], provenance.polarisation());
+                    let (t, n) = (channel.transverse, channel.normal);
+                    let q = channel.kappa_squared(k, beta);
                     let i = Complex::I;
                     let zero = Complex::ZERO;
                     let gradient = match provenance.polarisation() {
                         Polarisation::TransverseElectric => {
-                            let dy = -i * k * m * field[3];
+                            let dy = -i * k * t * field[3];
                             [
                                 zero,
                                 dy,
                                 zero,
-                                -i * q * field[1] / (k * m),
+                                -i * q * field[1] / (k * t),
                                 zero,
-                                beta * dy / (k * m),
+                                beta * dy / (k * n),
                             ]
                         }
                         Polarisation::TransverseMagnetic => {
-                            let dy = i * k * e * field[0];
+                            let dy = i * k * t * field[0];
                             [
-                                i * q * field[4] / (k * e),
+                                i * q * field[4] / (k * t),
                                 zero,
-                                -beta * dy / (k * e),
+                                -beta * dy / (k * n),
                                 zero,
                                 dy,
                                 zero,
@@ -761,7 +793,7 @@ impl GuidedBetaSensitivity {
         let stack = provenance.stack();
         let k = self.coordinates.vacuum_angular_wavenumber().value()[()];
         let beta = self.coordinates.parallel_angular_wavenumber().value()[()];
-        let grid = super::power::ProfileGrid::new(stack, k, beta, 2, 4)
+        let grid = super::power::ProfileGrid::new(stack, provenance.polarisation(), k, beta, 2, 4)
             .map_err(Termination)?
             .ok_or(Quadrature)?;
         let roots = [self.exterior.left(), self.exterior.right()];

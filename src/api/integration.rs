@@ -14,9 +14,10 @@
 //! conjugated product of that medium and the unconjugated pairing as the
 //! contour integral ∫ (E × H) · x̂ s dζ = ∫ (E × H) · x̂ dζ̃.
 use super::*;
+use crate::problem::material::{self, Channel};
 use lamina_core::{
-    AnalyticalMaterialStack, EvaluateMeromorphicMaterial, ExteriorSampling, FieldSampling,
-    LayerSampling, OwnedModeFields, Scalar, StretchProfile, WallKind,
+    ExteriorSampling, FieldSampling, LayerSampling, OwnedModeFields, Polarisation, StackRegion,
+    StretchProfile, WallKind,
 };
 use lamina_units::Length;
 
@@ -77,7 +78,7 @@ pub(super) struct Layout {
 impl Layout {
     /// `None` for a non-finite origin, an unrepresentable interface spacing
     /// or a termination other than a wall or a PML.
-    pub fn new(stack: &AnalyticalMaterialStack<Complex>, origin: f64) -> Option<Self> {
+    pub fn new(stack: &ModeStack, origin: f64) -> Option<Self> {
         if !origin.is_finite() {
             return None;
         }
@@ -228,21 +229,28 @@ const MAX_PML_PIECES: usize = 4096;
 /// complex thickness ζ̃(ζ₂) − ζ̃(ζ₁), shared out among them, is at most the
 /// largest phase |κ| width of an interval outside the PMLs, and at least one
 /// radian: panels then resolve a PML as they resolve the layers and gaps.
-/// Fields there grow or decay as exp(±iκζ̃).
+/// Fields there grow or decay as exp(±iκζ̃), κ² = s (χ k0² − β²) in the
+/// channel each stack's polarisation sees. A region the stacks' solves evaluated cannot
+/// fail here; one that did would add no phase.
 pub(super) fn split_pmls(
     partition: Vec<f64>,
-    stacks: &[(&Layout, &AnalyticalMaterialStack<Complex>)],
+    stacks: &[(&Layout, &ModeStack, Polarisation)],
     k0: f64,
     betas: &[Complex],
 ) -> Vec<f64> {
-    let at = Scalar(Complex::new(k0, 0.0));
-    let kappa = |material: &lamina_core::AnalyticalMaterialHandle<Complex>| {
-        let chi = material.evaluate_relative_permittivity_complex(at)
-            * material.evaluate_relative_permeability_complex(at)
-            * (k0 * k0);
+    let at = Complex::new(k0, 0.0);
+    let kappa = |polarisation, region: StackRegion, material: &Region| {
+        let Ok(tensors) = material::tensors(region, material, at) else {
+            return 0.0;
+        };
+        let channel = Channel::of(&tensors, polarisation);
+        let chi = channel.chi() * (k0 * k0);
         betas
             .iter()
-            .map(|beta| (chi - beta * beta).sqrt().norm())
+            .map(|beta| {
+                let q = chi - beta * beta;
+                channel.scale().map_or(q, |s| s * q).sqrt().norm()
+            })
             .fold(0.0, f64::max)
     };
     // Each interval's phase and whether it lies in a PML.
@@ -251,9 +259,9 @@ pub(super) fn split_pmls(
         .map(|edges| {
             let (left, right) = (edges[0], edges[1]);
             let middle = 0.5 * (left + right);
-            stacks
-                .iter()
-                .fold((0.0_f64, false), |(phase, pml), &(layout, stack)| {
+            stacks.iter().fold(
+                (0.0_f64, false),
+                |(phase, pml), &(layout, stack, polarisation)| {
                     let last = layout.interfaces.len() - 1;
                     let side = if middle < layout.interfaces[0] {
                         Some(0)
@@ -262,28 +270,45 @@ pub(super) fn split_pmls(
                     } else {
                         None
                     };
-                    let exterior = [stack.left_exterior(), stack.right_exterior()];
+                    let exterior = [
+                        (StackRegion::LeftExterior, stack.left_exterior()),
+                        (StackRegion::RightExterior, stack.right_exterior()),
+                    ];
                     let (here, inside) = match side {
                         Some(side) => match layout.pmls[side] {
                             Some(stretch) if (middle - stretch.start) * [-1.0, 1.0][side] > 0.0 => {
                                 let depth = |z: f64| (z - stretch.start).abs();
                                 let length = stretch.stretched(depth(right))
                                     - stretch.stretched(depth(left));
-                                (kappa(exterior[side]) * length.norm(), true)
+                                (
+                                    kappa(polarisation, exterior[side].0, exterior[side].1)
+                                        * length.norm(),
+                                    true,
+                                )
                             }
-                            _ => (kappa(exterior[side]) * (right - left), false),
+                            _ => (
+                                kappa(polarisation, exterior[side].0, exterior[side].1)
+                                    * (right - left),
+                                false,
+                            ),
                         },
                         None => {
                             let index = layout.interfaces.partition_point(|&z| z <= middle);
                             let phase = stack
                                 .layers_left_to_right()
                                 .get(index.saturating_sub(1))
-                                .map_or(0.0, |layer| kappa(layer.material()) * (right - left));
+                                .map_or(0.0, |layer| {
+                                    let region = StackRegion::Layer(
+                                        lamina_core::FiniteLayerIndex::new(index.saturating_sub(1)),
+                                    );
+                                    kappa(polarisation, region, layer.material()) * (right - left)
+                                });
                             (phase, false)
                         }
                     };
                     (phase.max(here), pml || inside)
-                })
+                },
+            )
         })
         .collect();
     let reference = phases

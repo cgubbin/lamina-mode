@@ -70,7 +70,7 @@ pub use crate::problem::frequency::{
     ExteriorReferenceValues, FrequencyDomainInput, FrequencyError, FrequencyEvidence,
     FrequencyExclusion, FrequencyReference, FrequencyRegion,
 };
-pub use crate::problem::material::{ConstantExterior, InvalidConstantExterior};
+pub use crate::problem::material::{ConstantExterior, InvalidConstantExterior, ModeStack, Region};
 pub use crate::problem::orchestration::{
     Ambiguity, BranchSignature, CoverageExclusion, DiscoveryConfig, DuplicateGroup, MatchTolerance,
     PlanError, PlanGeometry, ReconciliationDiagnostic,

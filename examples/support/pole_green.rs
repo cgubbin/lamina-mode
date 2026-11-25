@@ -1,8 +1,25 @@
 //! Independent value-only fundamental-solution Green reference. No production
 //! normalization, determinant derivative or recovered mode fields are used.
 #![allow(dead_code)]
-use lamina_core::{AnalyticalMaterialStack, EvaluateMeromorphicMaterial, Polarisation, Scalar};
-use lamina_mode::{BranchSignature, Complex};
+use lamina_core::{
+    AnalyticalMaterialStack, EvaluateMeromorphicMaterial, Polarisation, Scalar, Stack,
+};
+use lamina_mode::{BranchSignature, Complex, ModeStack, Region};
+/// The scalar stack of a stack of isotropic regions.
+pub fn scalar_stack(stack: &ModeStack) -> AnalyticalMaterialStack<Complex> {
+    let scalar = |r: &Region| r.scalar().expect("an isotropic reference").clone();
+    let mut builder = Stack::builder(
+        scalar(stack.left_exterior()),
+        scalar(stack.right_exterior()),
+    );
+    for layer in stack.layers_left_to_right() {
+        builder = builder.layer(scalar(layer.material()), layer.thickness());
+    }
+    builder
+        .finalise()
+        .with_left_termination(*stack.left_termination())
+        .with_right_termination(*stack.right_termination())
+}
 pub fn c(v: f64) -> Complex {
     Complex::new(v, 0.)
 }

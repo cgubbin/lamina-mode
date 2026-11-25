@@ -1,9 +1,10 @@
 //! Port-resolved scattering residues of normalized planar frequency poles.
 
 use super::*;
+use crate::problem::material;
 use lamina_core::{
-    AnalyticalMaterialStack, EvaluateMeromorphicMaterial, ExteriorSampling, FieldSampling,
-    ModalNormalizationBackend, Polarisation, Scalar,
+    EvaluateMeromorphicMaterial, ExteriorSampling, FieldSampling, ModalNormalizationBackend,
+    Polarisation, Scalar,
 };
 use lamina_units::Length;
 
@@ -45,7 +46,7 @@ pub enum QnmScatteringError {
     Fields(#[from] Box<FieldRecoveryFailure>),
 }
 
-impl<B: ModalNormalizationBackend + Clone> NormalizedMode<B> {
+impl<B: ModalNormalizationBackend<Region> + Clone> NormalizedMode<B> {
     /// Compute the port residues on the accepted exterior sheets. Channel
     /// amplitudes use Ey for TE and Z0 Hy for TM, with exp(−iωt).
     pub fn scattering_residue(&self) -> Result<QnmScatteringResidue, QnmScatteringError> {
@@ -75,20 +76,12 @@ impl<B: ModalNormalizationBackend + Clone> NormalizedMode<B> {
                 fields.magnetic().y(),
             ),
         };
-        let materials = [stack.left_exterior(), stack.right_exterior()];
         let roots = signature.open_exteriors().ok_or(IncompatiblePole)?;
-        let exterior_admittances_per_cm = std::array::from_fn(|i| {
-            let coordinate = Scalar(signature.k0);
-            let factor = match channel_field {
-                QnmChannelField::ElectricY => {
-                    materials[i].evaluate_relative_permeability_complex(coordinate)
-                }
-                QnmChannelField::ImpedanceScaledMagneticY => {
-                    materials[i].evaluate_relative_permittivity_complex(coordinate)
-                }
-            };
-            roots[i] / factor
-        });
+        // The admittance κ/t of each exterior's channel: t = μ_xx (TE), ε_xx (TM).
+        let channels = material::exterior_channels(stack, signature.k0, provenance.polarisation())
+            .map_err(|_| InvalidChannel)?;
+        let exterior_admittances_per_cm =
+            std::array::from_fn(|i| roots[i] / channels[i].transverse);
         // An incident primary amplitude a imposes 2iκa/f in the boundary
         // forcing. The normalized scalar Green residue is ψ_i ψ_j.
         let residue_per_cm = std::array::from_fn(|i| {
@@ -329,8 +322,8 @@ pub fn reconstruct_qnm_scattering_window(
 }
 
 /// Fit the same regular basis with an empty pole set.
-pub fn reconstruct_direct_scattering_window(
-    stack: &AnalyticalMaterialStack<Complex>,
+pub fn reconstruct_direct_scattering_window<S: Clone + Into<ModeStack>>(
+    stack: &S,
     beta_per_cm: f64,
     polarisation: Polarisation,
     channels: QnmConstantChannels,
@@ -338,7 +331,7 @@ pub fn reconstruct_direct_scattering_window(
 ) -> Result<QnmScatteringWindow, QnmWindowError> {
     reconstruct(
         ScatteringReference {
-            stack: stack.clone(),
+            stack: stack.clone().into(),
             beta_per_cm,
             polarisation,
         },
@@ -381,7 +374,7 @@ fn cauchy(nodes: &[(Complex, Complex, ChannelMatrix)], k: f64, stride: usize) ->
 }
 
 struct ScatteringReference {
-    stack: AnalyticalMaterialStack<Complex>,
+    stack: ModeStack,
     beta_per_cm: f64,
     polarisation: Polarisation,
 }
@@ -569,10 +562,7 @@ fn reconstruct(
     {
         return Err(Contour);
     }
-    let materials = [
-        stack.left_exterior().clone(),
-        stack.right_exterior().clone(),
-    ];
+    let materials = material::isotropic_exteriors(&stack).map_err(|_| InvalidInput)?;
     let channels = match exterior_request {
         ExteriorRequest::Constant(parameters) => {
             if parameters

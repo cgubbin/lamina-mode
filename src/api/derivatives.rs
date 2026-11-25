@@ -15,11 +15,11 @@
 //! }
 //! ```
 use super::*;
+use crate::problem::material::{self, Channel};
 use lamina_core::{
-    AnalyticalMaterialHandle, CanonicalCoordinates, DerivativeOrder,
-    EvaluateDifferentiableMeromorphicMaterial, EvaluateMeromorphicMaterial, ExteriorWavevectors,
-    FiniteLayerIndex, ModalDerivativeBackend, ModeJet1, Scalar, ScalarAlgebra, SeedJet, Stack,
-    ValidationConfig, compile_canonical_constant_stack, compile_canonical_thickness_stack,
+    CanonicalCoordinates, ExteriorWavevectors, FiniteLayerIndex, ModalDerivativeBackend, ModeJet1,
+    ScalarAlgebra, SeedJet, StackRegion, ValidationConfig, compile_canonical_constant_stack,
+    compile_canonical_thickness_stack,
 };
 use lamina_units::LengthUnit;
 use ndarray::{Ix0, arr0};
@@ -316,7 +316,7 @@ pub enum ImplicitSlopeFailure {
 }
 
 type DerivativeJet = ModeJet1<Complex, Ix0>;
-type DerivativeStack = Stack<AnalyticalMaterialHandle<Complex>, f64>;
+type DerivativeStack = ModeStack;
 
 impl ModePoint {
     /// Evaluate requested physical partial derivatives at this accepted point.
@@ -492,10 +492,15 @@ impl ModePoint {
         } else {
             <DerivativeJet as SeedJet>::constant(arr0(beta))
         };
-        let exteriors = [stack.left_exterior(), stack.right_exterior()];
+        let exteriors = [
+            (StackRegion::LeftExterior, stack.left_exterior()),
+            (StackRegion::RightExterior, stack.right_exterior()),
+        ];
         let references = signature.exteriors();
+        let polarisation = self.provenance().polarisation();
         let mut kappas = [None, None];
-        for (side_index, (material, reference)) in exteriors.into_iter().zip(references).enumerate()
+        for (side_index, ((region, material), reference)) in
+            exteriors.into_iter().zip(references).enumerate()
         {
             // A side closed by a wall or a PML carries no exterior wavevector.
             let Some(reference) = reference else { continue };
@@ -504,17 +509,10 @@ impl ModePoint {
             if !magnitude.is_finite() || magnitude <= settings.exterior_kappa_cutoff {
                 return Err(LocalDerivativeFailure::ExteriorCutoff { side, magnitude });
             }
-            let epsilon = material.evaluate_relative_permittivity_complex(Scalar(k0));
-            let mu = material.evaluate_relative_permeability_complex(Scalar(k0));
-            let epsilon_prime = material.evaluate_relative_permittivity_complex_derivative(
-                Scalar(k0),
-                DerivativeOrder::First,
-            );
-            let mu_prime = material.evaluate_relative_permeability_complex_derivative(
-                Scalar(k0),
-                DerivativeOrder::First,
-            );
-            let q = epsilon * mu * k0 * k0 - beta * beta;
+            let [values, rates] = material::tensors_and_rates(region, material, k0)
+                .map_err(|_| LocalDerivativeFailure::NonFinite)?;
+            let channel = Channel::of(&values, polarisation);
+            let q = channel.kappa_squared(k0, beta);
             let q_defect = (reference * reference - q).norm();
             let relation_scale = q
                 .norm()
@@ -528,10 +526,13 @@ impl ModePoint {
             }
             let q_prime = match parameter {
                 PhysicalParameter::K0 => {
-                    (epsilon_prime * mu + epsilon * mu_prime) * k0 * k0
-                        + Complex::new(2.0, 0.0) * epsilon * mu * k0
+                    let dispersion = Channel::of(&rates, polarisation);
+                    channel.kappa_squared_rate(&dispersion, k0, 1.0, beta, Complex::ZERO)
                 }
-                PhysicalParameter::Beta => Complex::new(-2.0, 0.0) * beta,
+                PhysicalParameter::Beta => {
+                    let fixed = Channel::of(&material::Rates::ZERO.0, polarisation);
+                    channel.kappa_squared_rate(&fixed, k0, 0.0, beta, Complex::ONE)
+                }
                 PhysicalParameter::LayerThickness(_) => unreachable!(),
             };
             let kappa_prime = exterior_branch_derivative(reference, q_prime);

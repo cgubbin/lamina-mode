@@ -1,9 +1,10 @@
 //! Local dispersion branches over real control coordinates in inverse centimetres.
 use super::*;
 use crate::problem as p;
+use crate::problem::material::{self, Channel};
 use lamina_core::{
-    Backend, ComplexPlane, EvaluateMeromorphicMaterial, ModalDerivativeBackend,
-    PlaneWaveDeterminant, ProjectPlaneWaveModeDeterminant, Scalar,
+    Backend, ComplexPlane, ModalDerivativeBackend, PlaneWaveDeterminant,
+    ProjectPlaneWaveModeDeterminant, StackRegion,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -173,30 +174,37 @@ impl ModePoint {
         };
         let old = self.signature().map_err(|_| BranchFailure::Exterior)?;
         let stack = provenance.stack();
-        let mut roots = old.open_exteriors().ok_or(BranchFailure::Exterior)?;
-        let mut chi = [Complex::default(); 2];
-        for ((r, chi), mat) in roots
-            .iter_mut()
-            .zip(&mut chi)
-            .zip([stack.left_exterior(), stack.right_exterior()])
-        {
-            // Continue each accepted root along the physical predictor segment.
-            // The caller declares a regular neighbourhood covering these steps.
+        let pol = provenance.polarisation();
+        let [left, right] = old.open_exteriors().ok_or(BranchFailure::Exterior)?;
+        // Continue each accepted root along the physical predictor segment.
+        // The caller declares a regular neighbourhood covering these steps.
+        let continue_root = |mut r: Complex, region, mat| {
+            let mut channel = None;
             for part in 1..=8 {
                 let t = f64::from(part) / 8.;
                 let freq = old.k0 + (k - old.k0) * t;
                 let beta = old.k_parallel + (b - old.k_parallel) * t;
-                *chi = mat.evaluate_relative_permittivity_complex(Scalar(freq))
-                    * mat.evaluate_relative_permeability_complex(Scalar(freq));
-                let ratio = (*chi * freq * freq - beta * beta) / (*r * *r);
+                let tensors =
+                    material::tensors(region, mat, freq).map_err(|_| BranchFailure::Exterior)?;
+                let seen = Channel::of(&tensors, pol);
+                let ratio = seen.kappa_squared(freq, beta) / (r * r);
                 if !(ratio.re > 0. && (ratio - 1.).norm() < 0.75) {
                     return Err(BranchFailure::Exterior);
                 }
-                *r *= ratio.sqrt();
+                r *= ratio.sqrt();
+                channel = Some(seen);
             }
-        }
+            channel.map(|c| (r, c)).ok_or(BranchFailure::Exterior)
+        };
+        let sides = [
+            continue_root(left, StackRegion::LeftExterior, stack.left_exterior())?,
+            continue_root(right, StackRegion::RightExterior, stack.right_exterior())?,
+        ];
+        let roots = sides.map(|(r, _)| r);
+        let chi = sides.map(|(_, c)| c.chi());
+        // The chart's κ_χ: each root without its channel's √s.
+        let unscaled = sides.map(|(r, c)| c.scale().map_or(r, |s| r / s.sqrt()));
         let fail = |e: String| BranchFailure::Domain(e);
-        let pol = provenance.polarisation();
         let (root, signature, enclosure) = if strategy == Strategy::DirectFrequency {
             let source = provenance.frequency().unwrap();
             let problem =
@@ -226,9 +234,9 @@ impl ModePoint {
             problem.corrected_point(&domain, k, config)?
         } else {
             let exp_z = if spatial {
-                (roots[0] + roots[1]) / (2. * Complex::i() * k)
+                (unscaled[0] + unscaled[1]) / (2. * Complex::i() * k)
             } else {
-                (roots[0] / chi[0].sqrt() + roots[1] / chi[1].sqrt()) / (2. * Complex::i())
+                (unscaled[0] / chi[0].sqrt() + unscaled[1] / chi[1].sqrt()) / (2. * Complex::i())
             };
             let mut z = exp_z.ln();
             z.im += std::f64::consts::TAU

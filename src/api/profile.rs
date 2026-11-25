@@ -3,8 +3,8 @@
 //! right and impedance-scaled magnetic components as in core field recovery.
 use super::*;
 use lamina_core::{
-    AnalyticalMaterialStack, FieldPosition, FieldSampling, ModalFieldBackend,
-    ModalNormalizationBackend, OwnedModeFields, Polarisation, ResolvedLayerPosition,
+    FieldPosition, FieldSampling, ModalFieldBackend, ModalNormalizationBackend, OwnedModeFields,
+    Polarisation, ResolvedLayerPosition,
 };
 
 #[derive(Clone, Debug)]
@@ -26,7 +26,7 @@ pub struct ModalProfile {
     /// Physical k0, beta and both exterior transverse wavevectors, in cm^-1.
     pub wavevectors: BranchSignature,
     pub polarisation: Polarisation,
-    pub stack: AnalyticalMaterialStack<Complex>,
+    pub stack: ModeStack,
     /// First interface at zero. In a two-half-space system this contains [0].
     pub interfaces_cm: Vec<f64>,
     /// Same order as fields.sampling().positions(), including one-sided limits.
@@ -91,7 +91,7 @@ pub(super) fn snapshot(
     })
 }
 impl ModePoint {
-    pub fn sample_profile_with<B: ModalFieldBackend>(
+    pub fn sample_profile_with<B: ModalFieldBackend<Region>>(
         &self,
         backend: B,
         sampling: &FieldSampling<f64>,
@@ -105,7 +105,7 @@ impl ModePoint {
         snapshot(recovered, normalization)
     }
 }
-impl<B: ModalNormalizationBackend + Clone> NormalizedMode<B> {
+impl<B: ModalNormalizationBackend<Region> + Clone> NormalizedMode<B> {
     pub fn sample_profile(
         &self,
         sampling: &FieldSampling<f64>,

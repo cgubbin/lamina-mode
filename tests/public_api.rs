@@ -73,7 +73,7 @@ fn external_construction_all_strategies_and_backends() {
     let _ = ConformalSpectralProblem::with_backend(
         exterior(1.0),
         exterior(2.25),
-        [],
+        [] as [Layer<Region, f64>; 0],
         1.0,
         Polarisation::TransverseElectric,
         Transfer2::new(),
@@ -377,7 +377,7 @@ fn canonical_plans_and_budget_clusters_keep_public_diagnostics() {
     let p = ConformalSpectralProblem::new(
         exterior(1.0),
         exterior(2.25),
-        [],
+        [] as [Layer<Region, f64>; 0],
         1.0,
         Polarisation::TransverseElectric,
     )

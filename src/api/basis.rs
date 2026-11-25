@@ -30,9 +30,7 @@ use super::*;
 use crate::problem as p;
 use crate::search::ModalSearchResult;
 use argloc::ArgumentConfig;
-use lamina_core::{
-    AnalyticalMaterialStack, FieldSampling, ModalFieldBackend, Polarisation, Scatter2, StackSide,
-};
+use lamina_core::{FieldSampling, ModalFieldBackend, Polarisation, Scatter2, StackSide};
 use lamina_units::Length;
 use nalgebra::DMatrix;
 use std::cmp::Ordering;
@@ -234,7 +232,7 @@ impl BasisMode {
 
     /// Normalised fields [Ex, Ey, Ez, Z0 Hx, Z0 Hy, Z0 Hz] at `sampling`.
     /// Recovery uses the limits of `settings` at the canonical unit seed.
-    pub fn fields_with<B: ModalFieldBackend + Clone>(
+    pub fn fields_with<B: ModalFieldBackend<Region> + Clone>(
         &self,
         backend: B,
         sampling: &FieldSampling<f64>,
@@ -257,7 +255,7 @@ impl BasisMode {
     }
 }
 
-fn seed_samples<B: ModalFieldBackend>(
+fn seed_samples<B: ModalFieldBackend<Region>>(
     point: &ModePoint,
     backend: B,
     sampling: &FieldSampling<f64>,
@@ -288,7 +286,7 @@ fn combine(seeds: &[Vec<Sample>], weights: &[Complex]) -> Vec<Sample> {
 #[derive(Debug)]
 pub struct ModalBasis {
     pub request: ModalBasisRequest,
-    pub stack: AnalyticalMaterialStack<Complex>,
+    pub stack: ModeStack,
     pub chart: CoordinateKind,
     /// The window in the chart's native coordinate.
     pub window: Rect<f64>,
@@ -342,17 +340,17 @@ pub enum ModalBasisError {
 
 /// Every mode of a stack closed by walls or PMLs on both sides in a β window,
 /// with counts and evidence. Searches use Scatter2; fields use `backend`.
-pub fn modal_basis_in_window_with<B: ModalFieldBackend + Clone>(
+pub fn modal_basis_in_window_with<B: ModalFieldBackend<Region> + Clone>(
     backend: &B,
-    stack: AnalyticalMaterialStack<Complex>,
+    stack: impl Into<ModeStack>,
     request: ModalBasisRequest,
 ) -> Result<ModalBasis, ModalBasisError> {
-    solve(backend, stack, request, false)
+    solve(backend, stack.into(), request, false)
 }
 
-pub(super) fn solve<B: ModalFieldBackend + Clone>(
+pub(super) fn solve<B: ModalFieldBackend<Region> + Clone>(
     backend: &B,
-    stack: AnalyticalMaterialStack<Complex>,
+    stack: ModeStack,
     request: ModalBasisRequest,
     reverse: bool,
 ) -> Result<ModalBasis, ModalBasisError> {
@@ -390,7 +388,9 @@ pub(super) fn solve<B: ModalFieldBackend + Clone>(
     }
     // The near-zero threshold relative to the least scale of the
     // characteristic, which the PML normalisation sets.
-    let least_scale = p::direct::pml_log_floor(&stack, k0).min(0.0).exp();
+    let pml_sides = p::direct::pml_sides(&stack, polarisation, k0)
+        .map_err(|e| Problem(ConstructionError::Constitutive(e)))?;
+    let least_scale = p::direct::pml_log_floor(&pml_sides).min(0.0).exp();
     let argument = DiscoveryConfig {
         zero_tolerance: request.discovery.zero_tolerance * least_scale,
         ..request.discovery
@@ -402,8 +402,7 @@ pub(super) fn solve<B: ModalFieldBackend + Clone>(
         assumption: request.assumption,
         argument,
         refinement: request.refinement,
-        stack: &stack,
-        k0,
+        pml_sides: &pml_sides,
         mirror: mirror_square(window),
         resolution: 1e-9 * k0,
         reverse,
@@ -480,8 +479,8 @@ struct Search<'a> {
     assumption: AnalyticAssumption,
     argument: ArgumentConfig<f64>,
     refinement: RefinementConfig,
-    stack: &'a AnalyticalMaterialStack<Complex>,
-    k0: f64,
+    /// The PML sides, which set the characteristic's scale.
+    pml_sides: &'a [p::direct::PmlSide],
     mirror: Option<Rect<f64>>,
     /// Cells no larger than this (cm^-1) are not split further.
     resolution: f64,
@@ -644,7 +643,7 @@ impl Search<'_> {
         );
         // The residual limit relative to the PML scale of the characteristic
         // at the seed.
-        let scale = p::direct::pml_log_scale(self.stack, self.k0, seed).exp();
+        let scale = p::direct::pml_log_scale(self.pml_sides, seed).exp();
         let refinement = crate::refinement::RefinementConfig::from(RefinementConfig {
             residual_atol: self.refinement.residual_atol * scale,
             ..self.refinement
@@ -878,9 +877,9 @@ fn sign(l: Complex) -> f64 {
 
 /// Normalise, sign and group accepted points already in key order.
 #[allow(clippy::type_complexity)]
-fn normalise<B: ModalFieldBackend + Clone>(
+fn normalise<B: ModalFieldBackend<Region> + Clone>(
     backend: &B,
-    stack: &AnalyticalMaterialStack<Complex>,
+    stack: &ModeStack,
     points: Vec<ModePoint>,
     gap: f64,
     request: &ModalBasisRequest,
@@ -889,9 +888,10 @@ fn normalise<B: ModalFieldBackend + Clone>(
     let n = points.len();
     let layout = Layout::new(stack, 0.0).ok_or(InvalidRequest)?;
     let beta: Vec<_> = points.iter().map(ModePoint::physical_coordinate).collect();
+    let ModeFamily::Polarised(polarisation) = request.family;
     let partition = split_pmls(
         Layout::partition(&[&layout]),
-        &[(&layout, stack)],
+        &[(&layout, stack, polarisation)],
         request.k0_cm(),
         &beta,
     );

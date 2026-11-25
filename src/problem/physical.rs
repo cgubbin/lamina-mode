@@ -1,8 +1,9 @@
 //! Optional interpretation of accepted roots. Raw values and thresholds are
 //! snapshots on the originating chart, not globally unique mode identities.
 //! Interpretation never changes numerical acceptance, grouping or coverage.
+use super::material::exterior_channels;
 use super::orchestration::{BatchReport, BranchSignature};
-use super::radiation::{RadiationProvenance, exterior_factors, finite, positive_dielectric};
+use super::radiation::{RadiationProvenance, finite, positive_dielectric};
 use super::*;
 use crate::refinement::AcceptedRoot;
 use lamina_core::ScalarAlgebra;
@@ -455,7 +456,10 @@ pub(crate) fn from_signature(
         return Err(InputError::NonFinite);
     }
     let stack = provenance.problem().stack();
-    let factors = exterior_factors(stack, signature.k0);
+    let pol = provenance.problem().polarisation();
+    let channels =
+        exterior_channels(stack, signature.k0, pol).map_err(|_| InputError::NonFinite)?;
+    let factors = channels.map(|c| c.factors(pol));
     let mut details = interpret(
         PhysicalData {
             k0: signature.k0,
@@ -470,12 +474,23 @@ pub(crate) fn from_signature(
         config,
     )?;
     let (k0, beta) = (signature.k0, signature.k_parallel);
+    // An open exterior whose channel is scaled (s ≠ 1) is outside the
+    // dielectric interpretation.
+    if (0..2).any(|j| details.data.kappa[j].is_some() && channels[j].scale().is_some()) {
+        let interpretation = &mut details.interpretation;
+        interpretation.flux = interpretation.flux.map(|flux| match flux {
+            Flux::Closed => Flux::Closed,
+            _ => Flux::Unsupported(Unsupported::ExteriorMaterial),
+        });
+        interpretation.classification = Classification::Unsupported(Unsupported::ExteriorMaterial);
+        return Ok(details);
+    }
     let truncation = pmls(stack)
         .into_iter()
-        .zip(factors)
-        .filter_map(|(pml, (epsilon, mu))| {
+        .zip(channels)
+        .filter_map(|(pml, channel)| {
             let (gap, tau) = pml?;
-            let kappa = (epsilon * mu * k0 * k0 - beta * beta).sqrt();
+            let kappa = channel.kappa_squared(k0, beta).sqrt();
             Some((-2.0 * (kappa * (gap + tau)).im.abs()).exp())
         })
         .reduce(f64::max);

@@ -98,7 +98,10 @@ fn inputs_endpoints_and_empty_interval() {
     req.abs_beta = [0., 15.];
     assert!(matches!(
         enumerate_guided_modes(slab(1., -1.), req),
-        Err(EnumerationError::Material(2))
+        Err(EnumerationError::Material {
+            region: 2,
+            entry: TensorEntry::EpsilonYy
+        })
     ));
     req.refinement.max_updates = 0;
     let failed = enumerate_guided_modes(slab(1., 1.), req).unwrap();
@@ -160,7 +163,10 @@ fn lossy_finite_region_is_reported() {
         .finalise();
     assert!(matches!(
         enumerate_guided_modes(stack, request(Polarisation::TransverseMagnetic)),
-        Err(EnumerationError::Material(1))
+        Err(EnumerationError::Material {
+            region: 1,
+            entry: TensorEntry::EpsilonXx
+        })
     ));
 }
 
@@ -725,7 +731,7 @@ fn tracked_coupled_slabs_match_independent_enumeration() {
     window.abs_beta = [TAU * 1.1, 13.0];
     let previous = enumerate_guided_modes(stack(0.55), window).unwrap();
     let step = GuidedTrackingStep {
-        stack: stack(0.551),
+        stack: stack(0.551).into(),
         window,
         perturbation: GuidedPerturbation::thickness(3, 1).unwrap(),
         increment: 0.001,
@@ -754,7 +760,7 @@ fn guided_tracking_refreshes_when_an_upper_mode_reaches_cutoff() {
     let tracked = track_guided_basis(
         &previous,
         GuidedTrackingStep {
-            stack: slab(0.25, 1.0),
+            stack: slab(0.25, 1.0).into(),
             window,
             perturbation: GuidedPerturbation::thickness(1, 0).unwrap(),
             increment: -0.1,
@@ -891,7 +897,7 @@ fn tracking_keeps_indistinguishable_sources_in_an_ambiguous_cluster() {
     let result = track_guided_basis(
         &previous,
         GuidedTrackingStep {
-            stack: slab(0.4, 1.0),
+            stack: slab(0.4, 1.0).into(),
             window,
             perturbation: GuidedPerturbation::thickness(1, 0).unwrap(),
             increment: 0.0,
