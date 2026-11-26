@@ -7,6 +7,13 @@ released in step until 1.0. Each entry names any shared convention it changes.
 
 Added:
 
+- `DiscoveryConfig::max_subdivisions` (default 1000): plan discovery splits
+  each converged leaf that holds several roots into quadrants searched again,
+  as modal bases do, and splits a chart whose search fails numerically. One
+  chart over a crowded hyperbolic ladder (10 roots) is now complete; quadrant
+  counts that do not add up to their cell's are unresolved with
+  `WindingViolation::Inconsistent`. `ChartDiscovery::subdivisions` reports the
+  splits.
 - `UnresolvedCause::AssumptionViolated`: a discovery leaf with a negative
   winding is unresolved, so a box holding a pole is never complete.
 - Guided modes of stacks with full-tensor regions (docs/hybrid-modes.md):

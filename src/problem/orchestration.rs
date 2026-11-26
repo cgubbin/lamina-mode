@@ -103,6 +103,10 @@ pub struct DiscoveryConfig {
     pub max_depth: usize,
     pub max_leaves: usize,
     pub max_function_evaluations: usize,
+    /// Splits of converged leaves that hold several roots (and of charts
+    /// whose search failed numerically) into quadrants searched again; zero
+    /// leaves such leaves as cluster estimates.
+    pub max_subdivisions: usize,
 }
 /// The near-zero threshold of the defaults at a 1 cm wavelength.
 pub const DEFAULT_ZERO_TOLERANCE: f64 = 1e-12;
@@ -119,6 +123,7 @@ impl Default for DiscoveryConfig {
             max_depth: 32,
             max_leaves: 100000,
             max_function_evaluations: 5000,
+            max_subdivisions: 1000,
         }
     }
 }
@@ -493,7 +498,10 @@ where
         let entries = self
             .domains
             .iter()
-            .map(|domain| self.problem.search(domain, argument.clone()))
+            .map(|domain| {
+                self.problem
+                    .search_subdivided(domain, argument.clone(), config.max_subdivisions)
+            })
             .collect();
         Ok(DiscoveryBatch {
             identity: self.identity.clone(),
