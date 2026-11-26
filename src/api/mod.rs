@@ -79,8 +79,8 @@ pub use crate::problem::frequency::{
 pub use crate::problem::guided::{GuidedRegionError, GuidedRegionEvidence};
 pub use crate::problem::material::{ConstantExterior, InvalidConstantExterior, ModeStack, Region};
 pub use crate::problem::orchestration::{
-    Ambiguity, BranchSignature, CoverageExclusion, DiscoveryConfig, DuplicateGroup, MatchTolerance,
-    PlanError, PlanGeometry, ReconciliationDiagnostic,
+    Ambiguity, BranchSignature, CoverageExclusion, DEFAULT_ZERO_TOLERANCE, DiscoveryConfig,
+    DuplicateGroup, MatchTolerance, PlanError, PlanGeometry, ReconciliationDiagnostic,
 };
 pub use crate::problem::physical::{
     BoundaryReason, Classification, Evolution, ExteriorBehaviour, Flux, Interpretation,
@@ -119,9 +119,16 @@ impl From<RadiationReference> for crate::problem::radiation::RadiationReference 
 }
 /// Per-candidate numerical controls. Absolute correction is in the native units
 /// recorded by the domain: dimensionless conformal z or frequency k0 in cm^-1.
+///
+/// The characteristic is linear in wavenumber, so an absolute residual means
+/// something different at each length scale. `residual_atol: None` (the
+/// default) takes [`DEFAULT_RESIDUAL_ATOL`] at a 1 cm wavelength, scaled with
+/// the problem's wavenumber, as [`ModalBasisRequest::new`] does: `1e-10 k0/2π`
+/// for a fixed k0 and the largest |k0| (or |β|) of the domains in k0. A value
+/// is used as given.
 #[derive(Clone, Copy, Debug)]
 pub struct RefinementConfig {
-    pub residual_atol: f64,
+    pub residual_atol: Option<f64>,
     pub residual_rtol: f64,
     pub residual_scale: f64,
     pub native_atol: f64,
@@ -130,33 +137,62 @@ pub struct RefinementConfig {
     pub max_backtracks: usize,
     pub max_evaluations: usize,
 }
+/// The absolute residual limit of the defaults at a 1 cm wavelength.
+pub const DEFAULT_RESIDUAL_ATOL: f64 = 1e-10;
+/// The multiple of a 1 cm wavelength's wavenumber, `|k| / 2π`, that scales
+/// the default absolute tolerances; 1 when `wavenumber` is zero or not finite.
+pub(crate) fn tolerance_scale(wavenumber: f64) -> f64 {
+    let scale = wavenumber.abs() / std::f64::consts::TAU;
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
+}
 impl Default for RefinementConfig {
     fn default() -> Self {
-        crate::refinement::RefinementConfig::default().into()
+        let internal = crate::refinement::RefinementConfig::default();
+        Self {
+            residual_atol: None,
+            residual_rtol: internal.residual_rtol,
+            residual_scale: internal.residual_scale,
+            native_atol: internal.z_atol,
+            native_rtol: internal.z_rtol,
+            max_updates: internal.max_updates,
+            max_backtracks: internal.max_backtracks,
+            max_evaluations: internal.max_evaluations,
+        }
+    }
+}
+impl RefinementConfig {
+    /// The absolute residual limit at `wavenumber` (cm^-1): the given one, or
+    /// the scaled default.
+    pub fn residual_atol_at(&self, wavenumber: f64) -> f64 {
+        self.residual_atol
+            .unwrap_or(DEFAULT_RESIDUAL_ATOL * tolerance_scale(wavenumber))
+    }
+    /// The controls with the default residual limit resolved at `wavenumber`.
+    pub(crate) fn resolve(self, wavenumber: f64) -> crate::refinement::RefinementConfig {
+        crate::refinement::RefinementConfig {
+            residual_atol: self.residual_atol_at(wavenumber),
+            residual_rtol: self.residual_rtol,
+            residual_scale: self.residual_scale,
+            z_atol: self.native_atol,
+            z_rtol: self.native_rtol,
+            max_updates: self.max_updates,
+            max_backtracks: self.max_backtracks,
+            max_evaluations: self.max_evaluations,
+        }
     }
 }
 impl From<crate::refinement::RefinementConfig> for RefinementConfig {
     fn from(v: crate::refinement::RefinementConfig) -> Self {
         Self {
-            residual_atol: v.residual_atol,
+            residual_atol: Some(v.residual_atol),
             residual_rtol: v.residual_rtol,
             residual_scale: v.residual_scale,
             native_atol: v.z_atol,
             native_rtol: v.z_rtol,
-            max_updates: v.max_updates,
-            max_backtracks: v.max_backtracks,
-            max_evaluations: v.max_evaluations,
-        }
-    }
-}
-impl From<RefinementConfig> for crate::refinement::RefinementConfig {
-    fn from(v: RefinementConfig) -> Self {
-        Self {
-            residual_atol: v.residual_atol,
-            residual_rtol: v.residual_rtol,
-            residual_scale: v.residual_scale,
-            z_atol: v.native_atol,
-            z_rtol: v.native_rtol,
             max_updates: v.max_updates,
             max_backtracks: v.max_backtracks,
             max_evaluations: v.max_evaluations,

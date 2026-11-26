@@ -73,7 +73,9 @@ impl ModePoint {
         B: Backend<p::J, ComplexPlane, Entries = E> + ModalDerivativeBackend + Clone,
         E: ProjectPlaneWaveModeDeterminant<Determinant = PlaneWaveDeterminant<p::J>>,
     {
-        let config = crate::refinement::RefinementConfig::from(settings.refinement)
+        let config = settings
+            .refinement
+            .resolve(self.root.provenance().wavenumber())
             .validate()
             .map_err(|_| BranchFailure::InvalidRequest)?;
         let start = control(self);

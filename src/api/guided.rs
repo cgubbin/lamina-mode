@@ -383,7 +383,9 @@ pub(super) fn validate(
     {
         return Err(EnumerationError::InvalidRequest);
     }
-    let cfg = crate::refinement::RefinementConfig::from(req.refinement)
+    let cfg = req
+        .refinement
+        .resolve(k)
         .validate()
         .map_err(|_| EnumerationError::InvalidRequest)?;
     Ok((k, [lo, hi], cfg))

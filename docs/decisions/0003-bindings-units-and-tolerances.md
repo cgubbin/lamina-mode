@@ -19,8 +19,9 @@ divided by Z₀.
 
 **Residual limits are relative to k0.** lamina-mode accepts a root when its
 Newton correction in the native coordinate is small and its residual |F| is
-within `residual_atol + residual_rtol × residual_scale`. Its default is an
-absolute 1e-10. The characteristic is linear in wavenumber: across wavelengths
+within `residual_atol + residual_rtol × residual_scale`. Its default was an
+absolute 1e-10; it is now 1e-10 at a 1 cm wavelength scaled with k0 (see
+CHANGELOG), and the bindings still set their own relative limit. The characteristic is linear in wavenumber: across wavelengths
 from 1 cm to 400 nm, |F| and |F′| at accepted roots both scale with k0 while
 the native step |F|/|F′| stays fixed. An absolute limit suited to lamina-mode's
 cm-scale fixtures (k0 ≈ 6 cm⁻¹) is below the round-off floor of micron-scale

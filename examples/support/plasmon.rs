@@ -65,7 +65,7 @@ pub fn omega_exact(v: f64) -> Complex {
 }
 fn refinement(frequency: bool) -> RefinementConfig {
     RefinementConfig {
-        residual_atol: 1e-8,
+        residual_atol: Some(1e-8),
         residual_rtol: 1e-11,
         residual_scale: KP,
         native_atol: if frequency { 1e-5 } else { 1e-10 },
@@ -194,10 +194,34 @@ fn run_inner(out: &Path, full: bool) -> Result<(), Error> {
         ),
     )?;
     // Numeric controls are also machine-readable without a runtime serialization dependency.
+    struct Number<T>(T);
+    impl std::fmt::Display for Number<f64> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+    impl std::fmt::Display for Number<usize> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+    impl std::fmt::Display for Number<u32> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+    impl std::fmt::Display for Number<Option<f64>> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.0 {
+                Some(value) => write!(f, "{value}"),
+                None => f.write_str("null"),
+            }
+        }
+    }
     macro_rules! numeric_json {
         ($value:expr, $($field:ident),+ $(,)?) => {{
             let value = $value;
-            format!("{{{}}}", vec![$(format!("\"{}\":{}", stringify!($field), value.$field)),+].join(","))
+            format!("{{{}}}", vec![$(format!("\"{}\":{}", stringify!($field), Number(value.$field))),+].join(","))
         }};
     }
     let discovery = numeric_json!(

@@ -390,7 +390,11 @@ where
     ) -> Result<SolveReport, Diagnostic> {
         each_plan!(self, p, {
             let report = p
-                .refine(discovery.inner.as_ref(), config.into(), matching.into())
+                .refine(
+                    discovery.inner.as_ref(),
+                    config.resolve(p.wavenumber()),
+                    matching.into(),
+                )
                 .map_err(|e| Diagnostic::new(Stage::Refinement, e))?;
             Ok(super::report::owned_report::<
                 _,
@@ -412,7 +416,7 @@ where
         refinement: RefinementConfig,
         matching: MatchConfig,
     ) -> Result<SolveReport, Diagnostic> {
-        let internal: crate::refinement::RefinementConfig = refinement.into();
+        let internal = refinement.resolve(each_plan!(self, p, p.wavenumber()));
         internal
             .validate()
             .map_err(|e| Diagnostic::new(Stage::Refinement, e))?;
@@ -435,7 +439,8 @@ impl FrequencyProblem {
         let DomainKind::Frequency(domain) = &domain.inner else {
             return Err(BranchFailure::InvalidRequest);
         };
-        let settings = crate::refinement::RefinementConfig::from(settings)
+        let settings = settings
+            .resolve(domain.provenance().wavenumber())
             .validate()
             .map_err(|_| BranchFailure::InvalidRequest)?;
         let (root, signature, enclosure) = self.inner.corrected_point(domain, seed, settings)?;

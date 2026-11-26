@@ -297,7 +297,7 @@ fn invalid_stage_configuration_and_foreign_batches_fail_before_evaluation() {
             ..base
         },
         DiscoveryConfig {
-            zero_tolerance: 0.0,
+            zero_tolerance: Some(0.0),
             ..base
         },
         DiscoveryConfig {

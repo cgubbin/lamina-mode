@@ -348,6 +348,29 @@ pub struct DomainProvenance {
     frequency: Option<frequency::FrequencyEvidence>,
 }
 impl DomainProvenance {
+    /// The wavenumber scale of the characteristic on this domain, cm^-1: the
+    /// fixed k0 of an in-plane search; otherwise the largest of |β| and |k0|
+    /// at the reference and, in k0, at the corners of the requested region.
+    pub fn wavenumber(&self) -> f64 {
+        match self.context.coordinate {
+            SearchCoordinate::InPlane { fixed_k0 } => fixed_k0.abs(),
+            SearchCoordinate::Spectral { fixed_k_parallel } => {
+                let mut scale = fixed_k_parallel.abs().max(self.reference.norm());
+                if self.coordinate_kind == CoordinateKind::Frequency {
+                    let (x, y) = (
+                        self.requested.real_bounds(),
+                        self.requested.imaginary_bounds(),
+                    );
+                    for re in [x.0, x.1] {
+                        for im in [y.0, y.1] {
+                            scale = scale.max(C::new(re, im).norm());
+                        }
+                    }
+                }
+                scale
+            }
+        }
+    }
     pub fn frequency(&self) -> Option<&frequency::FrequencyEvidence> {
         self.frequency.as_ref()
     }

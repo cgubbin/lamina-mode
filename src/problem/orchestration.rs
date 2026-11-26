@@ -86,10 +86,15 @@ pub struct ChartPlan<M, S, H = ConformalChart<M, J>> {
 /// Safe discover settings are validated before any job. An opaque upstream
 /// integrator config has no getters for validation; build it from these finite
 /// fields instead, retaining its default quadrature rule and undeformed contour.
+///
+/// `zero_tolerance` is absolute in the characteristic's gauge, which is linear
+/// in wavenumber. `None` (the default) takes [`DEFAULT_ZERO_TOLERANCE`] at a 1 cm
+/// wavelength, scaled with the plan's wavenumber like the default residual
+/// limit of refinement; a value is used as given.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DiscoveryConfig {
     pub score_tolerance: f64,
-    pub zero_tolerance: f64,
+    pub zero_tolerance: Option<f64>,
     pub residual_tolerance: f64,
     pub boundary_shift_fraction: f64,
     pub relative_tolerance: f64,
@@ -99,11 +104,13 @@ pub struct DiscoveryConfig {
     pub max_leaves: usize,
     pub max_function_evaluations: usize,
 }
+/// The near-zero threshold of the defaults at a 1 cm wavelength.
+pub const DEFAULT_ZERO_TOLERANCE: f64 = 1e-12;
 impl Default for DiscoveryConfig {
     fn default() -> Self {
         Self {
             score_tolerance: 1e-6,
-            zero_tolerance: 1e-12,
+            zero_tolerance: None,
             residual_tolerance: 1e-8,
             boundary_shift_fraction: 0.1,
             relative_tolerance: 1.49e-8,
@@ -116,10 +123,17 @@ impl Default for DiscoveryConfig {
     }
 }
 impl DiscoveryConfig {
-    pub(crate) fn argument_config(self) -> Result<ArgumentConfig<f64>, PlanError> {
+    /// The near-zero threshold at `wavenumber` (cm^-1): the given one, or the
+    /// scaled default.
+    pub fn zero_tolerance_at(&self, wavenumber: f64) -> f64 {
+        self.zero_tolerance
+            .unwrap_or(DEFAULT_ZERO_TOLERANCE * crate::api::tolerance_scale(wavenumber))
+    }
+    pub(crate) fn argument_config(self, wavenumber: f64) -> Result<ArgumentConfig<f64>, PlanError> {
+        let zero_tolerance = self.zero_tolerance_at(wavenumber);
         if [
             self.score_tolerance,
-            self.zero_tolerance,
+            zero_tolerance,
             self.residual_tolerance,
             self.relative_tolerance,
             self.absolute_tolerance,
@@ -135,7 +149,7 @@ impl DiscoveryConfig {
             return Err(PlanError::InvalidConfig);
         }
         let mut config = ArgumentConfig::new(self.score_tolerance);
-        config.zero_tol = self.zero_tolerance;
+        config.zero_tol = zero_tolerance;
         config.residual_tolerance = self.residual_tolerance;
         config.boundary_shift_fraction = self.boundary_shift_fraction;
         config.quad_tree.max_iter = self.max_iterations;
@@ -463,11 +477,19 @@ where
     pub fn exclusions(&self) -> &[CoverageExclusion] {
         &self.exclusions
     }
+    /// The wavenumber scale of the plan's characteristic, cm^-1: the largest
+    /// of its domains'. Default tolerances scale with it.
+    pub fn wavenumber(&self) -> f64 {
+        self.domains
+            .iter()
+            .map(|d| d.provenance.wavenumber())
+            .fold(0.0, f64::max)
+    }
     pub fn discover(
         &self,
         config: DiscoveryConfig,
     ) -> Result<DiscoveryBatch<ExecutionError<NativeSearchError<H, S>>>, PlanError> {
-        let argument = config.argument_config()?;
+        let argument = config.argument_config(self.wavenumber())?;
         let entries = self
             .domains
             .iter()
