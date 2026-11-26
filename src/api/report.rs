@@ -267,6 +267,18 @@ pub enum UnresolvedCause {
         index: usize,
         status: CandidateStatus,
     },
+    /// The caller's pole-free assumption failed here: the winding counted in
+    /// this region is not a count of zeros, so no root count is claimed.
+    AssumptionViolated(WindingViolation),
+}
+/// Argument-principle evidence that a region holds poles or other
+/// singularities of the characteristic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindingViolation {
+    /// The signed count `N − P` is negative: at least one pole is inside.
+    Negative { count: isize },
+    /// The count of a cell differs from the sum of the counts of its parts.
+    Inconsistent { whole: isize, parts: isize },
 }
 /// A region of one chart, in its native coordinates, without complete evidence.
 #[derive(Clone, Debug)]
@@ -323,8 +335,9 @@ impl SolveReport {
     pub fn matching_config(&self) -> MatchConfig {
         self.matching
     }
-    /// Every failed chart, stopped discovery, unresolved leaf and unaccepted
-    /// estimate, in chart order.
+    /// Every failed chart, stopped discovery, unresolved leaf, leaf whose
+    /// winding violates the pole-free assumption and unaccepted estimate, in
+    /// chart order.
     pub fn unresolved(&self) -> Vec<UnresolvedRegion> {
         let tolerance = self.discovery.config().score_tolerance;
         let mut unresolved = Vec::new();
@@ -357,7 +370,11 @@ impl SolveReport {
             }
             for leaf in entry.leaves() {
                 let score = leaf.data.score;
-                if !score.is_finite() || score > tolerance {
+                let count = leaf.data.root_count;
+                if count < 0 {
+                    let violation = WindingViolation::Negative { count };
+                    push(leaf.bounds, UnresolvedCause::AssumptionViolated(violation));
+                } else if !score.is_finite() || score > tolerance {
                     push(leaf.bounds, UnresolvedCause::Leaf { score });
                 }
             }

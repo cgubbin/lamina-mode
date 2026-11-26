@@ -7,6 +7,8 @@ released in step until 1.0. Each entry names any shared convention it changes.
 
 Added:
 
+- `UnresolvedCause::AssumptionViolated`: a discovery leaf with a negative
+  winding is unresolved, so a box holding a pole is never complete.
 - Guided modes of stacks with full-tensor regions (docs/hybrid-modes.md):
   `ModeFamily::All` solves the coupled channel of Transfer4 or Scatter4 and
   labels each mode TE, TM (separable stacks) or `Hybrid`; TE and TM of a
