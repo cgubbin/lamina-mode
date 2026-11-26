@@ -499,9 +499,10 @@ impl<B: Backend<J, ComplexPlane>> FrequencyProblem<B> {
     pub fn frequency(
         stack: impl Into<ModeStack>,
         beta: f64,
-        pol: Polarisation,
+        pol: impl Into<lamina_core::Channel>,
         backend: B,
     ) -> Result<Self, ProblemError> {
+        let pol = pol.into();
         let stack = stack.into();
         if !beta.is_finite() {
             return Err(ProblemError::Spectral(
@@ -512,14 +513,14 @@ impl<B: Backend<J, ComplexPlane>> FrequencyProblem<B> {
         if !stack.is_open() {
             return Err(ProblemError::ClosedSide);
         }
-        material::check_regions(&stack)?;
+        super::exterior_polarisation(&stack, pol)?;
         material::isotropic_exteriors(&stack)?;
         let solver = Compiled::compile(&stack, backend, pol)?;
         Ok(Self {
             context: Arc::new(ProblemContext {
                 constants: None,
                 stack,
-                channel: pol.into(),
+                channel: pol,
                 coordinate: SearchCoordinate::Spectral {
                     fixed_k_parallel: beta,
                 },

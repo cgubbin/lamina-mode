@@ -80,9 +80,9 @@ use crate::analytic::AnalyticChart;
 use crate::conformal::{ValidateConformalRegion, chart::LinearCoordinateMap};
 use lamina_core::{
     Backend, CanonicalCoordinates, Channel, ComplexPlane, ComplexPlaneEvaluator, ComplexScalar,
-    DeterminantEvaluationError, ExteriorWavevectors, Jet, ModeJet1, PlaneWaveDeterminant,
-    ProjectPlaneWaveModeDeterminant, ScalarAlgebra, SeedJet, Stack, StackCompileError,
-    StackThicknessJet, TensorConstitutiveLift,
+    DeterminantEvaluationError, ExteriorBranch, ExteriorWavevectors, Jet, ModeJet1,
+    PlaneWaveDeterminant, ProjectPlaneWaveModeDeterminant, ScalarAlgebra, SeedJet, Stack,
+    StackCompileError, StackThicknessJet, TensorConstitutiveLift,
 };
 
 use argloc::FunctionBundle;
@@ -315,6 +315,27 @@ where
         coordinates: &CanonicalCoordinates<J>,
         exterior: &ExteriorWavevectors<J>,
     ) -> Result<J, Self::Error> {
+        // An isotropic exterior's two outgoing waves of the coupled channel
+        // share the branch the chart continues.
+        let paired;
+        let exterior = match self.channel {
+            Channel::Coupled => {
+                let pair = |side: Option<&ExteriorBranch<J>>| {
+                    side.map(|branch| match branch {
+                        ExteriorBranch::Scalar(kappa) => {
+                            ExteriorBranch::Pair([kappa.clone(), kappa.clone()])
+                        }
+                        pair => pair.clone(),
+                    })
+                };
+                paired = ExteriorWavevectors::from_branches(
+                    pair(exterior.left()),
+                    pair(exterior.right()),
+                );
+                &paired
+            }
+            _ => exterior,
+        };
         self.evaluator()
             .checked_determinant(coordinates, exterior, self.channel)
             .map(|determinant| determinant.into_inner())
