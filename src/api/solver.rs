@@ -367,8 +367,50 @@ where
             .map(|inner| Self { inner })
             .map_err(|e| Diagnostic::new(Stage::Construction, e))
     }
+    /// The declared poles and zeros of the stack's regions at which this
+    /// channel's characteristic is singular, and the regions that declare
+    /// none. A domain refuses a box that holds a known one outside its
+    /// exclusions.
+    pub fn known_singularities(&self) -> MaterialSingularities {
+        self.inner.known_singularities()
+    }
+    /// One square exclusion of half-width `half_width` (cm^-1) around each
+    /// known singularity whose square meets `bounds`, for [`Self::domains`].
+    pub fn singularity_exclusions(
+        &self,
+        bounds: FrequencyRegion,
+        half_width: f64,
+    ) -> Result<Vec<FrequencyExclusion>, Diagnostic> {
+        self.inner
+            .singularity_exclusions(bounds, half_width)
+            .map_err(|e| Diagnostic::new(Stage::Domain, e))
+    }
+    /// The requested box less the exclusions inside it, as rectangular
+    /// domains for one plan. Each tile's exterior reference is continued
+    /// from the input's through adjacent tiles, never across an exclusion,
+    /// and the exclusions inside the box are recorded as its holes. Without
+    /// an exclusion inside the box this is one [`Self::domain`].
+    pub fn domains(
+        &self,
+        input: FrequencyDomainInput,
+        assumption: AnalyticAssumption,
+    ) -> Result<Vec<Domain<B>>, Diagnostic> {
+        self.inner
+            .frequency_domains(input, assumption)
+            .map(|domains| {
+                domains
+                    .into_iter()
+                    .map(|d| Domain {
+                        inner: DomainKind::Frequency(d),
+                    })
+                    .collect()
+            })
+            .map_err(|e| Diagnostic::new(Stage::Domain, e))
+    }
     /// Physical k0 bounds in cm^-1. Caller explicitly declares characteristic
     /// analyticity and nonzero holomorphic exterior q on the evaluation region.
+    /// A declared exclusion may not meet the evaluation region (see
+    /// [`Self::domains`]), and neither may a known singularity outside it.
     pub fn domain(
         &self,
         input: FrequencyDomainInput,

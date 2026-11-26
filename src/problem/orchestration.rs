@@ -494,7 +494,7 @@ where
         let mut exclusions = exclusions;
         for domain in &domains {
             if let Some(evidence) = domain.provenance.frequency() {
-                for exclusion in &evidence.exclusions {
+                for exclusion in evidence.exclusions.iter().chain(&evidence.holes) {
                     let entry = CoverageExclusion::Frequency(exclusion.clone());
                     if !exclusions.contains(&entry) {
                         exclusions.push(entry);
