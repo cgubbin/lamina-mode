@@ -27,7 +27,7 @@ def test_ladder_matches_analytic_reference(case, polarisation):
 
     stack = lamina.Stack(left=left, layers=[(core, d)], right=right)
     basis = lamina.enumerate_guided_modes(
-        stack, lamina.GuidedRequest(wavelength_m=wavelength, polarisation=polarisation)
+        stack, lamina.GuidedRequest(wavelength_m=wavelength, family=polarisation)
     )
 
     assert basis.completeness == "complete", basis.unresolved
@@ -43,9 +43,9 @@ def test_ladder_matches_analytic_reference(case, polarisation):
 
 def test_backward_direction_mirrors_forward():
     stack = lamina.Stack(left=1.0, layers=[(4.0, 2e-6)], right=2.25)
-    forward = lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(wavelength_m=1e-6))
+    forward = lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(family="TE", wavelength_m=1e-6))
     backward = lamina.enumerate_guided_modes(
-        stack, lamina.GuidedRequest(wavelength_m=1e-6, direction="backward")
+        stack, lamina.GuidedRequest(family="TE", wavelength_m=1e-6, direction="backward")
     )
     assert backward.is_complete and backward.found == forward.found
     np.testing.assert_allclose(backward.beta_rad_per_m.real, -forward.beta_rad_per_m.real, rtol=1e-12)
@@ -64,7 +64,7 @@ def test_walled_ladder_includes_radiation_like_modes(wall, polarisation):
         right_termination=lamina.Wall(wall, 2 * a + gap),
     )
     basis = lamina.enumerate_guided_modes(
-        stack, lamina.GuidedRequest(wavelength_m=wavelength, polarisation=polarisation)
+        stack, lamina.GuidedRequest(wavelength_m=wavelength, family=polarisation)
     )
     window = basis.input.request.abs_beta_rad_per_m
     reference = box_ladder(wavelength, core, clad, a, gap, wall, polarisation, window)

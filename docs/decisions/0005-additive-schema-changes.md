@@ -1,6 +1,6 @@
 # 0005: Additive schema changes keep schema version 1
 
-Status: accepted
+Status: accepted (schema version 2: see 0010)
 
 ## Context
 

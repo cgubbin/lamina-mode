@@ -7,7 +7,7 @@ import pytest
 import lamina
 
 STACK = lamina.Stack(left=1.0, layers=[(4.0, 2e-6)], right=2.25)
-REQUEST = lamina.GuidedRequest(wavelength_m=1e-6)
+REQUEST = lamina.GuidedRequest(family="TE", wavelength_m=1e-6)
 
 
 @pytest.mark.parametrize(
@@ -15,9 +15,9 @@ REQUEST = lamina.GuidedRequest(wavelength_m=1e-6)
     [
         (lamina.Stack(left=1.0, layers=[(4.0, -1e-6)], right=1.0), REQUEST),
         (lamina.Stack(left=-1.0, layers=[(4.0, 1e-6)], right=1.0), REQUEST),
-        (STACK, lamina.GuidedRequest(wavelength_m=0.0)),
-        (STACK, lamina.GuidedRequest(wavelength_m=1e-6, abs_beta_rad_per_m=(2e7, 1e7))),
-        (STACK, lamina.GuidedRequest(wavelength_m=1e-6, cutoff_margin_rad_per_m=float("nan"))),
+        (STACK, lamina.GuidedRequest(family="TE", wavelength_m=0.0)),
+        (STACK, lamina.GuidedRequest(family="TE", wavelength_m=1e-6, abs_beta_rad_per_m=(2e7, 1e7))),
+        (STACK, lamina.GuidedRequest(family="TE", wavelength_m=1e-6, cutoff_margin_rad_per_m=float("nan"))),
     ],
     ids=["thickness", "permittivity", "wavelength", "window", "margin"],
 )
@@ -37,7 +37,7 @@ def test_bad_indices_raise_invalid_input():
 
 
 def test_partial_coverage_is_a_result_with_its_gaps():
-    request = lamina.GuidedRequest(wavelength_m=1e-6, max_subdivisions=0)
+    request = lamina.GuidedRequest(family="TE", wavelength_m=1e-6, max_subdivisions=0)
     basis = lamina.enumerate_guided_modes(STACK, request)
     assert basis.completeness == "partial"
     assert not basis.is_complete

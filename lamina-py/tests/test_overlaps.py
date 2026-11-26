@@ -24,7 +24,7 @@ def slab(d, right=1.44):
 def solve(stack, polarisation="TE", direction="forward", wavelength=WAVELENGTH):
     basis = lamina.enumerate_guided_modes(
         stack,
-        lamina.GuidedRequest(wavelength_m=wavelength, polarisation=polarisation, direction=direction),
+        lamina.GuidedRequest(wavelength_m=wavelength, family=polarisation, direction=direction),
     )
     assert basis.is_complete, basis.unresolved
     return basis

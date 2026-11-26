@@ -13,7 +13,7 @@ import lamina
 WAVELENGTH = 1.0e-6
 D = 0.7e-6
 GAP = 0.3e-6
-REQUEST = lamina.GuidedRequest(wavelength_m=WAVELENGTH)
+REQUEST = lamina.GuidedRequest(family="TE", wavelength_m=WAVELENGTH)
 
 
 def stack(left=lamina.Wall("pec", -GAP), right=None, thickness=D) -> lamina.Stack:
@@ -104,7 +104,7 @@ def test_equal_walled_inputs_hash_equally():
 @pytest.mark.parametrize("polarisation", ["TE", "TM"])
 def test_walled_basis_round_trips_and_resamples_at_its_walls(polarisation):
     s = stack(right=lamina.Wall("pmc", D + GAP))
-    request = lamina.GuidedRequest(wavelength_m=WAVELENGTH, polarisation=polarisation)
+    request = lamina.GuidedRequest(wavelength_m=WAVELENGTH, family=polarisation)
     basis = lamina.enumerate_guided_modes(s, request)
     assert basis.completeness == "complete" and basis.found > 0
     restored = lamina.GuidedBasis.from_json(basis.to_json())

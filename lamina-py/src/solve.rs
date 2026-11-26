@@ -1,14 +1,14 @@
 //! Adapter between the SI records and lamina-mode's internal cm^-1 units.
 use crate::records::{self as rec, C2};
 use lamina_core::{
-    AnalyticalMaterialHandle, AnalyticalMaterialStack, Constant, ExteriorSampling, FieldSampling,
-    LayerSampling, Pml, Polarisation, Scatter2, StretchProfile, Termination, Wall, WallKind,
-    stack::StackBuilder,
+    AnalyticalMaterialHandle, Constant, ExteriorSampling, FieldSampling, LayerSampling, Pml,
+    Polarisation, Scatter2, StretchProfile, Termination, Wall, WallKind, stack::StackBuilder,
 };
 use lamina_mode::{
     AnalyticAssumption, Complex, FieldRecoverySettings, GuidedDirection, GuidedLimit, GuidedWindow,
     ImplicitSlopeRequest, ImplicitSlopeSettings, LocalAnalyticityAssumption,
-    LocalDerivativeSettings, PhysicalParameter, RefinementConfig,
+    LocalDerivativeSettings, ModeFamily, ModeLabel, ModeStack, PhysicalParameter, RefinementConfig,
+    Region,
 };
 use lamina_units::{Length, LengthUnit};
 use std::f64::consts::TAU;
@@ -41,8 +41,18 @@ pub fn regions(spec: &rec::Stack) -> impl Iterator<Item = &rec::Material> {
         .chain(std::iter::once(&spec.right))
 }
 
+/// The scalar models of a region material.
+pub fn models(m: &rec::Material) -> impl Iterator<Item = &rec::ScalarModel> {
+    match m {
+        rec::Material::Isotropic { model } => std::iter::once(model),
+    }
+}
+
 pub fn assumption(spec: &rec::Stack) -> &'static str {
-    if regions(spec).all(|m| matches!(m, rec::Material::Constant(_))) {
+    if regions(spec)
+        .flat_map(models)
+        .all(|m| matches!(m, rec::ScalarModel::Constant { .. }))
+    {
         ASSUMPTION
     } else {
         DISPERSIVE_ASSUMPTION
@@ -127,49 +137,63 @@ pub fn normalise(mut input: rec::GuidedInput) -> Result<rec::GuidedInput, Failur
     Ok(input)
 }
 
+/// Validate one scalar model at `wavelength`.
+fn scalar_model(name: &str, m: &rec::ScalarModel, wavelength: f64) -> Result<(), Failure> {
+    match m {
+        rec::ScalarModel::Constant {
+            relative_permittivity,
+            relative_permeability,
+        } => {
+            finite_positive(
+                &format!("{name} relative permittivity"),
+                *relative_permittivity,
+            )?;
+            finite_positive(
+                &format!("{name} relative permeability"),
+                *relative_permeability,
+            )?;
+        }
+        rec::ScalarModel::Sellmeier {
+            sellmeier,
+            relative_permeability,
+        } => {
+            if *relative_permeability != 1. {
+                return Err(Failure::Invalid(format!(
+                    "{name}: Sellmeier models support relative_permeability 1 only"
+                )));
+            }
+            if !sellmeier.constant.is_finite() {
+                return Err(Failure::Invalid(format!(
+                    "{name} Sellmeier constant must be finite"
+                )));
+            }
+            for (j, t) in sellmeier.terms.iter().enumerate() {
+                if !t.coefficient.is_finite() {
+                    return Err(Failure::Invalid(format!(
+                        "{name} Sellmeier term {j} coefficient must be finite"
+                    )));
+                }
+                finite_positive(
+                    &format!("{name} Sellmeier term {j} pole_wavelength_m"),
+                    t.pole_wavelength_m,
+                )?;
+                if (t.pole_wavelength_m - wavelength).abs() <= POLE_SEPARATION * wavelength {
+                    return Err(Failure::Invalid(format!(
+                        "{name} Sellmeier term {j} has its pole at the operating wavelength"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Validate a stack at `wavelength` and normalise the signed zeros of its
 /// wall and PML fields.
 pub(crate) fn normalise_stack(stack: &mut rec::Stack, wavelength: f64) -> Result<(), Failure> {
     let material = |name: &str, m: &rec::Material| -> Result<(), Failure> {
-        match m {
-            rec::Material::Constant(c) => {
-                finite_positive(
-                    &format!("{name} relative permittivity"),
-                    c.relative_permittivity,
-                )?;
-                finite_positive(
-                    &format!("{name} relative permeability"),
-                    c.relative_permeability,
-                )?;
-            }
-            rec::Material::Sellmeier(m) => {
-                if m.relative_permeability != 1. {
-                    return Err(Failure::Invalid(format!(
-                        "{name}: Sellmeier materials support relative_permeability 1 only"
-                    )));
-                }
-                if !m.sellmeier.constant.is_finite() {
-                    return Err(Failure::Invalid(format!(
-                        "{name} Sellmeier constant must be finite"
-                    )));
-                }
-                for (j, t) in m.sellmeier.terms.iter().enumerate() {
-                    if !t.coefficient.is_finite() {
-                        return Err(Failure::Invalid(format!(
-                            "{name} Sellmeier term {j} coefficient must be finite"
-                        )));
-                    }
-                    finite_positive(
-                        &format!("{name} Sellmeier term {j} pole_wavelength_m"),
-                        t.pole_wavelength_m,
-                    )?;
-                    if (t.pole_wavelength_m - wavelength).abs() <= POLE_SEPARATION * wavelength {
-                        return Err(Failure::Invalid(format!(
-                            "{name} Sellmeier term {j} has its pole at the operating wavelength"
-                        )));
-                    }
-                }
-            }
+        for model in models(m) {
+            scalar_model(name, model, wavelength)?;
         }
         Ok(())
     };
@@ -231,15 +255,25 @@ pub(crate) fn normalise_stack(stack: &mut rec::Stack, wavelength: f64) -> Result
     Ok(())
 }
 
-fn handle(m: &rec::Material) -> Result<AnalyticalMaterialHandle<Complex>, Failure> {
+fn scalar_handle(m: &rec::ScalarModel) -> Result<AnalyticalMaterialHandle<Complex>, Failure> {
     Ok(match m {
-        rec::Material::Constant(c) => AnalyticalMaterialHandle::new(Constant::new(
-            c.relative_permittivity,
-            c.relative_permeability,
+        rec::ScalarModel::Constant {
+            relative_permittivity,
+            relative_permeability,
+        } => AnalyticalMaterialHandle::new(Constant::new(
+            *relative_permittivity,
+            *relative_permeability,
         )),
-        rec::Material::Sellmeier(s) => {
-            AnalyticalMaterialHandle::new(sellmeier_model(&s.sellmeier)?)
+        rec::ScalarModel::Sellmeier { sellmeier, .. } => {
+            AnalyticalMaterialHandle::new(sellmeier_model(sellmeier)?)
         }
+    })
+}
+
+/// The lamina-core region of a material.
+fn region(m: &rec::Material) -> Result<Region, Failure> {
+    Ok(match m {
+        rec::Material::Isotropic { model } => scalar_handle(model)?.into(),
     })
 }
 
@@ -297,11 +331,11 @@ fn terminations(spec: &rec::Stack) -> [Option<(Termination<f64>, f64)>; 2] {
     ]
 }
 
-pub(crate) fn stack(spec: &rec::Stack) -> Result<AnalyticalMaterialStack<Complex>, Failure> {
-    let mut builder = StackBuilder::new(handle(&spec.left)?, handle(&spec.right)?);
+pub(crate) fn stack(spec: &rec::Stack) -> Result<ModeStack, Failure> {
+    let mut builder = StackBuilder::new(region(&spec.left)?, region(&spec.right)?);
     for layer in &spec.layers {
         builder = builder.layer(
-            handle(&layer.material)?,
+            region(&layer.material)?,
             Length::centimetres(layer.thickness_m / M_PER_CM),
         );
     }
@@ -334,11 +368,7 @@ fn window(r: &rec::GuidedRequest) -> GuidedWindow {
     // Lengths become cm and wavenumbers cm^-1: multiply rad/m by m per cm.
     GuidedWindow {
         wavelength: Length::centimetres(r.wavelength_m / M_PER_CM),
-        family: match r.polarisation {
-            rec::Polarisation::Te => Polarisation::TransverseElectric,
-            rec::Polarisation::Tm => Polarisation::TransverseMagnetic,
-        }
-        .into(),
+        family: family(r.family),
         direction: match r.direction {
             rec::Direction::Forward => GuidedDirection::Forward,
             rec::Direction::Backward => GuidedDirection::Backward,
@@ -358,6 +388,15 @@ fn window(r: &rec::GuidedRequest) -> GuidedWindow {
             max_evaluations: f.max_evaluations,
         },
         assumption: AnalyticAssumption::CallerAssumedHolomorphicPoleFree,
+    }
+}
+
+/// lamina-mode's family of a request.
+pub(crate) fn family(f: rec::Family) -> ModeFamily {
+    match f {
+        rec::Family::Te => Polarisation::TransverseElectric.into(),
+        rec::Family::Tm => Polarisation::TransverseMagnetic.into(),
+        rec::Family::All => ModeFamily::All,
     }
 }
 
@@ -394,6 +433,26 @@ pub struct Solved {
     pub basis: lamina_mode::GuidedBasis,
 }
 
+impl Solved {
+    /// `true` when the modes were counted by the argument principle and
+    /// solved through a 4×4 backend.
+    pub(crate) fn coupled(&self) -> bool {
+        self.basis.hybrid.is_some()
+    }
+}
+
+/// Modes whose |β| differ by no more than this, per unit k0, share a
+/// degenerate group.
+pub(crate) const DEGENERACY_RTOL: f64 = 1e-6;
+
+/// A rectangle in cm^-1 as rad/m.
+pub(crate) fn rect_m(r: lamina_mode::Rect<f64>) -> rec::Rect2 {
+    [
+        [r.x_min / M_PER_CM, r.x_max / M_PER_CM],
+        [r.y_min / M_PER_CM, r.y_max / M_PER_CM],
+    ]
+}
+
 fn gap(g: &lamina_mode::GuidedGap) -> rec::Gap {
     let (cause, detail) = match &g.cause {
         GuidedLimit::EndpointPhase => ("endpoint_phase", None),
@@ -401,8 +460,24 @@ fn gap(g: &lamina_mode::GuidedGap) -> rec::Gap {
         GuidedLimit::Budget => ("budget", None),
         GuidedLimit::Correction(failure) => ("correction", Some(format!("{failure:?}"))),
         GuidedLimit::OutsideBracket => ("outside_bracket", None),
-        // Argument-principle causes of full-tensor stacks, not in schema 1.
-        other => ("hybrid_count", Some(format!("{other:?}"))),
+        GuidedLimit::CountUnknown => ("count_unknown", None),
+        GuidedLimit::Region(cause) => ("region", Some(format!("{cause:?}"))),
+        GuidedLimit::NonRealRoot { beta } => (
+            "non_real_root",
+            Some(format!(
+                "beta = [{}, {}] rad/m",
+                beta.re / M_PER_CM,
+                beta.im / M_PER_CM
+            )),
+        ),
+        GuidedLimit::NearDegenerate { count, .. } => {
+            ("near_degenerate", Some(format!("{count} roots")))
+        }
+        GuidedLimit::Cell(limit) => ("cell", Some(format!("{limit:?}"))),
+        GuidedLimit::SeparableCount { counts } => (
+            "separable_count",
+            Some(format!("TE and TM counts {counts:?}")),
+        ),
     };
     rec::Gap {
         abs_beta_rad_per_m: g.abs_beta.map(|b| b / M_PER_CM),
@@ -412,14 +487,96 @@ fn gap(g: &lamina_mode::GuidedGap) -> rec::Gap {
     }
 }
 
+fn label(l: ModeLabel) -> rec::Label {
+    match l {
+        ModeLabel::TransverseElectric => rec::Label::Te,
+        ModeLabel::TransverseMagnetic => rec::Label::Tm,
+        ModeLabel::Hybrid => rec::Label::Hybrid,
+    }
+}
+
+/// The last segment of a backend's type name.
+fn backend_name(name: &str) -> String {
+    name.rsplit("::").next().unwrap_or(name).to_owned()
+}
+
+fn count_evidence(e: &lamina_mode::HybridCountEvidence) -> rec::CountEvidence {
+    rec::CountEvidence {
+        channel: match e.channel.polarisation() {
+            Some(Polarisation::TransverseElectric) => "TE",
+            Some(Polarisation::TransverseMagnetic) => "TM",
+            None => "coupled",
+        }
+        .to_owned(),
+        rectangles_rad_per_m: e.rectangles.iter().map(|&r| rect_m(r)).collect(),
+        count_backends: e.count_backends.iter().map(|n| backend_name(n)).collect(),
+        region: e.region.as_ref().map(|r| rec::CountRegion {
+            half_height_rad_per_m: r.half_height / M_PER_CM,
+            exterior_separation: r.exterior_separation,
+            pair_margin: r.pair_margin,
+            gauge_conditioning: r.gauge_conditioning,
+            samples: r.samples,
+        }),
+        endpoint_shift_rad_per_m: e.endpoint_shift.map(|s| s / M_PER_CM),
+        off_family: e.off_family.clone(),
+        separable_counts: e.separable_counts,
+    }
+}
+
+/// Group indices of modes, in order, whose |β| lie within `gap` of a
+/// neighbour; `None` for a mode alone.
+fn degenerate_groups(beta: &[f64], gap: f64) -> Vec<Option<usize>> {
+    let mut order: Vec<usize> = (0..beta.len()).collect();
+    order.sort_by(|&a, &b| beta[a].total_cmp(&beta[b]));
+    let mut groups = vec![None; beta.len()];
+    let mut next = 0;
+    for pair in order.windows(2) {
+        let [a, b] = [pair[0], pair[1]];
+        if (beta[b] - beta[a]).abs() <= gap {
+            let group = *groups[a].get_or_insert_with(|| {
+                next += 1;
+                next - 1
+            });
+            groups[b] = Some(group);
+        }
+    }
+    // Number groups by their first mode in basis order.
+    let mut renumber = vec![None; next];
+    let mut count = 0;
+    for g in groups.iter_mut().flatten() {
+        *g = *renumber[*g].get_or_insert_with(|| {
+            count += 1;
+            count - 1
+        });
+    }
+    groups
+}
+
+fn enumeration_failure(e: lamina_mode::EnumerationError) -> Failure {
+    use lamina_mode::EnumerationError as E;
+    match e {
+        E::Termination { .. } => Failure::Unsupported(e.to_string()),
+        E::FamilyNotInvariant { .. } | E::Tensor { .. } | E::InvalidRequest => {
+            Failure::Invalid(e.to_string())
+        }
+        e => Failure::Enumeration(e.to_string()),
+    }
+}
+
 pub fn enumerate(input: rec::GuidedInput) -> Result<Solved, Failure> {
     let input = normalise(input)?;
     let basis = lamina_mode::enumerate_guided_modes(stack(&input.stack)?, window(&input.request))
-        .map_err(|e| match e {
-        lamina_mode::EnumerationError::Termination { .. } => Failure::Unsupported(e.to_string()),
-        e => Failure::Enumeration(e.to_string()),
-    })?;
+        .map_err(enumeration_failure)?;
     let k0_cm = k0_cm(&input.request);
+    let gap_m = DEGENERACY_RTOL * k0_cm / M_PER_CM;
+    let groups = degenerate_groups(
+        &basis
+            .modes
+            .iter()
+            .map(|p| p.physical_coordinate().re.abs() / M_PER_CM)
+            .collect::<Vec<_>>(),
+        gap_m,
+    );
     let modes = basis
         .modes
         .iter()
@@ -431,6 +588,12 @@ pub fn enumerate(input: rec::GuidedInput) -> Result<Solved, Failure> {
                 index,
                 beta_rad_per_m: c2(beta / M_PER_CM),
                 n_eff: c2(beta / k0_cm),
+                label: basis
+                    .labels
+                    .get(index)
+                    .copied()
+                    .map_or(rec::Label::Hybrid, label),
+                degenerate_group: groups[index],
                 native_coordinate: c2(evidence.native_coordinate),
                 characteristic_value: c2(evidence.value),
                 characteristic_derivative: c2(evidence.derivative),
@@ -461,6 +624,14 @@ pub fn enumerate(input: rec::GuidedInput) -> Result<Solved, Failure> {
         expected: basis.expected,
         found: modes.len(),
         completeness,
+        count_method: if basis.hybrid.is_some() {
+            "argument_principle"
+        } else {
+            "oscillation"
+        }
+        .to_owned(),
+        count_evidence: basis.hybrid.as_ref().map(count_evidence),
+        degeneracy_gap_rad_per_m: gap_m,
         modes,
         unresolved: basis.unresolved.iter().map(gap).collect(),
         input,
@@ -563,12 +734,26 @@ pub(crate) fn point(
     })
 }
 
+/// The phase reference of a TE or TM profile.
+pub(crate) const EY_PLUS_Z0_HY: &str = "Ey+Z0Hy";
+
+/// Refuse an operation on modes counted by the argument principle.
+pub(crate) fn scalar_only(solved: &Solved, what: &str) -> Result<(), Failure> {
+    if solved.coupled() {
+        return Err(Failure::Invalid(format!(
+            "{what} needs TE or TM modes of a stack of isotropic and diagonal regions"
+        )));
+    }
+    Ok(())
+}
+
 pub fn profile(
     solved: &Solved,
     mode_index: usize,
     z_m: &[f64],
 ) -> Result<rec::GuidedProfile, Failure> {
     let point = point(solved, mode_index)?;
+    scalar_only(solved, "sampling fields")?;
     let sampling = sampling(&solved.record.input.stack, z_m)?;
     let profile = point
         .guided_power_profile_with(
@@ -582,8 +767,10 @@ pub fn profile(
             signed_power_w_per_m: n.signed_power_w_per_m,
             scale: c2(n.scale),
             phase_reference: c2(n.phase_reference),
+            phase_reference_component: EY_PLUS_Z0_HY.to_owned(),
+            bilinear_norm_w_per_m: None,
             seed_power_w_per_m: n.seed_power_w_per_m,
-            seed_exterior_power_w_per_m: n.seed_exterior_power_w_per_m,
+            seed_exterior_power_w_per_m: Some(n.seed_exterior_power_w_per_m),
         },
         _ => return Err(Failure::Fields("profile is not power normalised".into())),
     };
@@ -620,7 +807,7 @@ pub fn profile(
         magnetic_real,
         magnetic_imag,
         normalisation,
-        relative_boundary_defect: profile.relative_boundary_defect,
+        relative_boundary_defect: Some(profile.relative_boundary_defect),
     })
 }
 
@@ -630,6 +817,7 @@ pub fn derivatives(
     layers: &[usize],
 ) -> Result<rec::LocalDerivatives, Failure> {
     let point = point(solved, mode_index)?;
+    scalar_only(solved, "local derivatives")?;
     let count = solved.record.input.stack.layers.len();
     for (i, &layer) in layers.iter().enumerate() {
         if layer >= count || layers[..i].contains(&layer) {

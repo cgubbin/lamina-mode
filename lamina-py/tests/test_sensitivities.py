@@ -35,7 +35,7 @@ def dispersive(core=CORE, substrate=SUBSTRATE, d=CORE_D):
 def solve(stack, polarisation, wavelength=WAVELENGTH):
     basis = lamina.enumerate_guided_modes(
         stack,
-        lamina.GuidedRequest(wavelength_m=wavelength, polarisation=polarisation,
+        lamina.GuidedRequest(wavelength_m=wavelength, family=polarisation,
                              abs_beta_rad_per_m=(0.0, 3.0 * 2 * math.pi / wavelength)),
     )
     assert basis.is_complete, basis.unresolved
@@ -277,23 +277,23 @@ def test_sensitivity_record_carries_its_evidence():
     base = solve(multilayer(), "TE")
     record = json.loads(base.sensitivity(0, lamina.Parameter.thickness(1)).to_json())
     assert record["schema"] == "lamina.guided_sensitivity"
-    assert record["schema_version"] == lamina.SCHEMA_VERSION == 1
+    assert record["schema_version"] == lamina.SCHEMA_VERSION == 2
     assert record["input_hash"] == base.input_hash
     assert record["parameter"] == {"kind": "thickness", "layer": 1}
     assert record["parameter_unit"] == "m"
     assert record["conditioning"]["denominator_threshold"] > 0
 
 
-def test_constant_material_inputs_keep_their_hashes():
-    # Hashes from the build before Sellmeier materials and sensitivities existed.
-    # They used the earlier default residual limit, so state it explicitly.
+def test_constant_material_inputs_keep_their_version_2_hashes():
+    # Schema version 2 hashes, re-pinned when version 1 was retired. The input
+    # states the residual limit the version 1 pin used.
     stack = lamina.Stack(left=1.0, layers=[(4.0, 0.6e-6), (2.25, 0.4e-6)], right=2.25)
-    request = lamina.GuidedRequest(wavelength_m=1e-6, polarisation="TM",
+    request = lamina.GuidedRequest(wavelength_m=1e-6, family="TM",
                                    refinement=lamina.Refinement(residual_rtol=1e-11))
     assert lamina.GuidedInput.resolve(stack, request).canonical_hash() == (
-        "90eefa0254022be48e03e99a25bf6cd724b148e1bc7834da2dd74e66a6198952")
+        "a03671272b57b82415b0a426a472fafb9ddafdd5d0f58519a8fe27d12609f3c8")
     assert lamina.enumerate_guided_modes(stack, request).canonical_hash() == (
-        "5f11cb869cbbb31bb96220eebf013ade3175d54b5718cdd94116063d0d57a9e6")
+        "1a17ac6ae5b8057d55a98b97267dd27a1378b3175febf0baca069132498f2ab2")
 
 
 @pytest.mark.parametrize("parameter", [
@@ -311,4 +311,4 @@ def test_invalid_parameters_raise_invalid_input(parameter):
 def test_sellmeier_pole_at_the_wavelength_is_invalid():
     stack = dispersive(core=(1.5, ((1.2, WAVELENGTH),)))
     with pytest.raises(lamina.InvalidInput):
-        lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(wavelength_m=WAVELENGTH))
+        lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(family="TE", wavelength_m=WAVELENGTH))

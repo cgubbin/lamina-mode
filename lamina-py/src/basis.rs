@@ -1,10 +1,10 @@
 //! Complete modal bases in a β window and their pairings, in SI.
 use crate::records::{self as rec, Rect2};
 use crate::solve::{Failure, M_PER_CM, Z0_OHM, assumption, c2, finite_positive, normalise_stack};
-use lamina_core::{Polarisation, Scatter2};
+use lamina_core::Scatter2;
 use lamina_mode::{
     Absent, BasisFieldError, BasisLimit, BasisScope, ExteriorSheet, GuidedOverlapRegistration,
-    ModalBasisError, ModalBasisRequest, ModalWindow, ModeFamily, Normalisation, PairingError, Rect,
+    ModalBasisError, ModalBasisRequest, ModalWindow, Normalisation, PairingError, Rect,
     SignReference, WindowError,
 };
 use lamina_units::Length;
@@ -26,6 +26,11 @@ pub fn normalise(mut input: rec::ModalBasisInput) -> Result<rec::ModalBasisInput
     rec::check_identity(&input).map_err(Failure::Invalid)?;
     normalise_stack(&mut input.stack, input.wavelength_m)?;
     finite_positive("wavelength_m", input.wavelength_m)?;
+    if input.family == rec::Family::All {
+        return Err(Failure::Invalid(
+            "a modal basis spans one polarisation: family must be TE or TM".into(),
+        ));
+    }
     let (bounds, unit) = match &mut input.window {
         rec::Window::Wavenumber {
             re_rad_per_m,
@@ -154,13 +159,9 @@ pub fn solve(input: rec::ModalBasisInput) -> Result<SolvedBasis, Failure> {
         ),
         rec::Window::Chart { re, im } => (ModalWindow::Chart { re, im }, 1.),
     };
-    let polarisation = match input.polarisation {
-        rec::Polarisation::Te => Polarisation::TransverseElectric,
-        rec::Polarisation::Tm => Polarisation::TransverseMagnetic,
-    };
     let mut request = ModalBasisRequest::new(
         Length::centimetres(input.wavelength_m / M_PER_CM),
-        ModeFamily::Polarised(polarisation),
+        crate::solve::family(input.family),
         window,
     );
     request.degeneracy_gap_cm = input.degeneracy_gap_rad_per_m.map(|g| g * M_PER_CM);

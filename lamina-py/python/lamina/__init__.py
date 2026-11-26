@@ -1,6 +1,6 @@
 """Python bindings over the lamina-mode guided basis.
 
-Enumerate the guided modes of a planar multilayer of constant real materials,
+Enumerate the guided modes of a planar multilayer,
 sample their unit-power fields, evaluate their local derivatives and pair
 modes with each other and with supplied fields. For a stack closed by walls,
 find every mode in a window of the complex β plane as a counted, normalised
@@ -54,6 +54,8 @@ __all__ = [
     "Mode",
     "Gap",
     "GuidedBasis",
+    "CountEvidence",
+    "CountRegion",
     "PowerNormalisation",
     "GuidedProfile",
     "Partial",
@@ -127,6 +129,14 @@ def _readonly(a: np.ndarray) -> np.ndarray:
     return a
 
 
+def _opt_array(values: Sequence[float] | None) -> np.ndarray | None:
+    return None if values is None else _readonly(np.asarray(values, dtype=float))
+
+
+def _opt_list(a: np.ndarray | None) -> list[float] | None:
+    return None if a is None else a.tolist()
+
+
 class _Record:
     """Serialisation, equality and hashing through the canonical form."""
 
@@ -183,14 +193,19 @@ class Material:
     def refractive_index_at(self, wavelength_m: float) -> float:
         return self.refractive_index
 
-    def to_dict(self) -> dict[str, Any]:
+    def model_dict(self) -> dict[str, Any]:
+        """The tagged scalar model."""
         return {
+            "kind": "constant",
             "relative_permittivity": self.relative_permittivity,
             "relative_permeability": self.relative_permeability,
         }
 
+    def to_dict(self) -> dict[str, Any]:
+        return {"kind": "isotropic", "model": self.model_dict()}
+
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> Material:
+    def from_model_dict(cls, d: Mapping[str, Any]) -> Material:
         return cls(d["relative_permittivity"], d["relative_permeability"])
 
     def __eq__(self, other: object) -> bool:
@@ -222,8 +237,10 @@ class SellmeierMaterial:
     def refractive_index_at(self, wavelength_m: float) -> float:
         return math.sqrt(self.relative_permittivity_at(wavelength_m))
 
-    def to_dict(self) -> dict[str, Any]:
+    def model_dict(self) -> dict[str, Any]:
+        """The tagged scalar model."""
         return {
+            "kind": "sellmeier",
             "sellmeier": {
                 "constant": self.constant,
                 "terms": [{"coefficient": b, "pole_wavelength_m": p} for b, p in self.terms],
@@ -231,8 +248,11 @@ class SellmeierMaterial:
             "relative_permeability": 1.0,
         }
 
+    def to_dict(self) -> dict[str, Any]:
+        return {"kind": "isotropic", "model": self.model_dict()}
+
     @classmethod
-    def from_dict(cls, d: Mapping[str, Any]) -> SellmeierMaterial:
+    def from_model_dict(cls, d: Mapping[str, Any]) -> SellmeierMaterial:
         s = d["sellmeier"]
         return cls(s["constant"], tuple((t["coefficient"], t["pole_wavelength_m"]) for t in s["terms"]))
 
@@ -244,8 +264,21 @@ def _material(m: AnyMaterial | float) -> AnyMaterial:
     return m if isinstance(m, (Material, SellmeierMaterial)) else Material(float(m))
 
 
+_SCALAR_MODELS: dict[str, Any] = {"constant": Material, "sellmeier": SellmeierMaterial}
+
+
+def _model_from_dict(d: Mapping[str, Any]) -> Any:
+    """A scalar model from its tagged form."""
+    try:
+        return _SCALAR_MODELS[d["kind"]].from_model_dict(d)
+    except KeyError:
+        raise SchemaError(f"unknown scalar model {d.get('kind')!r}") from None
+
+
 def _material_from_dict(d: Mapping[str, Any]) -> AnyMaterial:
-    return SellmeierMaterial.from_dict(d) if "sellmeier" in d else Material.from_dict(d)
+    if d.get("kind") != "isotropic":
+        raise SchemaError(f"unknown material kind {d.get('kind')!r}")
+    return _model_from_dict(d["model"])
 
 
 @dataclass(frozen=True, eq=False)
@@ -441,19 +474,26 @@ class Refinement:
 
 @dataclass(frozen=True)
 class GuidedRequest:
-    """What to enumerate: one wavelength, polarisation and direction.
+    """What to enumerate: one wavelength, family and direction.
+
+    `family` is "TE" or "TM" for one polarisation of a separable stack, or
+    "all" (the default) for every mode, counted on the coupled TE/TM channel
+    and labelled TE, TM or hybrid.
 
     `abs_beta_rad_per_m` is the open interval of |beta| to search. When it is
     None, `enumerate_guided_modes` searches from 0 to just above the highest
     material light line and records the resolved window in the result's input.
-    `phase_tolerance` is in cycles of pi, as in lamina-mode.
+    `phase_tolerance` is in cycles of pi, as in lamina-mode. When
+    `cutoff_margin_rad_per_m` is None it resolves to 1e-5 rad/m for TE and TM
+    and to 1e-6 k0 for every mode, whose count by the argument principle needs
+    clearance from the branch point at the light line.
     """
 
     wavelength_m: float
-    polarisation: Literal["TE", "TM"] = "TE"
+    family: Literal["TE", "TM", "all"] = "all"
     direction: Literal["forward", "backward"] = "forward"
     abs_beta_rad_per_m: tuple[float, float] | None = None
-    cutoff_margin_rad_per_m: float = 1e-5
+    cutoff_margin_rad_per_m: float | None = None
     phase_tolerance: float = 1e-10
     max_subdivisions: int = 1000
     refinement: Refinement = field(default_factory=Refinement)
@@ -462,16 +502,26 @@ class GuidedRequest:
     def k0_rad_per_m(self) -> float:
         return 2.0 * math.pi / self.wavelength_m
 
+    def _cutoff_margin(self) -> float:
+        if self.cutoff_margin_rad_per_m is not None:
+            return self.cutoff_margin_rad_per_m
+        if self.family != "all":
+            return 1e-5
+        try:
+            return 1e-6 * self.k0_rad_per_m
+        except (TypeError, ZeroDivisionError):
+            return 1e-5  # left to the native validation, which names the bad wavelength
+
     def to_dict(self) -> dict[str, Any]:
         if self.abs_beta_rad_per_m is None:
             raise InvalidInput("abs_beta_rad_per_m must be resolved before serialisation")
         lo, hi = self.abs_beta_rad_per_m
         return {
             "wavelength_m": float(self.wavelength_m),
-            "polarisation": self.polarisation,
+            "family": self.family,
             "direction": self.direction,
             "abs_beta_rad_per_m": [float(lo), float(hi)],
-            "cutoff_margin_rad_per_m": float(self.cutoff_margin_rad_per_m),
+            "cutoff_margin_rad_per_m": float(self._cutoff_margin()),
             "phase_tolerance": float(self.phase_tolerance),
             "max_subdivisions": int(self.max_subdivisions),
             "refinement": self.refinement.to_dict(),
@@ -481,7 +531,7 @@ class GuidedRequest:
     def from_dict(cls, d: Mapping[str, Any]) -> GuidedRequest:
         return cls(
             wavelength_m=d["wavelength_m"],
-            polarisation=d["polarisation"],
+            family=d["family"],
             direction=d["direction"],
             abs_beta_rad_per_m=tuple(d["abs_beta_rad_per_m"]),
             cutoff_margin_rad_per_m=d["cutoff_margin_rad_per_m"],
@@ -536,6 +586,8 @@ class Mode:
     index: int
     beta_rad_per_m: complex
     n_eff: complex
+    label: Literal["TE", "TM", "hybrid"]
+    degenerate_group: int | None
     native_coordinate: complex
     characteristic_value: complex
     characteristic_derivative: complex
@@ -549,6 +601,8 @@ class Mode:
             "index": self.index,
             "beta_rad_per_m": _pair(self.beta_rad_per_m),
             "n_eff": _pair(self.n_eff),
+            "label": self.label,
+            "degenerate_group": self.degenerate_group,
             "native_coordinate": _pair(self.native_coordinate),
             "characteristic_value": _pair(self.characteristic_value),
             "characteristic_derivative": _pair(self.characteristic_derivative),
@@ -564,6 +618,8 @@ class Mode:
             d["index"],
             _c(d["beta_rad_per_m"]),
             _c(d["n_eff"]),
+            d["label"],
+            d["degenerate_group"],
             _c(d["native_coordinate"]),
             _c(d["characteristic_value"]),
             _c(d["characteristic_derivative"]),
@@ -596,13 +652,83 @@ class Gap:
         return cls(tuple(d["abs_beta_rad_per_m"]), d["expected"], d["cause"], d["detail"])
 
 
+@dataclass(frozen=True)
+class CountRegion:
+    """The least margins over the sampled counting regions of an
+    argument-principle count."""
+
+    half_height_rad_per_m: float
+    exterior_separation: float
+    pair_margin: float
+    gauge_conditioning: float
+    samples: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "half_height_rad_per_m": self.half_height_rad_per_m,
+            "exterior_separation": self.exterior_separation,
+            "pair_margin": self.pair_margin,
+            "gauge_conditioning": self.gauge_conditioning,
+            "samples": self.samples,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> CountRegion:
+        return cls(**d)
+
+
+@dataclass(frozen=True)
+class CountEvidence:
+    """Evidence of an argument-principle count: the counted β rectangles and
+    the backend counted on each, the counting regions' margins, how far each
+    end of the interval moved inside, per mode the field share outside its
+    label's family, and on a separable stack the TE and TM counts of the
+    interval."""
+
+    channel: Literal["TE", "TM", "coupled"]
+    rectangles_rad_per_m: tuple[_Rect, ...]
+    count_backends: tuple[str, ...]
+    region: CountRegion | None
+    endpoint_shift_rad_per_m: tuple[float, float]
+    off_family: tuple[float, ...]
+    separable_counts: tuple[int | None, int | None] | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "channel": self.channel,
+            "rectangles_rad_per_m": [[list(r[0]), list(r[1])] for r in self.rectangles_rad_per_m],
+            "count_backends": list(self.count_backends),
+            "region": None if self.region is None else self.region.to_dict(),
+            "endpoint_shift_rad_per_m": list(self.endpoint_shift_rad_per_m),
+            "off_family": list(self.off_family),
+            "separable_counts": None if self.separable_counts is None else list(self.separable_counts),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> CountEvidence:
+        counts = d["separable_counts"]
+        return cls(
+            d["channel"],
+            tuple(_rect(r) for r in d["rectangles_rad_per_m"]),
+            tuple(d["count_backends"]),
+            None if d["region"] is None else CountRegion.from_dict(d["region"]),
+            tuple(d["endpoint_shift_rad_per_m"]),
+            tuple(d["off_family"]),
+            None if counts is None else tuple(counts),
+        )
+
+
 @dataclass(frozen=True, eq=False)
 class GuidedBasis(_Record):
     """The guided modes of one stack in one window, with their evidence.
 
     `completeness` is "complete" when every counted state in the eligible
     window has one accepted root, "partial" when some are unresolved, and
-    "count_unknown" when an endpoint phase was undecidable.
+    "count_unknown" when the count failed. `count_method` is "oscillation"
+    for TE or TM of a stack of isotropic and diagonal regions and
+    "argument_principle" otherwise, with its `count_evidence`. Modes whose |β|
+    lie within `degeneracy_gap_rad_per_m` of a neighbour share a
+    `degenerate_group`.
     """
 
     conventions: Mapping[str, str]
@@ -616,6 +742,9 @@ class GuidedBasis(_Record):
     expected: int | None
     found: int
     completeness: Literal["complete", "partial", "count_unknown"]
+    count_method: Literal["oscillation", "argument_principle"]
+    count_evidence: CountEvidence | None
+    degeneracy_gap_rad_per_m: float
     modes: tuple[Mode, ...]
     unresolved: tuple[Gap, ...]
     _kind = "guided_basis"
@@ -631,6 +760,11 @@ class GuidedBasis(_Record):
     @property
     def n_eff(self) -> np.ndarray:
         return _readonly(np.array([m.n_eff for m in self.modes], dtype=complex))
+
+    @property
+    def labels(self) -> tuple[str, ...]:
+        """Each mode's label: "TE", "TM" or "hybrid"."""
+        return tuple(m.label for m in self.modes)
 
     def __len__(self) -> int:
         return len(self.modes)
@@ -650,6 +784,9 @@ class GuidedBasis(_Record):
             "expected": self.expected,
             "found": self.found,
             "completeness": self.completeness,
+            "count_method": self.count_method,
+            "count_evidence": None if self.count_evidence is None else self.count_evidence.to_dict(),
+            "degeneracy_gap_rad_per_m": self.degeneracy_gap_rad_per_m,
             "modes": [m.to_dict() for m in self.modes],
             "unresolved": [g.to_dict() for g in self.unresolved],
         }
@@ -668,6 +805,9 @@ class GuidedBasis(_Record):
             d["expected"],
             d["found"],
             d["completeness"],
+            d["count_method"],
+            None if d["count_evidence"] is None else CountEvidence.from_dict(d["count_evidence"]),
+            d["degeneracy_gap_rad_per_m"],
             tuple(Mode.from_dict(m) for m in d["modes"]),
             tuple(Gap.from_dict(g) for g in d["unresolved"]),
         )
@@ -777,31 +917,46 @@ class GuidedBasis(_Record):
 
 @dataclass(frozen=True)
 class PowerNormalisation:
-    """How a profile was scaled to unit longitudinal power."""
+    """How a profile was scaled to unit longitudinal power.
+
+    `phase_reference_component` names the left-interface field made real and
+    positive: "Ey+Z0Hy", or "Ex+Z0Hx" where that vanishes. `bilinear_norm_w_per_m`
+    is (1/2) ∫ (E × H) · x dz of the scaled fields, unconjugated, recorded for
+    modes solved on the coupled channel; `seed_exterior_power_w_per_m` is
+    recorded for the others.
+    """
 
     signed_power_w_per_m: float
     scale: complex
     phase_reference: complex
+    phase_reference_component: Literal["Ey+Z0Hy", "Ex+Z0Hx"]
+    bilinear_norm_w_per_m: complex | None
     seed_power_w_per_m: float
-    seed_exterior_power_w_per_m: tuple[float, float]
+    seed_exterior_power_w_per_m: tuple[float, float] | None
 
     def to_dict(self) -> dict[str, Any]:
+        exterior = self.seed_exterior_power_w_per_m
         return {
             "signed_power_w_per_m": self.signed_power_w_per_m,
             "scale": _pair(self.scale),
             "phase_reference": _pair(self.phase_reference),
+            "phase_reference_component": self.phase_reference_component,
+            "bilinear_norm_w_per_m": _opt_pair(self.bilinear_norm_w_per_m),
             "seed_power_w_per_m": self.seed_power_w_per_m,
-            "seed_exterior_power_w_per_m": list(self.seed_exterior_power_w_per_m),
+            "seed_exterior_power_w_per_m": None if exterior is None else list(exterior),
         }
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> PowerNormalisation:
+        exterior = d["seed_exterior_power_w_per_m"]
         return cls(
             d["signed_power_w_per_m"],
             _c(d["scale"]),
             _c(d["phase_reference"]),
+            d["phase_reference_component"],
+            _opt_c(d["bilinear_norm_w_per_m"]),
             d["seed_power_w_per_m"],
-            tuple(d["seed_exterior_power_w_per_m"]),
+            None if exterior is None else tuple(exterior),
         )
 
 
@@ -822,7 +977,7 @@ class GuidedProfile(_Record):
     electric_v_per_m: np.ndarray
     magnetic_a_per_m: np.ndarray
     normalisation: PowerNormalisation
-    relative_boundary_defect: float
+    relative_boundary_defect: float | None
     _kind = "guided_profile"
 
     def to_dict(self) -> dict[str, Any]:
@@ -1043,7 +1198,7 @@ class Conditioning:
     characteristic: complex
     characteristic_direction: complex
     characteristic_beta: complex
-    denominator_threshold: float
+    denominator_threshold: float | None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1070,10 +1225,12 @@ class GuidedSensitivity(_Record):
     `dbeta_rad_per_m` is in rad/m per `parameter_unit`. Field arrays have shape
     (n, 3); derivative arrays are per `parameter_unit` and are zero where
     `sample_failures` names a cause. Fractions run left exterior, layers, right
-    exterior; they sum to one and their rates to zero.
+    exterior; they sum to one and their rates to zero. Modes solved on the
+    coupled channel carry dβ/dp only: no samples and no fractions (None).
     """
 
     conventions: Mapping[str, str]
+    assumption: str
     input_hash: str
     mode_index: int
     parameter: Parameter
@@ -1088,8 +1245,8 @@ class GuidedSensitivity(_Record):
     d_electric_v_per_m: np.ndarray
     d_magnetic_a_per_m: np.ndarray
     sample_failures: tuple[str | None, ...]
-    power_fractions: np.ndarray
-    power_fraction_rates: np.ndarray
+    power_fractions: np.ndarray | None
+    power_fraction_rates: np.ndarray | None
     _kind = "guided_sensitivity"
 
     def to_dict(self) -> dict[str, Any]:
@@ -1099,6 +1256,7 @@ class GuidedSensitivity(_Record):
             "schema": "lamina.guided_sensitivity",
             "schema_version": SCHEMA_VERSION,
             "conventions": dict(self.conventions),
+            "assumption": self.assumption,
             "input_hash": self.input_hash,
             "mode_index": self.mode_index,
             "parameter": self.parameter.to_dict(),
@@ -1117,14 +1275,15 @@ class GuidedSensitivity(_Record):
             "d_magnetic_real": dh.real.tolist(),
             "d_magnetic_imag": dh.imag.tolist(),
             "sample_failures": list(self.sample_failures),
-            "power_fractions": self.power_fractions.tolist(),
-            "power_fraction_rates": self.power_fraction_rates.tolist(),
+            "power_fractions": _opt_list(self.power_fractions),
+            "power_fraction_rates": _opt_list(self.power_fraction_rates),
         }
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> GuidedSensitivity:
         return cls(
             MappingProxyType(dict(d["conventions"])),
+            d["assumption"],
             d["input_hash"],
             d["mode_index"],
             Parameter.from_dict(d["parameter"]),
@@ -1139,8 +1298,8 @@ class GuidedSensitivity(_Record):
             _components(d["d_electric_real"], d["d_electric_imag"]),
             _components(d["d_magnetic_real"], d["d_magnetic_imag"]),
             tuple(d["sample_failures"]),
-            _readonly(np.asarray(d["power_fractions"], dtype=float)),
-            _readonly(np.asarray(d["power_fraction_rates"], dtype=float)),
+            _opt_array(d["power_fractions"]),
+            _opt_array(d["power_fraction_rates"]),
         )
 
 
@@ -1150,6 +1309,7 @@ class GroupIndex(_Record):
     the energy-velocity estimate c W / P within `tolerance`."""
 
     conventions: Mapping[str, str]
+    assumption: str
     input_hash: str
     mode_index: int
     value: float
@@ -1165,6 +1325,7 @@ class GroupIndex(_Record):
             "schema": "lamina.group_index",
             "schema_version": SCHEMA_VERSION,
             "conventions": dict(self.conventions),
+            "assumption": self.assumption,
             "input_hash": self.input_hash,
             "mode_index": self.mode_index,
             "value": self.value,
@@ -1179,6 +1340,7 @@ class GroupIndex(_Record):
     def from_dict(cls, d: Mapping[str, Any]) -> GroupIndex:
         return cls(
             MappingProxyType(dict(d["conventions"])),
+            d["assumption"],
             d["input_hash"],
             d["mode_index"],
             d["value"],
@@ -1788,7 +1950,7 @@ class ModalBasisInput(_Record):
 
     stack: Stack
     wavelength_m: float
-    polarisation: Literal["TE", "TM"]
+    family: Literal["TE", "TM"]
     window: BetaWindow | ChartWindow
     degeneracy_gap_rad_per_m: float | None = None
     self_pairing_rtol: float = 1e-8
@@ -1806,7 +1968,7 @@ class ModalBasisInput(_Record):
             "schema_version": SCHEMA_VERSION,
             "stack": self.stack.to_dict(),
             "wavelength_m": float(self.wavelength_m),
-            "polarisation": self.polarisation,
+            "family": self.family,
             "window": self.window.to_dict(),
             "degeneracy_gap_rad_per_m": None if gap is None else float(gap),
             "self_pairing_rtol": float(self.self_pairing_rtol),
@@ -1817,7 +1979,7 @@ class ModalBasisInput(_Record):
         return cls(
             Stack.from_dict(d["stack"]),
             d["wavelength_m"],
-            d["polarisation"],
+            d["family"],
             _window(d["window"]),
             d["degeneracy_gap_rad_per_m"],
             d["self_pairing_rtol"],
@@ -2489,7 +2651,7 @@ class BasisLocalCoupling(_Record):
 def modal_basis(
     stack: Stack,
     wavelength_m: float,
-    polarisation: Literal["TE", "TM"],
+    family: Literal["TE", "TM"],
     window: BetaWindow | ChartWindow,
     *,
     degeneracy_gap_rad_per_m: float | None = None,
@@ -2508,7 +2670,7 @@ def modal_basis(
     open tail raises `IntegrationFailed` and field recovery `FieldsFailed`.
     """
     resolved = ModalBasisInput(
-        stack, wavelength_m, polarisation, window, degeneracy_gap_rad_per_m, self_pairing_rtol
+        stack, wavelength_m, family, window, degeneracy_gap_rad_per_m, self_pairing_rtol
     ).resolve()
     native = _native.modal_basis(resolved.to_json())
     basis = ModalBasis.from_dict(json.loads(native.record_json()))

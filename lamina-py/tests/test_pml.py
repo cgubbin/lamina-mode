@@ -13,7 +13,7 @@ WAVELENGTH = 1.0e-6
 D = 0.7e-6
 GAP = 0.3e-6
 THICKNESS = 1.0e-6
-REQUEST = lamina.GuidedRequest(wavelength_m=WAVELENGTH)
+REQUEST = lamina.GuidedRequest(family="TE", wavelength_m=WAVELENGTH)
 
 
 def pml(start=D + GAP, thickness=THICKNESS, order=2.0, strength=1 + 3j, backing="pec") -> lamina.Pml:
@@ -65,13 +65,13 @@ def test_each_pml_change_changes_the_hash():
     assert len({base, *hashes}) == len(variants) + 1
 
 
-def test_walled_and_open_inputs_keep_their_hashes():
-    # Hashes of these inputs as the build before PMLs computes them.
+def test_walled_and_open_inputs_keep_their_version_2_hashes():
+    # Schema version 2 hashes, re-pinned when version 1 was retired.
     walled = lamina.Stack(2.25, [(4.0, D)], 1.0, lamina.Wall("pec", -GAP), lamina.Wall("pmc", D + GAP))
     assert resolve(walled).canonical_hash() == (
-        "af39c0a716e411e187ebee628ebb1f42fce45def8077c43fbf5349db3ef0a4a6")
+        "47e0ed5be525055bb35b954b9ed1796a68183788a342a50234a488c56b63c3cf")
     assert resolve(lamina.Stack(2.25, [(4.0, D)], 1.0)).canonical_hash() == (
-        "d11ec787c79a015c8a40283aad0ee76e1d6c9a5ee67bf989cdeed66d91797370")
+        "8ac3cedd9c1059e59135a615f9a4592a3920ba1caa1246cc304f7cbf35ab4094")
 
 
 @pytest.mark.parametrize(
