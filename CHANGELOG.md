@@ -193,7 +193,13 @@ Added:
   "polynomial", "order", "strength"}, "backing"}`; walled and open records keep
   their hashes. Enumerating a PML-terminated stack raises
   `UnsupportedTermination`, an `InvalidInput`.
-
+- Modal bases and coupled guided bases localise by the boundary winding they
+  already count: a cell holding one zero is corrected from the winding's first
+  moment, a cell holding more is split into counted quadrants, and argloc runs
+  only where that fails. Counts, roots and completeness are unchanged; a
+  coupled basis of a one-layer slab takes about 1,200 characteristic
+  evaluations instead of 19,000.
+  
 Changed:
 
 - `hybrid_power_profile_with` and `hybrid_group_index_with` integrate their
@@ -202,6 +208,7 @@ Changed:
   of the field evaluations for a profile, half for a group index. The
   self-pairing of a profile is the pairing of the unscaled fields times the
   square of its scale; it agrees with the previous value to round-off.
+
 
 Fixed:
 
