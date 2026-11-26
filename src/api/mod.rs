@@ -80,7 +80,8 @@ pub use crate::problem::guided::{GuidedRegionError, GuidedRegionEvidence};
 pub use crate::problem::material::{ConstantExterior, InvalidConstantExterior, ModeStack, Region};
 pub use crate::problem::orchestration::{
     Ambiguity, BranchSignature, CoverageExclusion, DEFAULT_ZERO_TOLERANCE, DiscoveryConfig,
-    DuplicateGroup, MatchTolerance, PlanError, PlanGeometry, ReconciliationDiagnostic,
+    DuplicateGroup, ExteriorSector, MatchTolerance, PlanError, PlanGeometry,
+    ReconciliationDiagnostic,
 };
 pub use crate::problem::physical::{
     BoundaryReason, Classification, Evolution, ExteriorBehaviour, Flux, Interpretation,

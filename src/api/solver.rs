@@ -249,6 +249,59 @@ where
             })
             .map_err(|e| Diagnostic::new(Stage::Domain, e))
     }
+    /// The canonical strip of [`Self::canonical_plan`] and the same strip
+    /// shifted by iπ, covering every exterior sheet: proper, leaky and
+    /// incoming improper. Use it to follow a lossy mode across the light
+    /// line, where it may leave the proper sheet; each point names its exterior sectors
+    /// ([`BranchSignature::sectors`]).
+    pub fn full_period_plan(
+        &self,
+        extent: InPlaneSearchExtent<f64>,
+        reference: ReferenceSelection,
+        config: ConformalChartConfig<f64>,
+        assumption: AnalyticAssumption,
+    ) -> Result<Plan<B>, Diagnostic> {
+        self.inner
+            .full_period_in_plane_plan(extent, reference, config, assumption)
+            .map(|inner| Plan {
+                inner: PlanKind::Propagation(inner),
+            })
+            .map_err(|e| Diagnostic::new(Stage::Domain, e))
+    }
+    /// Two domains over `real` bounds of Re z: the strip
+    /// `|Im z| < π/2 − margin` and the same strip shifted by iπ, which
+    /// together hold every exterior sheet; see [`Self::full_period_plan`].
+    /// Unlike the canonical plans, this also serves identical exteriors,
+    /// whose chart has no finite automatic truncation.
+    pub fn full_period_domains(
+        &self,
+        real: [f64; 2],
+        imaginary_margin: f64,
+        reference: ReferenceSelection,
+        config: ConformalChartConfig<f64>,
+        assumption: AnalyticAssumption,
+    ) -> Result<Vec<Domain<B>>, Diagnostic> {
+        let half = std::f64::consts::FRAC_PI_2;
+        if !(imaginary_margin > 0.0 && imaginary_margin < half) {
+            return Err(Diagnostic::new(
+                Stage::Domain,
+                InPlaneSearchError::InvalidImaginaryMargin,
+            ));
+        }
+        [0.0, std::f64::consts::PI]
+            .into_iter()
+            .map(|shift| {
+                let bounds = ConformalRegion::new(
+                    real[0],
+                    real[1],
+                    -half + imaginary_margin + shift,
+                    half - imaginary_margin + shift,
+                )
+                .map_err(|e| Diagnostic::new(Stage::Domain, e))?;
+                self.domain(bounds, reference, config, assumption)
+            })
+            .collect()
+    }
     /// β rectangle in cm^-1 for a stack closed on both sides, by walls or PMLs,
     /// whose characteristic is entire and even in β: no sheet or radiation
     /// reference. The declaration covers the characteristic on the whole

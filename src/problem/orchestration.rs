@@ -51,6 +51,8 @@ pub enum PlanGeometry {
     Explicit,
     ExplicitFrequency,
     CanonicalInPlane(InPlaneSearchExtent<f64>),
+    /// The canonical in-plane strip and its iπ shift: every exterior sheet.
+    FullPeriodInPlane(InPlaneSearchExtent<f64>),
     CanonicalSpectral(WavenumberSearchExtent<f64>),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -297,9 +299,47 @@ impl BranchSignature {
     pub fn exteriors(&self) -> [Option<C>; 2] {
         [self.left, self.right]
     }
+    /// The sector of each open exterior's wavevector, left then right.
+    pub fn sectors(&self) -> [Option<ExteriorSector>; 2] {
+        self.exteriors().map(|kappa| kappa.map(ExteriorSector::of))
+    }
     /// Both exterior wavevectors, when both sides are open.
     pub fn open_exteriors(&self) -> Option<[C; 2]> {
         Some([self.left?, self.right?])
+    }
+}
+/// The quadrant of an exterior wavevector κ, the field varying as
+/// `e^{iκ|z|}` away from the stack: its sheet (proper or improper) and, on the
+/// improper sheet, its direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ExteriorSector {
+    /// Im κ > 0: decaying away from the stack.
+    Proper,
+    /// Im κ < 0, Re κ > 0: outgoing and growing, a leaky wave.
+    OutgoingImproper,
+    /// Im κ < 0, Re κ < 0: incoming and growing.
+    IncomingImproper,
+    /// Im κ = 0: on the seam between the proper and improper sheets.
+    Real,
+}
+impl ExteriorSector {
+    pub fn of(kappa: C) -> Self {
+        if kappa.im > 0.0 {
+            Self::Proper
+        } else if kappa.im == 0.0 {
+            Self::Real
+        } else if kappa.re > 0.0 {
+            Self::OutgoingImproper
+        } else {
+            Self::IncomingImproper
+        }
+    }
+    /// The sheet: proper when Im κ > 0, improper otherwise.
+    pub fn sheet(self) -> crate::api::ExteriorSheet {
+        match self {
+            Self::Proper => crate::api::ExteriorSheet::Proper,
+            _ => crate::api::ExteriorSheet::Improper,
+        }
     }
 }
 #[derive(Debug)]
@@ -608,6 +648,59 @@ where
             canonical_exclusions(bounds, extent.imaginary_margin, false),
         )?;
         plan.geometry = PlanGeometry::CanonicalInPlane(extent);
+        Ok(plan)
+    }
+    /// The canonical strip `|Im z| < π/2 − margin` and the same strip shifted
+    /// by iπ. kx² repeats under the shift while every κ changes sign, so the
+    /// two strips hold every exterior sheet of the period: the proper sheet
+    /// and the improper ones the canonical plan omits. Margins around the
+    /// branch-point lines `Im z = π/2 + nπ` remain unsearched.
+    pub fn full_period_in_plane_plan(
+        &self,
+        extent: InPlaneSearchExtent<f64>,
+        selection: ReferenceSelection,
+        config: ConformalChartConfig<f64>,
+        assumption: AnalyticAssumption,
+    ) -> Result<
+        ChartPlan<ComplexInPlaneMap<J>, S>,
+        CanonicalPlanError<
+            InPlaneSearchError,
+            crate::conformal::in_plane::region::InPlaneRegionError,
+        >,
+    > {
+        let bounds = self
+            .map
+            .search_region(extent)
+            .map_err(CanonicalPlanError::Geometry)?
+            .into_inner();
+        let pi = std::f64::consts::PI;
+        let (x, y) = (bounds.real_bounds(), bounds.imaginary_bounds());
+        let shifted = ConformalRegion::new(x.0, x.1, y.0 + pi, y.1 + pi)
+            .map_err(|_| CanonicalPlanError::Geometry(InPlaneSearchError::InvalidRegion))?;
+        let domains = [bounds, shifted]
+            .into_iter()
+            .map(|region| self.domain(region, selection, config, assumption))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(CanonicalPlanError::Domain)?;
+        let half = std::f64::consts::FRAC_PI_2;
+        let margin = extent.imaginary_margin;
+        let exclusions = vec![
+            CoverageExclusion::FiniteRealTruncation { min: x.0, max: x.1 },
+            CoverageExclusion::ImaginaryStrip {
+                min: -half,
+                max: -half + margin,
+            },
+            CoverageExclusion::ImaginaryStrip {
+                min: half - margin,
+                max: half + margin,
+            },
+            CoverageExclusion::ImaginaryStrip {
+                min: 3.0 * half - margin,
+                max: 3.0 * half,
+            },
+        ];
+        let mut plan = ChartPlan::explicit(self.clone(), domains, exclusions)?;
+        plan.geometry = PlanGeometry::FullPeriodInPlane(extent);
         Ok(plan)
     }
 }
