@@ -228,7 +228,7 @@ where
     pub fn with_backend(
         stack: impl Into<ModeStack>,
         fixed_k0: f64,
-        pol: Polarisation,
+        pol: impl Into<lamina_core::Channel>,
         backend: B,
     ) -> Result<Self, Diagnostic> {
         p::InPlaneProblem::in_plane(stack, fixed_k0, pol, backend)
@@ -277,7 +277,7 @@ where
         right: ConstantExterior,
         layers: impl IntoIterator<Item = Layer<impl Into<Region>, f64>>,
         fixed_beta: f64,
-        pol: Polarisation,
+        pol: impl Into<lamina_core::Channel>,
         backend: B,
     ) -> Result<Self, Diagnostic> {
         p::SpectralProblem::spectral(left, right, layers, fixed_beta, pol, backend)
@@ -307,7 +307,7 @@ where
     pub fn with_backend(
         stack: impl Into<ModeStack>,
         fixed_beta: f64,
-        pol: Polarisation,
+        pol: impl Into<lamina_core::Channel>,
         backend: B,
     ) -> Result<Self, Diagnostic> {
         p::frequency::FrequencyProblem::frequency(stack, fixed_beta, pol, backend)

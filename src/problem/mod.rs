@@ -102,6 +102,25 @@ impl ProblemContext {
         open_sides(&self.stack)
     }
 }
+/// The polarisation whose channel the exterior branches follow. A scalar
+/// channel needs isotropic or diagonal regions. The coupled channel accepts
+/// any finite layer but needs isotropic exteriors, whose two outgoing waves
+/// share one branch, `(κ, κ)`: TE stands for both.
+pub(crate) fn exterior_polarisation(
+    stack: &ModeStack,
+    channel: Channel,
+) -> Result<Polarisation, ProblemError> {
+    match channel.polarisation() {
+        Some(polarisation) => {
+            material::check_regions(stack)?;
+            Ok(polarisation)
+        }
+        None => {
+            material::isotropic_exteriors(stack)?;
+            Ok(Polarisation::TransverseElectric)
+        }
+    }
+}
 pub(crate) fn open_sides<M>(stack: &Stack<M, f64>) -> [bool; 2] {
     [stack.left_termination(), stack.right_termination()].map(|t| t.is_open())
 }
@@ -225,9 +244,10 @@ where
     pub fn in_plane(
         stack: impl Into<ModeStack>,
         fixed_k0: f64,
-        polarisation: Polarisation,
+        channel: impl Into<Channel>,
         backend: B,
     ) -> Result<Self, ProblemError> {
+        let channel = channel.into();
         let stack = stack.into();
         if !fixed_k0.is_finite() || fixed_k0 == 0.0 {
             return Err(InPlaneMapError::InvalidWavenumber.into());
@@ -235,7 +255,7 @@ where
         // Only open sides carry a branch: with one open side, both map
         // constants are that side's channel (r = 0).
         check_terminations(&stack)?;
-        material::check_regions(&stack)?;
+        let polarisation = exterior_polarisation(&stack, channel)?;
         let open = open_sides(&stack);
         let channels = material::exterior_channels(&stack, C::new(fixed_k0, 0.0), polarisation)?;
         let [left, right] = match open {
@@ -252,12 +272,12 @@ where
         )?
         .with_open_sides(open)
         .with_exterior_scales([left.scale(), right.scale()]);
-        let solver = Compiled::compile(&stack, backend, polarisation)?;
+        let solver = Compiled::compile(&stack, backend, channel)?;
         Ok(Self {
             context: Arc::new(ProblemContext {
                 constants: None,
                 stack,
-                channel: polarisation.into(),
+                channel,
                 coordinate: SearchCoordinate::InPlane { fixed_k0 },
             }),
             map,
@@ -276,9 +296,14 @@ where
         right: ConstantExterior,
         layers: impl IntoIterator<Item = Layer<M, f64>>,
         fixed_k_parallel: f64,
-        polarisation: Polarisation,
+        channel: impl Into<Channel>,
         backend: B,
     ) -> Result<Self, ProblemError> {
+        let channel = channel.into();
+        // Isotropic exteriors present one channel to TE and TM.
+        let polarisation = channel
+            .polarisation()
+            .unwrap_or(Polarisation::TransverseElectric);
         let [l, r] = [left, right].map(|side| side.channel(polarisation));
         let map = ComplexWavenumberMap::new(
             fixed_k_parallel,
@@ -294,13 +319,13 @@ where
             builder = builder.layer(material.into(), thickness);
         }
         let stack = builder.finalise();
-        material::check_regions(&stack)?;
-        let solver = Compiled::compile(&stack, backend, polarisation)?;
+        exterior_polarisation(&stack, channel)?;
+        let solver = Compiled::compile(&stack, backend, channel)?;
         Ok(Self {
             context: Arc::new(ProblemContext {
                 constants: Some([left, right]),
                 stack,
-                channel: polarisation.into(),
+                channel,
                 coordinate: SearchCoordinate::Spectral { fixed_k_parallel },
             }),
             map,
