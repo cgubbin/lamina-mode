@@ -994,9 +994,13 @@ impl<X: Cells> Search<X> {
     }
 
     /// Accepted roots in `interior`, and the regions that did not resolve.
-    /// argloc counts and localises; a cell it cannot search, or a cluster it
-    /// leaves, is split into quadrants counted by [`Self::winding`], and a
-    /// cell holding one root is corrected from its estimate.
+    ///
+    /// The boundary winding of [`Self::winding`] counts a cell and gives the
+    /// sum of its zeros. A cell holding one zero is corrected from that sum;
+    /// a cell holding more is split into quadrants counted the same way.
+    /// argloc localises a cell only where this fails: a correction that is
+    /// not accepted, or a split whose quadrants do not count. Every accepted
+    /// root lies in a cell whose boundary counted exactly one zero.
     pub(super) fn roots(
         &self,
         interior: Rect<f64>,
@@ -1014,8 +1018,7 @@ impl<X: Cells> Search<X> {
             }
         };
         let at_cutoff = |z: Complex| self.mirror.is_some_and(|m| contains(m, z));
-        // (cell, count, sum of its zeros, whether that sum came from argloc
-        // or a cluster's quadrants rather than a cell argloc has not seen)
+        // (cell, count, sum of its zeros, whether argloc has localised it)
         let mut cells = vec![(interior, count, sum, false)];
         while let Some((cell, count, sum, localised)) = if self.reverse {
             cells.pop()
@@ -1030,27 +1033,15 @@ impl<X: Cells> Search<X> {
                 unresolved.push(self.gap(cell, Some(count), BasisLimit::Cutoff));
                 continue;
             }
-            let search = (!localised)
-                .then(|| self.search(cell, self.argument.clone()))
-                .flatten();
-            if count == 1 && search.is_none() {
-                match self.correct(cell, sum) {
-                    Ok(point) if at_cutoff(point.physical_coordinate()) => {
-                        unresolved.push(self.gap(cell, Some(1), BasisLimit::Cutoff))
-                    }
-                    Ok(point) => match self.branch_point(&point) {
-                        Some(side) => unresolved.push(self.gap(
-                            cell,
-                            Some(1),
-                            BasisLimit::BranchPoint { side },
-                        )),
-                        None => roots.push(point),
-                    },
-                    Err(cause) => unresolved.push(self.gap(cell, Some(1), cause)),
-                }
-                continue;
-            }
-            if let Some(result) = search {
+            // argloc's leaves and estimates in place of this cell; `false`
+            // when it cannot search the cell.
+            let localise = |cells: &mut Vec<_>, unresolved: &mut Vec<BasisGap>| {
+                let Some(result) = (!localised)
+                    .then(|| self.search(cell, self.argument.clone()))
+                    .flatten()
+                else {
+                    return false;
+                };
                 let mut open = vec![];
                 for leaf in result.leaves() {
                     let score = leaf.data.score;
@@ -1074,6 +1065,27 @@ impl<X: Cells> Search<X> {
                         cells.push((bounds, n, estimate.location * n as f64, true));
                     }
                 }
+                true
+            };
+            if count == 1 {
+                match self.correct(cell, sum) {
+                    Ok(point) if at_cutoff(point.physical_coordinate()) => {
+                        unresolved.push(self.gap(cell, Some(1), BasisLimit::Cutoff))
+                    }
+                    Ok(point) => match self.branch_point(&point) {
+                        Some(side) => unresolved.push(self.gap(
+                            cell,
+                            Some(1),
+                            BasisLimit::BranchPoint { side },
+                        )),
+                        None => roots.push(point),
+                    },
+                    Err(cause) => {
+                        if !localise(&mut cells, &mut unresolved) {
+                            unresolved.push(self.gap(cell, Some(1), cause));
+                        }
+                    }
+                }
                 continue;
             }
             let size = (cell.x_max - cell.x_min).max(cell.y_max - cell.y_min);
@@ -1095,7 +1107,11 @@ impl<X: Cells> Search<X> {
                     Err(cause) => cause,
                 }
             };
-            unresolved.push(self.gap(cell, Some(count), cause));
+            if matches!(cause, BasisLimit::Multiplicity { .. })
+                || !localise(&mut cells, &mut unresolved)
+            {
+                unresolved.push(self.gap(cell, Some(count), cause));
+            }
         }
         roots.sort_by(|a, b| key_order(a.physical_coordinate(), b.physical_coordinate()));
         let mut distinct: Vec<ModePoint> = vec![];

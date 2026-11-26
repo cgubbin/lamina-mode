@@ -194,6 +194,15 @@ Added:
   their hashes. Enumerating a PML-terminated stack raises
   `UnsupportedTermination`, an `InvalidInput`.
 
+Changed:
+
+- Modal bases and coupled guided bases localise by the boundary winding they
+  already count: a cell holding one zero is corrected from the winding's first
+  moment, a cell holding more is split into counted quadrants, and argloc runs
+  only where that fails. Counts, roots and completeness are unchanged; a
+  coupled basis of a one-layer slab takes about 1,200 characteristic
+  evaluations instead of 19,000.
+
 Fixed:
 
 - A solve whose discovery failed on a chart (for example a direct β rectangle
