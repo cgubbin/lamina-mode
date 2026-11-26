@@ -9,7 +9,7 @@ import numpy as np
 import lamina
 
 stack = lamina.Stack(left=1.0, layers=[(4.0, 2e-2)], right=2.25)
-basis = lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(wavelength_m=1e-2))
+basis = lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(wavelength_m=1e-2, family="TE"))
 
 print(basis.completeness, basis.expected, basis.found)  # complete 6 6
 print(basis.n_eff.real)
@@ -32,7 +32,7 @@ stack = lamina.Stack(
     layers=[(lamina.SellmeierMaterial(1.5, [(1.2, 0.7e-6)]), 1.2e-6)],
     right=lamina.SellmeierMaterial(1.6, [(0.3, 0.42e-6)]),
 )
-basis = lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(wavelength_m=1e-6))
+basis = lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(wavelength_m=1e-6, family="TE"))
 
 s = basis.sensitivity(0, lamina.Parameter.thickness(0), z_m=np.linspace(0, 1.2e-6, 50))
 s.dbeta_rad_per_m          # rad/m per m of thickness
@@ -59,7 +59,7 @@ stack = lamina.Stack(
     left_termination=lamina.Wall("pec", -0.45e-6),
     right_termination=lamina.Wall("pec", 1.15e-6),
 )
-basis = lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(wavelength_m=1e-6))
+basis = lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(wavelength_m=1e-6, family="TE"))
 basis.light_line_rad_per_m   # 0.0: no open side
 basis.n_eff.real             # every real-beta mode in the window, below the cladding index too
 ```
@@ -95,7 +95,7 @@ modal basis (below).
 Modes pair with each other, from one basis or from two stacks at one wavelength, and with supplied fields:
 
 ```python
-request = lamina.GuidedRequest(wavelength_m=1e-6)
+request = lamina.GuidedRequest(wavelength_m=1e-6, family="TE")
 a = lamina.enumerate_guided_modes(lamina.Stack(1.0, [(4.0, 0.6e-6)], 1.44), request)
 b = lamina.enumerate_guided_modes(lamina.Stack(1.0, [(4.0, 0.7e-6)], 1.44), request)
 
@@ -223,23 +223,46 @@ lamina-py presents lamina-mode's results in Python: SI quantities with the unit 
 results with numpy arrays, and a versioned, canonical JSON form of every input and result with its SHA-256
 identity. Every number comes from lamina-mode.
 
+## Families and labels
+
+A request names a `family`: `"TE"` or `"TM"` for one polarisation of a separable stack, or `"all"`, the default,
+for every mode. TE and TM of isotropic and diagonal regions are counted by their oscillation index; `"all"` is
+counted by the argument principle on the coupled TE/TM channel, with the evidence in `basis.count_evidence`:
+
+```python
+basis = lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(wavelength_m=1e-6))
+basis.labels                  # ("TE", "TM", ...): TE or TM on a separable stack, "hybrid" otherwise
+basis.count_method            # "argument_principle"
+[m.degenerate_group for m in basis.modes]  # shared by modes within basis.degeneracy_gap_rad_per_m
+```
+
+An argument-principle count keeps its rectangles clear of the light-line branch point, so its default cutoff
+margin is 1e-6 k0 (1e-5 rad/m for TE and TM). Fields, sensitivities, pairings and local derivatives of modes so
+counted are not available yet; they raise `InvalidInput`.
+
 ## Conventions
 
-Every result carries `conventions`, `schema` and `schema_version`; see
+Every result carries `conventions`, `schema` and `schema_version` (2); see
 `lamina.CONVENTIONS`. In short:
 
 - lengths in metres, wavenumbers in rad/m, E in V/m, H in A/m, power in W per
   metre of invariant width;
 - z is the stack normal, with z = 0 at the first interface; x is the
-  propagation axis; y is invariant. TE has Ey, Hx, Hz and TM has Hy, Ex, Ez;
+  propagation axis; y is invariant;
+- tensors are expressed in that frame: a region's rotation R maps its material
+  frame to it, T = R T_material Rᵀ;
+- polarisation is a property of each mode: TE has Ey, Hx, Hz and TM has Hy, Ex,
+  Ez when every region leaves y decoupled; otherwise modes are hybrid;
 - phasors use exp(+iβx − iωt);
-- profiles carry unit signed longitudinal power, with the left-interface Ey (TE)
-  or Z₀Hy (TM) real and positive;
+- profiles carry unit signed longitudinal power, with Ey + Z₀Hy at the left
+  interface real and positive, or Ex + Z₀Hx where that vanishes (named in the
+  profile);
 - a sample on an interface takes the limit from +z.
 
-Materials are constant, real and positive. That makes the analytic
-declarations lamina-mode requires true by construction; each result records
-the declaration in `assumption`.
+Every material and scalar model is tagged by `"kind"`; a version 1 record is
+rejected with `SchemaError` (decision note 0010 gives the correspondence). The
+materials make the analytic declarations lamina-mode requires true by
+construction; each result records the declaration in `assumption`.
 
 ## Evidence and failures
 

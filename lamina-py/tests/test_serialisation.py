@@ -13,7 +13,7 @@ import lamina
 @pytest.fixture(scope="module")
 def basis():
     stack = lamina.Stack(left=1.0, layers=[(4.0, 1.0e-6), (2.25, 0.5e-6)], right=2.25)
-    return lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(wavelength_m=1.0e-6))
+    return lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(family="TE", wavelength_m=1.0e-6))
 
 
 def roundtrip(record):

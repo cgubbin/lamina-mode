@@ -22,7 +22,7 @@ def trapezoid(y, x):
 def basis(request):
     stack = lamina.Stack(left=LEFT, layers=[(CORE, D)], right=RIGHT)
     return lamina.enumerate_guided_modes(
-        stack, lamina.GuidedRequest(wavelength_m=WAVELENGTH, polarisation=request.param)
+        stack, lamina.GuidedRequest(wavelength_m=WAVELENGTH, family=request.param)
     )
 
 
@@ -68,7 +68,7 @@ def test_fields_decay_deep_into_both_claddings(basis):
 
 
 def test_phase_rule_and_field_components(basis):
-    pol = basis.input.request.polarisation
+    pol = basis.input.request.family
     for mode in basis.modes:
         at_left = basis.sample_fields(mode.index, [0.0])
         primary = at_left.electric_v_per_m[0, 1] if pol == "TE" else at_left.magnetic_a_per_m[0, 1]
@@ -88,7 +88,7 @@ def test_interface_samples_take_the_limit_from_plus_z(basis):
     below, on, above = basis.sample_fields(mode.index, [D - eps, D, D + eps]).electric_v_per_m
     scale = np.abs(above).max()
     np.testing.assert_allclose(on, above, rtol=0, atol=1e-8 * scale)
-    if basis.input.request.polarisation == "TM":
+    if basis.input.request.family == "TM":
         # Normal D = eps E_z is continuous, so E_z jumps by eps_core / eps_right.
         assert CORE * below[2] == pytest.approx(RIGHT * on[2], rel=1e-8)
         assert abs(below[2] - on[2]) > 0.1 * scale
@@ -99,7 +99,7 @@ def neff(thickness: float, wavelength: float, pol: str) -> np.ndarray:
 
 
 def test_thickness_slope_matches_finite_difference(basis):
-    pol = basis.input.request.polarisation
+    pol = basis.input.request.family
     h = 1e-12
     fd = (neff(D + h, WAVELENGTH, pol) - neff(D - h, WAVELENGTH, pol)) / (2 * h) * basis.k0_rad_per_m
     for mode in basis.modes:
@@ -113,7 +113,7 @@ def test_thickness_slope_matches_finite_difference(basis):
 
 
 def test_k0_slope_matches_finite_difference(basis):
-    pol = basis.input.request.polarisation
+    pol = basis.input.request.family
     k0 = basis.k0_rad_per_m
     dk = 1e-6 * k0
 

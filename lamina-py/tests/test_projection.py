@@ -20,7 +20,7 @@ COEFFICIENTS = [0.8 + 0.2j, -0.3 + 0.4j, 0.1 - 0.25j, 0.05 + 0.6j]
 def solve(polarisation):
     stack = lamina.Stack(left=LEFT, layers=[(CORE, D)], right=RIGHT)
     basis = lamina.enumerate_guided_modes(
-        stack, lamina.GuidedRequest(wavelength_m=WAVELENGTH, polarisation=polarisation)
+        stack, lamina.GuidedRequest(wavelength_m=WAVELENGTH, family=polarisation)
     )
     assert basis.is_complete and basis.found >= 2
     return basis
@@ -69,7 +69,7 @@ def slab_mode(beta, polarisation, amplitude):
 
 
 def superposition(basis, coefficients):
-    pol = basis.input.request.polarisation
+    pol = basis.input.request.family
     modes = []
     for mode in basis.modes:
         at_zero = basis.sample_fields(mode.index, [0.0])

@@ -3,7 +3,7 @@ use crate::records as rec;
 use crate::sens::{Direction, direction};
 use crate::solve::{
     DISPERSIVE_ASSUMPTION, Failure, M_PER_CM, Solved, Z0_OHM, assumption, c2, point,
-    recovery_settings,
+    recovery_settings, scalar_only,
 };
 use lamina_core::Scatter2;
 use lamina_mode::{
@@ -69,6 +69,8 @@ impl<'a> Pair<'a> {
     }
 
     fn points(&self) -> Result<[&'a lamina_mode::ModePoint; 2], Failure> {
+        scalar_only(self.first, "a pairing")?;
+        scalar_only(self.second, "a pairing")?;
         Ok([
             point(self.first, self.first_mode)?,
             point(self.second, self.second_mode)?,
@@ -346,6 +348,7 @@ pub fn local_coupling(
     gap_rad_per_m: Option<f64>,
 ) -> Result<rec::LocalCoupling, Failure> {
     let invalid = |m: String| Err(Failure::Invalid(m));
+    scalar_only(solved, "local coupling")?;
     let record = &solved.record;
     if record.completeness != rec::Completeness::Complete {
         return invalid(
@@ -373,19 +376,26 @@ pub fn local_coupling(
     let k0_m = record.k0_rad_per_m;
     let wavelength = record.input.request.wavelength_m;
     for (region, material) in crate::solve::regions(&record.input.stack).enumerate() {
-        let (epsilon, mu) = match material {
-            rec::Material::Constant(c) => (c.relative_permittivity, c.relative_permeability),
-            rec::Material::Sellmeier(m) => {
+        let rec::Material::Isotropic { model } = material;
+        let (epsilon, mu) = match model {
+            rec::ScalarModel::Constant {
+                relative_permittivity,
+                relative_permeability,
+            } => (*relative_permittivity, *relative_permeability),
+            rec::ScalarModel::Sellmeier {
+                sellmeier,
+                relative_permeability,
+            } => {
                 let l2 = wavelength * wavelength;
-                let epsilon = m.sellmeier.constant
-                    + m.sellmeier
+                let epsilon = sellmeier.constant
+                    + sellmeier
                         .terms
                         .iter()
                         .map(|t| {
                             t.coefficient * l2 / (l2 - t.pole_wavelength_m * t.pole_wavelength_m)
                         })
                         .sum::<f64>();
-                (epsilon, m.relative_permeability)
+                (epsilon, *relative_permeability)
             }
         };
         if mu != 1. {
@@ -572,6 +582,7 @@ pub fn project(
     field: &Sample<'_>,
 ) -> Result<rec::FieldProjection, ProjectionFailure> {
     let invalid = |m: String| Err(ProjectionFailure::Failure(Failure::Invalid(m)));
+    scalar_only(solved, "a projection").map_err(ProjectionFailure::Failure)?;
     let record = &solved.record;
     if record.completeness != rec::Completeness::Complete || solved.basis.modes.is_empty() {
         return invalid("projection needs a complete, nonempty basis".into());

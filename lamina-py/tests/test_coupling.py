@@ -22,7 +22,7 @@ def stack(interface=0.0, permittivity=0.0):
 
 def solve(s, polarisation, **request):
     basis = lamina.enumerate_guided_modes(
-        s, lamina.GuidedRequest(wavelength_m=WAVELENGTH, polarisation=polarisation, **request)
+        s, lamina.GuidedRequest(wavelength_m=WAVELENGTH, family=polarisation, **request)
     )
     assert basis.is_complete, basis.unresolved
     return basis
@@ -98,7 +98,7 @@ def test_a_wide_gap_leaves_modes_unresolved_and_the_matrix_unchanged():
     "build, parameter, reason",
     [
         (lambda: lamina.enumerate_guided_modes(
-            stack(), lamina.GuidedRequest(wavelength_m=WAVELENGTH, max_subdivisions=0)),
+            stack(), lamina.GuidedRequest(family="TE", wavelength_m=WAVELENGTH, max_subdivisions=0)),
          lamina.Parameter.permittivity(1), "complete basis"),
         (lambda: solve(lamina.Stack(left=1.0, layers=[(lamina.Material(4.0, 1.5), 0.42e-6)], right=1.44), "TE"),
          lamina.Parameter.permittivity(1), "nonmagnetic"),

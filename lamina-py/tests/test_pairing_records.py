@@ -14,7 +14,7 @@ WAVELENGTH = 1.0e-6
 
 def solve(stack, polarisation="TE", direction="forward"):
     return lamina.enumerate_guided_modes(
-        stack, lamina.GuidedRequest(wavelength_m=WAVELENGTH, polarisation=polarisation, direction=direction)
+        stack, lamina.GuidedRequest(wavelength_m=WAVELENGTH, family=polarisation, direction=direction)
     )
 
 
@@ -74,7 +74,7 @@ def test_records_carry_schema_conventions_definition_and_inputs(records, bases, 
     a, b = bases
     record = json.loads(records[schema].to_json())
     assert record["schema"] == schema
-    assert record["schema_version"] == lamina.SCHEMA_VERSION == 1
+    assert record["schema_version"] == lamina.SCHEMA_VERSION == 2
     assert record["conventions"] == dict(lamina.CONVENTIONS)
     assert record["definition"]
     if "input_hash" in record:

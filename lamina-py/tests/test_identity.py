@@ -14,7 +14,7 @@ def make(stack_style: str, window=None) -> tuple[lamina.Stack, lamina.GuidedRequ
             layers=(lamina.Layer(lamina.Material(4.0), 2.0e-6),),
             right=lamina.Material(2.25),
         )
-    return stack, lamina.GuidedRequest(wavelength_m=1.0e-6, abs_beta_rad_per_m=window)
+    return stack, lamina.GuidedRequest(family="TE", wavelength_m=1.0e-6, abs_beta_rad_per_m=window)
 
 
 def test_equal_inputs_give_equal_hashes():
@@ -37,7 +37,7 @@ def test_different_inputs_give_different_hashes():
     a = lamina.GuidedInput.resolve(stack, request)
     thicker = lamina.Stack(left=1.0, layers=[(4.0, 2.0e-6 * (1 + 1e-15))], right=2.25)
     b = lamina.GuidedInput.resolve(thicker, request)
-    tm = lamina.GuidedInput.resolve(stack, lamina.GuidedRequest(wavelength_m=1e-6, polarisation="TM"))
+    tm = lamina.GuidedInput.resolve(stack, lamina.GuidedRequest(wavelength_m=1e-6, family="TM"))
     assert len({a.canonical_hash(), b.canonical_hash(), tm.canonical_hash()}) == 3
 
 

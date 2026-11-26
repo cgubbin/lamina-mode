@@ -1,4 +1,4 @@
-//! The serialised form of inputs and results: schema version 1.
+//! The serialised form of inputs and results: schema version 2.
 //!
 //! Every record names its schema and version and carries the conventions it
 //! was produced under. Serialisation is JSON with fields in declaration order,
@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 pub const INPUT_SCHEMA: &str = "lamina.guided_input";
 pub const BASIS_SCHEMA: &str = "lamina.guided_basis";
@@ -64,6 +64,7 @@ pub struct Conventions {
     pub invariant_axis: String,
     pub origin: String,
     pub time_convention: String,
+    pub tensor_frame: String,
     pub polarisation: String,
     pub normalisation: String,
     pub interface_samples: String,
@@ -83,37 +84,39 @@ impl Conventions {
             invariant_axis: s("y"),
             origin: s("z = 0 at the first interface; layers run towards +z"),
             time_convention: s("exp(+i*beta*x - i*omega*t)"),
-            polarisation: s("relative to the stack normal: TE has Ey, Hx, Hz; TM has Hy, Ex, Ez"),
-            normalisation: s("unit signed longitudinal power per m of invariant width; \
-                 left-interface Ey (TE) or Z0*Hy (TM) real and positive"),
+            tensor_frame: s(
+                "relative permittivity and permeability tensors are expressed in the \
+                 (x, y, z) frame above; a region's rotation R maps its material frame to that frame: \
+                 T = R T_material R^T",
+            ),
+            polarisation: s(
+                "a property of each mode: TE has Ey, Hx, Hz and TM has Hy, Ex, Ez when \
+                 every region leaves y decoupled; otherwise modes are hybrid, with all six components",
+            ),
+            normalisation: s(
+                "unit signed longitudinal power per m of invariant width; Ey + Z0*Hy at \
+                 the left interface real and positive, or Ex + Z0*Hx when that vanishes (named in each \
+                 profile)",
+            ),
             interface_samples: s("a sample on an interface takes the limit from +z"),
         }
     }
 }
 
-/// A layer or exterior material. Untagged, with the constant material first,
-/// so records written before the Sellmeier variant existed keep their form
-/// and hash (docs/decisions/0005).
+/// A scalar dispersion model: one relative permittivity and permeability.
+/// Internally tagged by `"kind"`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(untagged)]
-pub enum Material {
-    Constant(ConstantMaterial),
-    Sellmeier(SellmeierMaterial),
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct ConstantMaterial {
-    pub relative_permittivity: f64,
-    pub relative_permeability: f64,
-}
-
-/// ε(λ) = constant + Σ Bⱼ λ² / (λ² − λⱼ²), with a constant permeability.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct SellmeierMaterial {
-    pub sellmeier: Sellmeier,
-    pub relative_permeability: f64,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ScalarModel {
+    Constant {
+        relative_permittivity: f64,
+        relative_permeability: f64,
+    },
+    /// ε(λ) = constant + Σ Bⱼ λ² / (λ² − λⱼ²), with a constant permeability.
+    Sellmeier {
+        sellmeier: Sellmeier,
+        relative_permeability: f64,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -128,6 +131,14 @@ pub struct Sellmeier {
 pub struct SellmeierTerm {
     pub coefficient: f64,
     pub pole_wavelength_m: f64,
+}
+
+/// A layer or exterior material. Internally tagged by `"kind"`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Material {
+    /// One scalar model for every direction.
+    Isotropic { model: ScalarModel },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -195,12 +206,28 @@ pub struct Stack {
     pub right_termination: Termination,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Polarisation {
+/// The modes a request asks for: TE or TM of a separable stack, or every
+/// mode. Resolved to `all` when omitted.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Family {
     #[serde(rename = "TE")]
     Te,
     #[serde(rename = "TM")]
     Tm,
+    #[default]
+    #[serde(rename = "all")]
+    All,
+}
+
+/// The field family of one mode.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Label {
+    #[serde(rename = "TE")]
+    Te,
+    #[serde(rename = "TM")]
+    Tm,
+    #[serde(rename = "hybrid")]
+    Hybrid,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,7 +256,8 @@ pub struct Refinement {
 #[serde(deny_unknown_fields)]
 pub struct GuidedRequest {
     pub wavelength_m: f64,
-    pub polarisation: Polarisation,
+    #[serde(default)]
+    pub family: Family,
     pub direction: Direction,
     /// Open interval of |beta|.
     pub abs_beta_rad_per_m: [f64; 2],
@@ -266,6 +294,10 @@ pub struct Mode {
     pub index: usize,
     pub beta_rad_per_m: C2,
     pub n_eff: C2,
+    pub label: Label,
+    /// Shared by the modes whose |β| lie within the basis's degeneracy gap
+    /// of a neighbour; null for a mode alone.
+    pub degenerate_group: Option<usize>,
     pub native_coordinate: C2,
     pub characteristic_value: C2,
     pub characteristic_derivative: C2,
@@ -301,8 +333,52 @@ pub struct GuidedBasis {
     pub expected: Option<usize>,
     pub found: usize,
     pub completeness: Completeness,
+    /// "oscillation" (TE or TM of isotropic and diagonal regions) or
+    /// "argument_principle".
+    pub count_method: String,
+    /// Null for an oscillation count.
+    pub count_evidence: Option<CountEvidence>,
+    /// Modes whose |β| differ by no more than this share a degenerate group.
+    pub degeneracy_gap_rad_per_m: f64,
     pub modes: Vec<Mode>,
     pub unresolved: Vec<Gap>,
+}
+
+/// Evidence of an argument-principle count.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CountEvidence {
+    /// "TE", "TM" or "coupled".
+    pub channel: String,
+    /// The counted β rectangles, left to right in |β|.
+    pub rectangles_rad_per_m: Vec<Rect2>,
+    /// Per rectangle, the backend whose characteristic was counted.
+    pub count_backends: Vec<String>,
+    /// The sampled conditions of the counting regions; null when refused.
+    pub region: Option<CountRegion>,
+    /// How far each end of the interval moved inside to clear a root on it.
+    pub endpoint_shift_rad_per_m: [f64; 2],
+    /// Per mode, the norm of the field outside its label's family relative
+    /// to the whole, at the left interface; one for a hybrid mode.
+    pub off_family: Vec<f64>,
+    /// On a separable stack counted on the coupled channel, the TE and TM
+    /// counts of the same interval.
+    pub separable_counts: Option<[Option<usize>; 2]>,
+}
+
+/// The least margins over the sampled counting regions.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CountRegion {
+    pub half_height_rad_per_m: f64,
+    /// Least distance between an outgoing and an incoming exterior root,
+    /// relative to the roots' scale.
+    pub exterior_separation: f64,
+    /// Least |Im n| of an exterior root relative to the roots' scale.
+    pub pair_margin: f64,
+    /// Least σ_min/σ_max of the exterior reference rows of the incoming waves.
+    pub gauge_conditioning: f64,
+    pub samples: usize,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -311,10 +387,16 @@ pub struct PowerNormalisation {
     pub signed_power_w_per_m: f64,
     /// Common multiplier applied to the backend seed fields.
     pub scale: C2,
-    /// Primary transverse field at the left interface before normalisation.
+    /// The phase reference of the seed at the left interface.
     pub phase_reference: C2,
+    /// "Ey+Z0Hy", or "Ex+Z0Hx" where that vanishes.
+    pub phase_reference_component: String,
+    /// (1/2) ∫ (E × H) · x dz of the scaled fields, unconjugated; null for TE
+    /// and TM modes of isotropic and diagonal regions.
+    pub bilinear_norm_w_per_m: Option<C2>,
     pub seed_power_w_per_m: f64,
-    pub seed_exterior_power_w_per_m: [f64; 2],
+    /// Null for modes solved on the coupled channel.
+    pub seed_exterior_power_w_per_m: Option<[f64; 2]>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -333,7 +415,8 @@ pub struct GuidedProfile {
     pub magnetic_real: Vec<[f64; 3]>,
     pub magnetic_imag: Vec<[f64; 3]>,
     pub normalisation: PowerNormalisation,
-    pub relative_boundary_defect: f64,
+    /// Null for modes solved on the coupled channel.
+    pub relative_boundary_defect: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -398,7 +481,8 @@ pub struct Conditioning {
     pub characteristic: C2,
     pub characteristic_direction: C2,
     pub characteristic_beta: C2,
-    pub denominator_threshold: f64,
+    /// Null where the backend states no threshold.
+    pub denominator_threshold: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -414,6 +498,7 @@ pub struct GuidedSensitivity {
     pub schema: String,
     pub schema_version: u32,
     pub conventions: Conventions,
+    pub assumption: String,
     pub input_hash: String,
     pub mode_index: usize,
     pub parameter: Parameter,
@@ -434,9 +519,10 @@ pub struct GuidedSensitivity {
     pub d_magnetic_real: Vec<[f64; 3]>,
     pub d_magnetic_imag: Vec<[f64; 3]>,
     pub sample_failures: Vec<Option<String>>,
-    /// Left exterior, layers, right exterior.
-    pub power_fractions: Vec<f64>,
-    pub power_fraction_rates: Vec<f64>,
+    /// Left exterior, layers, right exterior; null for modes solved on the
+    /// coupled channel.
+    pub power_fractions: Option<Vec<f64>>,
+    pub power_fraction_rates: Option<Vec<f64>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -445,6 +531,7 @@ pub struct GroupIndex {
     pub schema: String,
     pub schema_version: u32,
     pub conventions: Conventions,
+    pub assumption: String,
     pub input_hash: String,
     pub mode_index: usize,
     pub value: f64,
@@ -638,7 +725,8 @@ pub struct ModalBasisInput {
     pub schema_version: u32,
     pub stack: Stack,
     pub wavelength_m: f64,
-    pub polarisation: Polarisation,
+    /// TE or TM: a modal basis spans one polarisation.
+    pub family: Family,
     pub window: Window,
     /// Resolved on validation: 1e-6 k0 when not given.
     pub degeneracy_gap_rad_per_m: Option<f64>,

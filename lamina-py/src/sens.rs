@@ -78,15 +78,18 @@ pub(crate) fn direction_for(
             let material = crate::solve::regions(stack)
                 .nth(region_ok(region)?)
                 .expect("region checked");
-            let rec::Material::Sellmeier(m) = material else {
+            let rec::Material::Isotropic {
+                model: rec::ScalarModel::Sellmeier { sellmeier, .. },
+            } = material
+            else {
                 return Err(invalid(format!(
                     "region {region} is not a Sellmeier material"
                 )));
             };
-            let model = crate::solve::sellmeier_model(&m.sellmeier)?;
+            let model = crate::solve::sellmeier_model(sellmeier)?;
             let model_rates = model.permittivity_parameter_rates(k0_cm);
             let term_ok = |term: usize| {
-                if term < m.sellmeier.terms.len() {
+                if term < sellmeier.terms.len() {
                     Ok(term)
                 } else {
                     Err(invalid(format!(
@@ -104,7 +107,7 @@ pub(crate) fn direction_for(
                 SellmeierPoleWavelength { term, .. } => {
                     // dε/dλp = dε/dq · dq/dλp, with q = 2π / λp in cm^-1 and λp in m.
                     let term = term_ok(term)?;
-                    let pole_m = m.sellmeier.terms[term].pole_wavelength_m;
+                    let pole_m = sellmeier.terms[term].pole_wavelength_m;
                     let q_cm = std::f64::consts::TAU / (pole_m / M_PER_CM);
                     (
                         model_rates.pole_wavenumbers[term] * (-q_cm / pole_m),
@@ -141,7 +144,7 @@ fn conditioning(s: &lamina_mode::GuidedBetaSensitivity) -> rec::Conditioning {
         characteristic: c2(s.characteristic),
         characteristic_direction: c2(s.characteristic_direction),
         characteristic_beta: c2(s.characteristic_beta),
-        denominator_threshold: s.denominator_threshold,
+        denominator_threshold: Some(s.denominator_threshold),
     }
 }
 
@@ -153,6 +156,7 @@ pub fn sensitivity(
     frame: rec::Frame,
 ) -> Result<rec::GuidedSensitivity, Failure> {
     let point = point(solved, mode_index)?;
+    crate::solve::scalar_only(solved, "a sensitivity")?;
     let direction = direction(solved, parameter)?;
     let backend = Scatter2::new();
     let eigenvalue = point
@@ -203,6 +207,7 @@ pub fn sensitivity(
         schema: rec::SENSITIVITY_SCHEMA.to_owned(),
         schema_version: rec::SCHEMA_VERSION,
         conventions: rec::Conventions::current(),
+        assumption: solved.record.assumption.clone(),
         input_hash: solved.record.input_hash.clone(),
         mode_index,
         parameter,
@@ -221,8 +226,8 @@ pub fn sensitivity(
         d_magnetic_real: vec![],
         d_magnetic_imag: vec![],
         sample_failures: vec![],
-        power_fractions: vec![],
-        power_fraction_rates: vec![],
+        power_fractions: None,
+        power_fraction_rates: None,
     };
     for sample in samples {
         let (er, ei, hr, hi) = split(&sample.field, 1.);
@@ -248,16 +253,20 @@ pub fn sensitivity(
         .map(|r| r.power_w_per_m)
         .sum::<f64>()
         .signum();
-    record.power_fractions = power
-        .regional_power
-        .iter()
-        .map(|r| r.power_w_per_m * sign)
-        .collect();
-    record.power_fraction_rates = power
-        .regional_power
-        .iter()
-        .map(|r| r.power_rate_w_per_m * sign * direction.per_unit)
-        .collect();
+    record.power_fractions = Some(
+        power
+            .regional_power
+            .iter()
+            .map(|r| r.power_w_per_m * sign)
+            .collect(),
+    );
+    record.power_fraction_rates = Some(
+        power
+            .regional_power
+            .iter()
+            .map(|r| r.power_rate_w_per_m * sign * direction.per_unit)
+            .collect(),
+    );
     Ok(record)
 }
 
@@ -267,6 +276,7 @@ pub fn group_index(
     tolerance: f64,
 ) -> Result<rec::GroupIndex, Failure> {
     let point = point(solved, mode_index)?;
+    crate::solve::scalar_only(solved, "a group index")?;
     let group = point
         .guided_group_index_with(
             &Scatter2::new(),
@@ -281,6 +291,7 @@ pub fn group_index(
         schema: rec::GROUP_INDEX_SCHEMA.to_owned(),
         schema_version: rec::SCHEMA_VERSION,
         conventions: rec::Conventions::current(),
+        assumption: solved.record.assumption.clone(),
         input_hash: solved.record.input_hash.clone(),
         mode_index,
         value: group.value,
