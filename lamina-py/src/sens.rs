@@ -61,6 +61,11 @@ pub(crate) fn direction_for(
             ("rigid translation", "m", 1. / M_PER_CM)
         }
         Wavelength => {
+            if crate::solve::tabulated(stack) {
+                return Err(invalid(
+                    "a tabulated material has no wavelength derivative".into(),
+                ));
+            }
             wavelength_rate = 1.;
             ("vacuum wavelength", "m", 1. / M_PER_CM)
         }
@@ -86,7 +91,7 @@ pub(crate) fn direction_for(
                     "region {region} is not a Sellmeier material"
                 )));
             };
-            let model = crate::solve::sellmeier_model(sellmeier)?;
+            let model = crate::materials::sellmeier_model(sellmeier)?;
             let model_rates = model.permittivity_parameter_rates(k0_cm);
             let term_ok = |term: usize| {
                 if term < sellmeier.terms.len() {
@@ -277,6 +282,11 @@ pub fn group_index(
 ) -> Result<rec::GroupIndex, Failure> {
     let point = point(solved, mode_index)?;
     crate::solve::scalar_only(solved, "a group index")?;
+    if crate::solve::tabulated(&solved.record.input.stack) {
+        return Err(Failure::Invalid(
+            "a group index needs the wavelength dispersion a tabulated material lacks".into(),
+        ));
+    }
     let group = point
         .guided_group_index_with(
             &Scatter2::new(),

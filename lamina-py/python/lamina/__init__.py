@@ -41,6 +41,14 @@ __all__ = [
     "CONVENTIONS",
     "Material",
     "SellmeierMaterial",
+    "Lorentz",
+    "DrudeLorentz",
+    "Tabulated",
+    "Rotation",
+    "Diagonal",
+    "Biaxial",
+    "Uniaxial",
+    "TensorMaterial",
     "Parameter",
     "GuidedSensitivity",
     "GroupIndex",
@@ -55,6 +63,7 @@ __all__ = [
     "Gap",
     "GuidedBasis",
     "CountEvidence",
+    "SolvedRegion",
     "CountRegion",
     "PowerNormalisation",
     "GuidedProfile",
@@ -257,14 +266,378 @@ class SellmeierMaterial:
         return cls(s["constant"], tuple((t["coefficient"], t["pole_wavelength_m"]) for t in s["terms"]))
 
 
-AnyMaterial = Material | SellmeierMaterial
+@dataclass(frozen=True)
+class Lorentz:
+    """A Lorentz dielectric: ε(k0) = ε∞ + Σ Δεⱼ Ωⱼ² / (Ωⱼ² − k0² − i Γⱼ k0), μ = 1.
+
+    `oscillators` holds `(Δεⱼ, Ωⱼ, Γⱼ)` with the resonance Ωⱼ and damping Γⱼ as
+    angular wavenumbers k0 = ω/c in rad/m. An undamped resonance may not sit at
+    the operating wavelength. A damped model is lossy: guided enumeration
+    refuses it.
+    """
+
+    epsilon_infinity: float
+    oscillators: tuple[tuple[float, float, float], ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "epsilon_infinity", float(self.epsilon_infinity))
+        object.__setattr__(self, "oscillators", _oscillators(self.oscillators))
+
+    def relative_permittivity_at(self, wavelength_m: float) -> complex:
+        return self.epsilon_infinity + _lorentz_sum(self.oscillators, 2.0 * math.pi / wavelength_m)
+
+    def _epsilon_mu(self, wavelength_m: float) -> tuple[complex, complex]:
+        return self.relative_permittivity_at(wavelength_m), 1.0
+
+    def model_dict(self) -> dict[str, Any]:
+        return {
+            "kind": "lorentz",
+            "epsilon_infinity": self.epsilon_infinity,
+            "oscillators": _oscillator_dicts(self.oscillators),
+            "relative_permeability": 1.0,
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"kind": "isotropic", "model": self.model_dict()}
+
+    @classmethod
+    def from_model_dict(cls, d: Mapping[str, Any]) -> Lorentz:
+        return cls(d["epsilon_infinity"], _oscillators_from(d["oscillators"]))
+
+
+@dataclass(frozen=True)
+class DrudeLorentz:
+    """A Drude–Lorentz conductor: ε(k0) = ε∞ − Ωp² / (k0² + i Γ k0) + Σ Δεⱼ Ωⱼ² /
+    (Ωⱼ² − k0² − i Γⱼ k0), μ = 1, with the plasma Ωp and every damping and
+    resonance as angular wavenumbers in rad/m."""
+
+    epsilon_infinity: float
+    plasma_rad_per_m: float
+    damping_rad_per_m: float
+    oscillators: tuple[tuple[float, float, float], ...] = ()
+
+    def __post_init__(self) -> None:
+        for name in ("epsilon_infinity", "plasma_rad_per_m", "damping_rad_per_m"):
+            object.__setattr__(self, name, float(getattr(self, name)))
+        object.__setattr__(self, "oscillators", _oscillators(self.oscillators))
+
+    def relative_permittivity_at(self, wavelength_m: float) -> complex:
+        k = 2.0 * math.pi / wavelength_m
+        drude = self.plasma_rad_per_m**2 / (k * k + 1j * self.damping_rad_per_m * k)
+        return self.epsilon_infinity - drude + _lorentz_sum(self.oscillators, k)
+
+    def _epsilon_mu(self, wavelength_m: float) -> tuple[complex, complex]:
+        return self.relative_permittivity_at(wavelength_m), 1.0
+
+    def model_dict(self) -> dict[str, Any]:
+        return {
+            "kind": "drude_lorentz",
+            "epsilon_infinity": self.epsilon_infinity,
+            "plasma_rad_per_m": self.plasma_rad_per_m,
+            "damping_rad_per_m": self.damping_rad_per_m,
+            "oscillators": _oscillator_dicts(self.oscillators),
+            "relative_permeability": 1.0,
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"kind": "isotropic", "model": self.model_dict()}
+
+    @classmethod
+    def from_model_dict(cls, d: Mapping[str, Any]) -> DrudeLorentz:
+        return cls(
+            d["epsilon_infinity"],
+            d["plasma_rad_per_m"],
+            d["damping_rad_per_m"],
+            _oscillators_from(d["oscillators"]),
+        )
+
+
+@dataclass(frozen=True)
+class Tabulated:
+    """A complex relative permittivity tabulated at ascending wavelengths (m),
+    interpolated linearly in k0 and held constant at its value at the operating
+    wavelength, which must lie inside the table. It has no wavelength
+    dispersion, so a wavelength sensitivity or a group index is `InvalidInput`.
+    """
+
+    wavelength_m: tuple[float, ...]
+    relative_permittivity: tuple[complex, ...]
+    relative_permeability: float = 1.0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "wavelength_m", tuple(float(w) for w in self.wavelength_m))
+        object.__setattr__(self, "relative_permittivity", tuple(complex(e) for e in self.relative_permittivity))
+        object.__setattr__(self, "relative_permeability", float(self.relative_permeability))
+
+    def relative_permittivity_at(self, wavelength_m: float) -> complex:
+        k = 2.0 * math.pi / np.asarray(self.wavelength_m)[::-1]
+        values = np.asarray(self.relative_permittivity)[::-1]
+        x = 2.0 * math.pi / wavelength_m
+        return complex(np.interp(x, k, values.real) + 1j * np.interp(x, k, values.imag))
+
+    def _epsilon_mu(self, wavelength_m: float) -> tuple[complex, complex]:
+        return self.relative_permittivity_at(wavelength_m), self.relative_permeability
+
+    def model_dict(self) -> dict[str, Any]:
+        return {
+            "kind": "tabulated",
+            "wavelength_m": list(self.wavelength_m),
+            "relative_permittivity": [_pair(e) for e in self.relative_permittivity],
+            "relative_permeability": self.relative_permeability,
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"kind": "isotropic", "model": self.model_dict()}
+
+    @classmethod
+    def from_model_dict(cls, d: Mapping[str, Any]) -> Tabulated:
+        return cls(
+            tuple(d["wavelength_m"]),
+            tuple(_c(e) for e in d["relative_permittivity"]),
+            d["relative_permeability"],
+        )
+
+
+def _oscillators(o: Sequence[Sequence[float]]) -> tuple[tuple[float, float, float], ...]:
+    return tuple((float(d), float(r), float(g)) for d, r, g in o)
+
+
+def _oscillator_dicts(o: Sequence[tuple[float, float, float]]) -> list[dict[str, float]]:
+    return [{"delta_epsilon": d, "resonance_rad_per_m": r, "damping_rad_per_m": g} for d, r, g in o]
+
+
+def _oscillators_from(o: Sequence[Mapping[str, float]]) -> tuple[tuple[float, float, float], ...]:
+    return tuple((x["delta_epsilon"], x["resonance_rad_per_m"], x["damping_rad_per_m"]) for x in o)
+
+
+def _lorentz_sum(o: Sequence[tuple[float, float, float]], k: float) -> complex:
+    return sum(d * r * r / (r * r - k * k - 1j * g * k) for d, r, g in o)
+
+
+ScalarModel = Material | SellmeierMaterial | Lorentz | DrudeLorentz | Tabulated
+_SCALAR_TYPES = (Material, SellmeierMaterial, Lorentz, DrudeLorentz, Tabulated)
+
+
+def _model(m: ScalarModel | float) -> ScalarModel:
+    return m if isinstance(m, _SCALAR_TYPES) else Material(float(m))
+
+
+def _scalar_epsilon_mu(m: ScalarModel, wavelength_m: float) -> tuple[complex, complex]:
+    if isinstance(m, Material):
+        return m.relative_permittivity, m.relative_permeability
+    if isinstance(m, SellmeierMaterial):
+        return m.relative_permittivity_at(wavelength_m), 1.0
+    return m._epsilon_mu(wavelength_m)
+
+
+_Matrix = tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]
+
+
+def _matrix(m: Any) -> _Matrix:
+    rows = [[float(v) for v in row] for row in m]
+    if len(rows) != 3 or any(len(r) != 3 for r in rows):
+        raise InvalidInput("a rotation is a 3×3 matrix")
+    return tuple(tuple(r) for r in rows)  # type: ignore[return-value]
+
+
+@dataclass(frozen=True)
+class Rotation:
+    """A proper rotation R from a material's own frame (axes a, b, c) to the
+    stack frame (x, y, z): column k holds the stack-frame components of
+    material axis k, and T_stack = R T Rᵀ. Only the matrix is recorded; the
+    constructors resolve angles to it, with exact entries at quarter turns.
+    A matrix that is not orthonormal with determinant +1 (to 1e-12) is
+    `InvalidInput` when a stack using it is resolved."""
+
+    matrix: _Matrix
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "matrix", _matrix(self.matrix))
+
+    @classmethod
+    def identity(cls) -> Rotation:
+        return cls(((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)))
+
+    @classmethod
+    def from_matrix(cls, matrix: Any) -> Rotation:
+        return cls(_matrix(matrix))
+
+    @classmethod
+    def from_euler(cls, alpha: float, beta: float, gamma: float) -> Rotation:
+        """Intrinsic z-y′-z″ Euler angles in radians: R = R_z(α) R_y(β) R_z(γ)."""
+        return cls(_native.rotation_from_euler(float(alpha), float(beta), float(gamma)))
+
+    @classmethod
+    def from_optic_axis(cls, theta: float, phi: float = 0.0) -> Rotation:
+        """The minimal rotation taking the material c axis onto (sin θ cos φ,
+        sin θ sin φ, cos θ): θ from the stack normal z, φ from x towards y,
+        in radians. With φ = 0 it turns about y and leaves y invariant."""
+        return cls(_native.rotation_from_optic_axis(float(theta), float(phi)))
+
+    def to_list(self) -> list[list[float]]:
+        return [list(r) for r in self.matrix]
+
+    def as_array(self) -> np.ndarray:
+        return _readonly(np.array(self.matrix, dtype=float))
+
+
+def _rotation(r: Rotation | Any | None) -> Rotation:
+    if r is None:
+        return Rotation.identity()
+    return r if isinstance(r, Rotation) else Rotation.from_matrix(r)
+
+
+@dataclass(frozen=True)
+class Diagonal:
+    """A medium with one scalar model on each stack axis x, y and z: ε and μ
+    diagonal in the stack frame."""
+
+    x: ScalarModel
+    y: ScalarModel
+    z: ScalarModel
+
+    def __post_init__(self) -> None:
+        for axis in "xyz":
+            object.__setattr__(self, axis, _model(getattr(self, axis)))
+
+    def _tensors(self, wavelength_m: float) -> tuple[np.ndarray, np.ndarray]:
+        v = [_scalar_epsilon_mu(m, wavelength_m) for m in (self.x, self.y, self.z)]
+        return np.diag([e for e, _ in v]).astype(complex), np.diag([u for _, u in v]).astype(complex)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"kind": "diagonal", "x": self.x.model_dict(), "y": self.y.model_dict(), "z": self.z.model_dict()}
+
+
+@dataclass(frozen=True)
+class Biaxial:
+    """A medium with one scalar model on each principal axis a, b, c, oriented
+    in the stack frame by `rotation` (identity by default). The region's class,
+    diagonal or full, and its separability follow from the rotation's exact
+    entries."""
+
+    a: ScalarModel
+    b: ScalarModel
+    c: ScalarModel
+    rotation: Rotation = field(default_factory=Rotation.identity)
+
+    def __post_init__(self) -> None:
+        for axis in "abc":
+            object.__setattr__(self, axis, _model(getattr(self, axis)))
+        object.__setattr__(self, "rotation", _rotation(self.rotation))
+
+    def _tensors(self, wavelength_m: float) -> tuple[np.ndarray, np.ndarray]:
+        v = [_scalar_epsilon_mu(m, wavelength_m) for m in (self.a, self.b, self.c)]
+        r = self.rotation.as_array()
+        return tuple(r @ np.diag([p[f] for p in v]).astype(complex) @ r.T for f in (0, 1))  # type: ignore[return-value]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": "full",
+            "material": {
+                "kind": "principal",
+                "a": self.a.model_dict(),
+                "b": self.b.model_dict(),
+                "c": self.c.model_dict(),
+            },
+            "rotation": self.rotation.to_list(),
+        }
+
+
+def Uniaxial(
+    ordinary: ScalarModel | float,
+    extraordinary: ScalarModel | float,
+    rotation: Rotation | Any | None = None,
+    *,
+    optic_axis: tuple[float, float] | None = None,
+) -> Biaxial:
+    """A uniaxial medium: the ordinary model on axes a and b, the
+    extraordinary model on the optic axis c, oriented by `rotation` or by
+    `optic_axis=(θ, φ)` (see `Rotation.from_optic_axis`)."""
+    if optic_axis is not None:
+        if rotation is not None:
+            raise InvalidInput("give a rotation or an optic axis, not both")
+        rotation = Rotation.from_optic_axis(*optic_axis)
+    return Biaxial(ordinary, ordinary, extraordinary, _rotation(rotation))
+
+
+def _tensor(t: Any) -> tuple[tuple[complex, ...], ...]:
+    a = np.asarray(t, dtype=complex)
+    if a.shape != (3, 3):
+        raise InvalidInput("a constitutive tensor is 3×3")
+    return tuple(tuple(complex(v) for v in row) for row in a)
+
+
+_IDENTITY_TENSOR = ((1 + 0j, 0j, 0j), (0j, 1 + 0j, 0j), (0j, 0j, 1 + 0j))
+
+
+@dataclass(frozen=True)
+class TensorMaterial:
+    """Constant complex relative permittivity and permeability tensors in the
+    material's own frame, oriented in the stack frame by `rotation`. The class
+    is full whatever the entries."""
+
+    relative_permittivity: Any
+    relative_permeability: Any = _IDENTITY_TENSOR
+    rotation: Rotation = field(default_factory=Rotation.identity)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "relative_permittivity", _tensor(self.relative_permittivity))
+        object.__setattr__(self, "relative_permeability", _tensor(self.relative_permeability))
+        object.__setattr__(self, "rotation", _rotation(self.rotation))
+
+    def _tensors(self, wavelength_m: float) -> tuple[np.ndarray, np.ndarray]:
+        r = self.rotation.as_array()
+        return tuple(  # type: ignore[return-value]
+            r @ np.array(t) @ r.T for t in (self.relative_permittivity, self.relative_permeability)
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        def rows(t: tuple[tuple[complex, ...], ...]) -> list[list[list[float]]]:
+            return [[_pair(v) for v in row] for row in t]
+
+        return {
+            "kind": "full",
+            "material": {
+                "kind": "tensor",
+                "relative_permittivity": rows(self.relative_permittivity),
+                "relative_permeability": rows(self.relative_permeability),
+            },
+            "rotation": self.rotation.to_list(),
+        }
+
+
+AnyMaterial = ScalarModel | Diagonal | Biaxial | TensorMaterial
+_MATERIAL_TYPES = (*_SCALAR_TYPES, Diagonal, Biaxial, TensorMaterial)
 
 
 def _material(m: AnyMaterial | float) -> AnyMaterial:
-    return m if isinstance(m, (Material, SellmeierMaterial)) else Material(float(m))
+    return m if isinstance(m, _MATERIAL_TYPES) else Material(float(m))
 
 
-_SCALAR_MODELS: dict[str, Any] = {"constant": Material, "sellmeier": SellmeierMaterial}
+def _material_tensors(m: AnyMaterial, wavelength_m: float) -> tuple[np.ndarray, np.ndarray]:
+    """Stack-frame ε and μ at a wavelength."""
+    if isinstance(m, _SCALAR_TYPES):
+        e, u = _scalar_epsilon_mu(m, wavelength_m)
+        return np.eye(3) * complex(e), np.eye(3) * complex(u)
+    return m._tensors(wavelength_m)
+
+
+def _index_bound(m: AnyMaterial, wavelength_m: float) -> float:
+    """√(λmax(ε) λmax(μ)) of the Hermitian parts: no guided mode lies above k0
+    times its largest value over the stack."""
+    product = 1.0
+    for t in _material_tensors(m, wavelength_m):
+        product *= max(float(np.linalg.eigvalsh(0.5 * (t + t.conj().T)).max()), 0.0)
+    return math.sqrt(product)
+
+
+_SCALAR_MODELS: dict[str, Any] = {
+    "constant": Material,
+    "sellmeier": SellmeierMaterial,
+    "lorentz": Lorentz,
+    "drude_lorentz": DrudeLorentz,
+    "tabulated": Tabulated,
+}
 
 
 def _model_from_dict(d: Mapping[str, Any]) -> Any:
@@ -276,16 +649,29 @@ def _model_from_dict(d: Mapping[str, Any]) -> Any:
 
 
 def _material_from_dict(d: Mapping[str, Any]) -> AnyMaterial:
-    if d.get("kind") != "isotropic":
-        raise SchemaError(f"unknown material kind {d.get('kind')!r}")
-    return _model_from_dict(d["model"])
+    kind = d.get("kind")
+    if kind == "isotropic":
+        return _model_from_dict(d["model"])
+    if kind == "diagonal":
+        return Diagonal(*(_model_from_dict(d[a]) for a in "xyz"))
+    if kind == "full":
+        material, rotation = d["material"], Rotation.from_matrix(d["rotation"])
+        if material.get("kind") == "principal":
+            return Biaxial(*(_model_from_dict(material[a]) for a in "abc"), rotation)
+        if material.get("kind") == "tensor":
+            return TensorMaterial(
+                [[_c(v) for v in row] for row in material["relative_permittivity"]],
+                [[_c(v) for v in row] for row in material["relative_permeability"]],
+                rotation,
+            )
+    raise SchemaError(f"unknown material kind {kind!r}")
 
 
 @dataclass(frozen=True, eq=False)
 class Layer:
     """A finite layer of the stack."""
 
-    material: Material
+    material: AnyMaterial
     thickness_m: float
 
     def __post_init__(self) -> None:
@@ -376,14 +762,16 @@ def _termination_from_dict(d: Mapping[str, Any] | None) -> Wall | Pml | None:
 class Stack:
     """A planar multilayer: left exterior, finite layers along +z, right exterior.
 
-    Materials may be given as a `Material`, a `SellmeierMaterial`, or a relative permittivity.
+    Materials may be given as a scalar model (`Material`, `SellmeierMaterial`, `Lorentz`,
+    `DrudeLorentz`, `Tabulated`), a tensor material (`Diagonal`, `Biaxial`, `Uniaxial(...)`,
+    `TensorMaterial`), or a relative permittivity.
     Layers may be given as a `Layer` or as a `(material, thickness_m)` pair. Each side is
     open (None) or closed by a `Wall` or a `Pml` on or outside its outermost interface.
     """
 
-    left: Material
+    left: AnyMaterial
     layers: tuple[Layer, ...]
-    right: Material
+    right: AnyMaterial
     left_termination: Wall | Pml | None = None
     right_termination: Wall | Pml | None = None
 
@@ -402,8 +790,10 @@ class Stack:
         return _readonly(np.concatenate([[0.0], np.cumsum([l.thickness_m for l in self.layers])]))
 
     def max_refractive_index(self, wavelength_m: float) -> float:
+        """The largest √(λmax(ε) λmax(μ)) over the regions: an upper bound on
+        the effective index of a guided mode."""
         materials = (self.left, self.right, *(l.material for l in self.layers))
-        return max(m.refractive_index_at(wavelength_m) for m in materials)
+        return max(_index_bound(m, wavelength_m) for m in materials)
 
     def to_dict(self) -> dict[str, Any]:
         d = {
@@ -555,7 +945,7 @@ class GuidedInput(_Record):
         if request.abs_beta_rad_per_m is None:
             try:
                 upper = 1.01 * request.k0_rad_per_m * stack.max_refractive_index(request.wavelength_m)
-            except (ValueError, ZeroDivisionError, OverflowError):
+            except (ValueError, ZeroDivisionError, OverflowError, TypeError, np.linalg.LinAlgError):
                 # Left to the native validation below, which names the bad value.
                 upper = 1.0
             request = GuidedRequest(**{**request.__dict__, "abs_beta_rad_per_m": (0.0, upper)})
@@ -652,6 +1042,46 @@ class Gap:
         return cls(tuple(d["abs_beta_rad_per_m"]), d["expected"], d["cause"], d["detail"])
 
 
+def _tensor_array(rows: Sequence[Sequence[Sequence[float]]]) -> np.ndarray:
+    return _readonly(np.array([[_c(v) for v in row] for row in rows], dtype=complex))
+
+
+@dataclass(frozen=True, eq=False)
+class SolvedRegion:
+    """A region as solved: its class ("isotropic", "diagonal" or "full") and
+    whether TE and TM decouple in it, both derived from its model and the
+    exact entries of its rotation, and its stack-frame ε and μ (3×3 complex)
+    at the operating wavelength."""
+
+    region_class: Literal["isotropic", "diagonal", "full"]
+    separable: bool
+    relative_permittivity: np.ndarray
+    relative_permeability: np.ndarray
+
+    def to_dict(self) -> dict[str, Any]:
+        def rows(t: np.ndarray) -> list[list[list[float]]]:
+            return [[_pair(v) for v in row] for row in t]
+
+        return {
+            "class": self.region_class,
+            "separable": self.separable,
+            "relative_permittivity": rows(self.relative_permittivity),
+            "relative_permeability": rows(self.relative_permeability),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> SolvedRegion:
+        return cls(
+            d["class"],
+            d["separable"],
+            _tensor_array(d["relative_permittivity"]),
+            _tensor_array(d["relative_permeability"]),
+        )
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, SolvedRegion) and self.to_dict() == other.to_dict()
+
+
 @dataclass(frozen=True)
 class CountRegion:
     """The least margins over the sampled counting regions of an
@@ -728,7 +1158,8 @@ class GuidedBasis(_Record):
     for TE or TM of a stack of isotropic and diagonal regions and
     "argument_principle" otherwise, with its `count_evidence`. Modes whose |β|
     lie within `degeneracy_gap_rad_per_m` of a neighbour share a
-    `degenerate_group`.
+    `degenerate_group`. `regions` holds each region as solved (left exterior,
+    layers, right exterior).
     """
 
     conventions: Mapping[str, str]
@@ -745,6 +1176,7 @@ class GuidedBasis(_Record):
     count_method: Literal["oscillation", "argument_principle"]
     count_evidence: CountEvidence | None
     degeneracy_gap_rad_per_m: float
+    regions: tuple[SolvedRegion, ...]
     modes: tuple[Mode, ...]
     unresolved: tuple[Gap, ...]
     _kind = "guided_basis"
@@ -787,6 +1219,7 @@ class GuidedBasis(_Record):
             "count_method": self.count_method,
             "count_evidence": None if self.count_evidence is None else self.count_evidence.to_dict(),
             "degeneracy_gap_rad_per_m": self.degeneracy_gap_rad_per_m,
+            "regions": [r.to_dict() for r in self.regions],
             "modes": [m.to_dict() for m in self.modes],
             "unresolved": [g.to_dict() for g in self.unresolved],
         }
@@ -808,6 +1241,7 @@ class GuidedBasis(_Record):
             d["count_method"],
             None if d["count_evidence"] is None else CountEvidence.from_dict(d["count_evidence"]),
             d["degeneracy_gap_rad_per_m"],
+            tuple(SolvedRegion.from_dict(r) for r in d["regions"]),
             tuple(Mode.from_dict(m) for m in d["modes"]),
             tuple(Gap.from_dict(g) for g in d["unresolved"]),
         )

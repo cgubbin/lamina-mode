@@ -24,7 +24,18 @@ own fields: scalar models, region materials, terminations (0009), PML profiles, 
 {"kind": "constant", "relative_permittivity": 2.25, "relative_permeability": 1.0}
 {"kind": "sellmeier", "sellmeier": {"constant": 1.0, "terms": [{"coefficient": 1.2, "pole_wavelength_m": 7e-7}]},
  "relative_permeability": 1.0}
+{"kind": "lorentz", "epsilon_infinity": 2.0,
+ "oscillators": [{"delta_epsilon": 1.5, "resonance_rad_per_m": 3e6, "damping_rad_per_m": 0.0}],
+ "relative_permeability": 1.0}
+{"kind": "drude_lorentz", "epsilon_infinity": 1.0, "plasma_rad_per_m": 1.2e7, "damping_rad_per_m": 0.0,
+ "oscillators": [], "relative_permeability": 1.0}
+{"kind": "tabulated", "wavelength_m": [8e-7, 1.2e-6], "relative_permittivity": [[3.0, 0.0], [3.5, 0.0]],
+ "relative_permeability": 1.0}
 ```
+
+Resonances, plasma and damping are angular wavenumbers k0 = ω/c in rad/m. A tabulated model is interpolated
+linearly in k0 and held at its value at the operating wavelength, inside the table; its record's `assumption` says
+so, and no wavelength derivative is offered for it.
 
 **Region materials.**
 
@@ -56,7 +67,8 @@ TM family.
 hybrid) and `normalisation` (Ey + Z0 Hy at the left interface real and positive, or Ex + Z0 Hx where that vanishes,
 named in each profile).
 
-**Results.** Each mode of a guided basis carries its `label` (`"TE"`, `"TM"` or `"hybrid"`) and its
+**Results.** A guided basis records `regions`, each with its derived `class`, `separable` and stack-frame
+`relative_permittivity` and `relative_permeability` at the operating wavelength. Each mode of a guided basis carries its `label` (`"TE"`, `"TM"` or `"hybrid"`) and its
 `degenerate_group`: modes whose |β| lie within `degeneracy_gap_rad_per_m` (1e-6 k0) of a neighbour share an index,
 and a mode alone has none. Sensitivity and group-index records carry the basis's `assumption`.
 

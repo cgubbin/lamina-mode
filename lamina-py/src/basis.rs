@@ -168,7 +168,7 @@ pub fn solve(input: rec::ModalBasisInput) -> Result<SolvedBasis, Failure> {
     request.self_pairing_rtol = input.self_pairing_rtol;
     let basis = lamina_mode::modal_basis_in_window_with(
         &Scatter2::new(),
-        crate::solve::stack(&input.stack)?,
+        crate::solve::stack(&input.stack, input.wavelength_m)?,
         request,
     )
     .map_err(basis_failure)?;
@@ -454,7 +454,7 @@ pub fn covering(
     });
     let [left, right] = sheets;
     let covering = ModalWindow::covering(
-        crate::solve::stack(&spec)?,
+        crate::solve::stack(&spec, wavelength_m)?,
         Length::centimetres(wavelength_m / M_PER_CM),
         beta_rect_rad_per_m[0].map(|b| b * M_PER_CM),
         beta_rect_rad_per_m[1].map(|b| b * M_PER_CM),

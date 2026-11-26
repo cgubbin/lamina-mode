@@ -376,28 +376,19 @@ pub fn local_coupling(
     let k0_m = record.k0_rad_per_m;
     let wavelength = record.input.request.wavelength_m;
     for (region, material) in crate::solve::regions(&record.input.stack).enumerate() {
-        let rec::Material::Isotropic { model } = material;
-        let (epsilon, mu) = match model {
-            rec::ScalarModel::Constant {
-                relative_permittivity,
-                relative_permeability,
-            } => (*relative_permittivity, *relative_permeability),
-            rec::ScalarModel::Sellmeier {
-                sellmeier,
-                relative_permeability,
-            } => {
-                let l2 = wavelength * wavelength;
-                let epsilon = sellmeier.constant
-                    + sellmeier
-                        .terms
-                        .iter()
-                        .map(|t| {
-                            t.coefficient * l2 / (l2 - t.pole_wavelength_m * t.pole_wavelength_m)
-                        })
-                        .sum::<f64>();
-                (epsilon, *relative_permeability)
-            }
-        };
+        if !matches!(material, rec::Material::Isotropic { .. }) {
+            return invalid(format!(
+                "local coupling is for isotropic regions; region {region} is anisotropic"
+            ));
+        }
+        let [epsilon, mu] =
+            crate::materials::stack_frame("region", material, wavelength)?.map(|t| {
+                if t[0][0].im == 0. {
+                    t[0][0].re
+                } else {
+                    f64::NAN
+                }
+            });
         if mu != 1. {
             return invalid(format!(
                 "local coupling is for nonmagnetic stacks; region {region} has relative permeability {mu}"

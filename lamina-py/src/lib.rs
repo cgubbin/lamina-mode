@@ -9,6 +9,7 @@ use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
 
 mod basis;
+mod materials;
 mod pair;
 mod records;
 mod sens;
@@ -463,6 +464,20 @@ fn normalise_input(input_json: &str) -> PyResult<String> {
     json(&solve::normalise(input).map_err(raise)?)
 }
 
+/// The rotation matrix of intrinsic z-y′-z″ Euler angles (radians), rows first,
+/// with exact entries at quarter turns.
+#[pyfunction]
+fn rotation_from_euler(alpha: f64, beta: f64, gamma: f64) -> [[f64; 3]; 3] {
+    *lamina_core::Rotation::from_euler(alpha, beta, gamma).matrix()
+}
+
+/// The rotation matrix taking the material c axis onto the direction at polar
+/// angle `theta` from z and azimuth `phi` from x (radians), rows first.
+#[pyfunction]
+fn rotation_from_optic_axis(theta: f64, phi: f64) -> [[f64; 3]; 3] {
+    *lamina_core::Rotation::from_optic_axis(theta, phi).matrix()
+}
+
 /// lamina-mode's default refinement controls, serialised.
 #[pyfunction]
 fn default_refinement() -> PyResult<String> {
@@ -516,5 +531,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(default_refinement, m)?)?;
     m.add_function(wrap_pyfunction!(conventions, m)?)?;
     m.add_function(wrap_pyfunction!(definitions, m)?)?;
+    m.add_function(wrap_pyfunction!(rotation_from_euler, m)?)?;
+    m.add_function(wrap_pyfunction!(rotation_from_optic_axis, m)?)?;
     Ok(())
 }
