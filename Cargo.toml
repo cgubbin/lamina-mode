@@ -41,6 +41,25 @@ debug = true
 codegen-units = 1
 lto = "thin"
 
+# Optimised test runs: `cargo test --profile release-test`. Full optimisation
+# like release, but no LTO and many codegen units so test binaries compile and
+# link quickly, with debug assertions kept so tests of them hold.
+[profile.release-test]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+debug-assertions = true
+
+# Debug test builds: optimise dependencies (nalgebra, argloc, sibling crates)
+# once and cache them, and lightly optimise this crate, so numerical tests run
+# at a usable speed while debug assertions stay on.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.test]
+opt-level = 1
+
 [workspace]
 members = ["lamina-py"]
 
