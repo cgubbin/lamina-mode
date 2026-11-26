@@ -2,11 +2,11 @@
 use crate::records::{self as rec, C2};
 use lamina_core::{
     ConstitutiveClass, ExteriorSampling, FieldSampling, LayerSampling, Pml, Polarisation, Scatter2,
-    StretchProfile, Termination, Wall, WallKind, stack::StackBuilder,
+    Scatter4, StretchProfile, Termination, Wall, WallKind, stack::StackBuilder,
 };
 use lamina_mode::{
     AnalyticAssumption, Complex, FieldRecoverySettings, GuidedDirection, GuidedLimit, GuidedWindow,
-    ImplicitSlopeRequest, ImplicitSlopeSettings, LocalAnalyticityAssumption,
+    HybridPhaseReference, ImplicitSlopeRequest, ImplicitSlopeSettings, LocalAnalyticityAssumption,
     LocalDerivativeSettings, ModeFamily, ModeLabel, ModeStack, PhysicalParameter, RefinementConfig,
 };
 use lamina_units::{Length, LengthUnit};
@@ -847,8 +847,9 @@ pub(crate) fn point(
     })
 }
 
-/// The phase reference of a TE or TM profile.
+/// The phase references a profile names.
 pub(crate) const EY_PLUS_Z0_HY: &str = "Ey+Z0Hy";
+pub(crate) const EX_PLUS_Z0_HX: &str = "Ex+Z0Hx";
 
 /// Refuse an operation on modes counted by the argument principle.
 pub(crate) fn scalar_only(solved: &Solved, what: &str) -> Result<(), Failure> {
@@ -866,33 +867,62 @@ pub fn profile(
     z_m: &[f64],
 ) -> Result<rec::GuidedProfile, Failure> {
     let point = point(solved, mode_index)?;
-    scalar_only(solved, "sampling fields")?;
     let sampling = sampling(&solved.record.input.stack, z_m)?;
-    let profile = point
-        .guided_power_profile_with(
-            Scatter2::new(),
-            &sampling,
-            recovery_settings(&solved.record.input.request),
+    let (fields, normalisation, defect) = if solved.coupled() {
+        let profile = point
+            .hybrid_power_profile_with(&Scatter4::new(), &sampling)
+            .map_err(|e| Failure::Fields(format!("{e}: {e:?}")))?;
+        let normalisation = rec::PowerNormalisation {
+            signed_power_w_per_m: profile.signed_power_w_per_m,
+            scale: c2(profile.scale),
+            phase_reference: c2(profile.reference),
+            phase_reference_component: match profile.phase_reference {
+                HybridPhaseReference::EyPlusZ0Hy => EY_PLUS_Z0_HY,
+                HybridPhaseReference::ExPlusZ0Hx => EX_PLUS_Z0_HX,
+            }
+            .to_owned(),
+            bilinear_norm_w_per_m: Some(c2(profile.bilinear_norm_w_per_m)),
+            seed_power_w_per_m: profile.seed_power_w_per_m,
+            seed_exterior_power_w_per_m: None,
+        };
+        (profile.fields, normalisation, None)
+    } else {
+        let profile = point
+            .guided_power_profile_with(
+                Scatter2::new(),
+                &sampling,
+                recovery_settings(&solved.record.input.request),
+            )
+            .map_err(|e| Failure::Fields(format!("{e}: {e:?}")))?;
+        let normalisation = match &profile.normalization {
+            lamina_mode::ProfileNormalization::GuidedPower(n) => rec::PowerNormalisation {
+                signed_power_w_per_m: n.signed_power_w_per_m,
+                scale: c2(n.scale),
+                phase_reference: c2(n.phase_reference),
+                phase_reference_component: EY_PLUS_Z0_HY.to_owned(),
+                bilinear_norm_w_per_m: None,
+                seed_power_w_per_m: n.seed_power_w_per_m,
+                seed_exterior_power_w_per_m: Some(n.seed_exterior_power_w_per_m),
+            },
+            _ => return Err(Failure::Fields("profile is not power normalised".into())),
+        };
+        if profile.depths_cm.len() != z_m.len() {
+            return Err(Failure::Fields(
+                "sample count changed during recovery".into(),
+            ));
+        }
+        (
+            profile.fields,
+            normalisation,
+            Some(profile.relative_boundary_defect),
         )
-        .map_err(|e| Failure::Fields(format!("{e}: {e:?}")))?;
-    let normalisation = match &profile.normalization {
-        lamina_mode::ProfileNormalization::GuidedPower(n) => rec::PowerNormalisation {
-            signed_power_w_per_m: n.signed_power_w_per_m,
-            scale: c2(n.scale),
-            phase_reference: c2(n.phase_reference),
-            phase_reference_component: EY_PLUS_Z0_HY.to_owned(),
-            bilinear_norm_w_per_m: None,
-            seed_power_w_per_m: n.seed_power_w_per_m,
-            seed_exterior_power_w_per_m: Some(n.seed_exterior_power_w_per_m),
-        },
-        _ => return Err(Failure::Fields("profile is not power normalised".into())),
     };
-    if profile.depths_cm.len() != z_m.len() {
+    let fields = fields.quantity();
+    if fields.electric().x().len() != z_m.len() {
         return Err(Failure::Fields(
             "sample count changed during recovery".into(),
         ));
     }
-    let fields = profile.fields.quantity();
     let split = |v: &lamina_core::VectorField<Complex, ndarray::Ix1>, scale: f64| {
         let (x, y, z) = (v.x(), v.y(), v.z());
         let re = (0..x.len())
@@ -920,7 +950,7 @@ pub fn profile(
         magnetic_real,
         magnetic_imag,
         normalisation,
-        relative_boundary_defect: Some(profile.relative_boundary_defect),
+        relative_boundary_defect: defect,
     })
 }
 
@@ -945,13 +975,12 @@ pub fn derivatives(
             .iter()
             .map(|&i| PhysicalParameter::LayerThickness(i.into())),
     );
+    let analyticity =
+        LocalAnalyticityAssumption::CallerAssumedHolomorphicInK0AndBetaAndRegularInThickness;
+    let settings = LocalDerivativeSettings::default();
+    // The characteristic of the backend the modes were counted with.
     let report = point
-        .local_derivatives_with(
-            Scatter2::new(),
-            &parameters,
-            LocalAnalyticityAssumption::CallerAssumedHolomorphicInK0AndBetaAndRegularInThickness,
-            LocalDerivativeSettings::default(),
-        )
+        .local_derivatives_with(Scatter2::new(), &parameters, analyticity, settings)
         .map_err(|e| Failure::Derivatives(format!("{e:?}")))?;
     // Partials of the characteristic F. Per rad/m: F_k[per cm^-1] * (cm^-1 per rad/m).
     // Per m of thickness: F_d[per cm] * (cm per m).

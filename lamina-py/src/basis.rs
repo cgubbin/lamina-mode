@@ -675,7 +675,7 @@ pub fn local_coupling(
     let coupling = lamina_mode::basis_local_coupling_with(
         &Scatter2::new(),
         &solved.basis,
-        &d.perturbation,
+        d.scalar()?,
         gap_rad_per_m.map(|g| g * M_PER_CM),
     )
     .map_err(|e| match e {

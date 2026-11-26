@@ -1561,6 +1561,9 @@ class Parameter:
 
     Regions run left exterior (0), layers (1..n), right exterior (n + 1).
     Interfaces run 0..n from the left. Build one with the class methods.
+    Parameters whose stack-frame rate is off-diagonal or complex (tensor
+    components off the diagonal, rotations), and every parameter of a mode
+    counted by the argument principle, give dβ only: request no `z_m`.
     """
 
     kind: str
@@ -1568,6 +1571,13 @@ class Parameter:
     interface: int | None = None
     region: int | None = None
     term: int | None = None
+    component: tuple[int, int] | None = None
+    axis: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.component is not None:
+            row, column = self.component
+            object.__setattr__(self, "component", (int(row), int(column)))
 
     @classmethod
     def thickness(cls, layer: int) -> Parameter:
@@ -1590,27 +1600,38 @@ class Parameter:
         return cls("wavelength")
 
     @classmethod
-    def permittivity(cls, region: int) -> Parameter:
-        """A region's relative permittivity at the operating wavelength (per unit)."""
-        return cls("permittivity", region=region)
+    def permittivity(cls, region: int, component: tuple[int, int] | None = None) -> Parameter:
+        """A region's relative permittivity at the operating wavelength (per unit):
+        the stack-frame entry `component = (row, column)` (0, 1, 2 for x, y, z), or
+        with no component every diagonal entry at once."""
+        return cls("permittivity", region=region, component=component)
 
     @classmethod
-    def permeability(cls, region: int) -> Parameter:
-        """A region's relative permeability at the operating wavelength (per unit)."""
-        return cls("permeability", region=region)
+    def permeability(cls, region: int, component: tuple[int, int] | None = None) -> Parameter:
+        """A region's relative permeability, as `permittivity`."""
+        return cls("permeability", region=region, component=component)
 
     @classmethod
-    def sellmeier_constant(cls, region: int) -> Parameter:
-        return cls("sellmeier_constant", region=region)
+    def rotation(cls, region: int, axis: Literal["x", "y", "z"]) -> Parameter:
+        """A turn of a region's material about a stack axis (per radian):
+        dT/dθ = G T − T G for ε and μ, with G v = axis × v."""
+        return cls("rotation", region=region, axis=axis)
 
     @classmethod
-    def sellmeier_coefficient(cls, region: int, term: int) -> Parameter:
-        return cls("sellmeier_coefficient", region=region, term=term)
+    def sellmeier_constant(cls, region: int, axis: str | None = None) -> Parameter:
+        """The Sellmeier constant of a region's model; `axis` names the model of
+        a tensor region ("x", "y", "z" of a `Diagonal`, "a", "b", "c" of a
+        principal medium; a uniaxial medium's ordinary model sits on a and b)."""
+        return cls("sellmeier_constant", region=region, axis=axis)
 
     @classmethod
-    def sellmeier_pole_wavelength(cls, region: int, term: int) -> Parameter:
+    def sellmeier_coefficient(cls, region: int, term: int, axis: str | None = None) -> Parameter:
+        return cls("sellmeier_coefficient", region=region, term=term, axis=axis)
+
+    @classmethod
+    def sellmeier_pole_wavelength(cls, region: int, term: int, axis: str | None = None) -> Parameter:
         """A Sellmeier pole wavelength (per m)."""
-        return cls("sellmeier_pole_wavelength", region=region, term=term)
+        return cls("sellmeier_pole_wavelength", region=region, term=term, axis=axis)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"kind": self.kind}
@@ -1618,10 +1639,17 @@ class Parameter:
             value = getattr(self, key)
             if value is not None:
                 d[key] = int(value)
+        if self.kind in ("permittivity", "permeability"):
+            d["component"] = None if self.component is None else list(self.component)
+        if self.kind == "rotation" or self.kind.startswith("sellmeier_"):
+            d["axis"] = self.axis
         return d
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> Parameter:
+        d = dict(d)
+        if d.get("component") is not None:
+            d["component"] = tuple(d["component"])
         return cls(**d)
 
 

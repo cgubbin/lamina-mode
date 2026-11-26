@@ -1,6 +1,6 @@
 //! Pairings of guided modes with each other and with supplied fields, in SI.
 use crate::records as rec;
-use crate::sens::{Direction, direction};
+use crate::sens::direction;
 use crate::solve::{
     DISPERSIVE_ASSUMPTION, Failure, M_PER_CM, Solved, Z0_OHM, assumption, c2, point,
     recovery_settings, scalar_only,
@@ -148,8 +148,11 @@ pub fn reciprocity(
 
 /// Rebuild a direction with its rates multiplied by `factor` and a new
 /// internal unit.
-fn rescaled(d: &Direction, unit: &str, factor: f64) -> Result<GuidedPerturbation, Failure> {
-    let p = &d.perturbation;
+fn rescaled(
+    p: &GuidedPerturbation,
+    unit: &str,
+    factor: f64,
+) -> Result<GuidedPerturbation, Failure> {
     GuidedPerturbation::new(
         p.parameter(),
         unit,
@@ -166,6 +169,13 @@ fn rescaled(d: &Direction, unit: &str, factor: f64) -> Result<GuidedPerturbation
     .map_err(|e| Failure::Invalid(format!("parameter direction: {e:?}")))
 }
 
+/// A direction as scalar rates, with its SI unit and factor.
+struct ScalarDirection {
+    perturbation: GuidedPerturbation,
+    unit: &'static str,
+    per_unit: f64,
+}
+
 /// A direction per stack, both per one internal unit.
 fn overlap_directions(
     pair: &Pair<'_>,
@@ -176,16 +186,21 @@ fn overlap_directions(
     for side in 0..2 {
         if let Some(p) = parameters[side] {
             let d = direction(solved[side], p)?;
+            let scalar = d.scalar()?;
             // Length parameters are per cm internally, so that rates along a
             // geometric and a material length parameter share one unit.
-            let d = if d.unit == "m" && d.perturbation.units() != "cm" {
-                Direction {
-                    perturbation: rescaled(&d, "cm", M_PER_CM)?,
+            let d = if d.unit == "m" && scalar.units() != "cm" {
+                ScalarDirection {
+                    perturbation: rescaled(scalar, "cm", M_PER_CM)?,
                     unit: "m",
                     per_unit: 1. / M_PER_CM,
                 }
             } else {
-                d
+                ScalarDirection {
+                    perturbation: scalar.clone(),
+                    unit: d.unit,
+                    per_unit: d.per_unit,
+                }
             };
             directions[side] = Some(d);
         }
@@ -410,7 +425,7 @@ pub fn local_coupling(
     let coupling = lamina_mode::guided_local_coupling_with(
         &Scatter2::new(),
         &solved.basis,
-        &d.perturbation,
+        d.scalar()?,
         gap * M_PER_CM,
         recovery_settings(&record.input.request),
     )
