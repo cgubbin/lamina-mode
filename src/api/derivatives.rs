@@ -126,6 +126,9 @@ pub enum LocalDerivativeFailure {
     Evaluation(#[source] Diagnostic),
     #[error("physical derivative contains non-finite components")]
     NonFinite,
+    /// k0 and β partials continue a scalar channel's exterior branch.
+    #[error("k0 and β partials need a TE or TM channel")]
+    CoupledChannel,
 }
 
 /// Owned derivatives associated with an accepted point and explicit backend.
@@ -397,7 +400,7 @@ impl ModePoint {
                         canonical,
                         &coordinates,
                         &exterior,
-                        provenance.polarisation(),
+                        provenance.channel(),
                     )
                     .map(|value| value.value()[()])
                     .map_err(|error| Diagnostic::new(Stage::Evaluation, error))
@@ -451,12 +454,7 @@ impl ModePoint {
             );
             let exterior = constant_exteriors(&signature);
             let result = backend
-                .checked_characteristic(
-                    canonical,
-                    &coords,
-                    &exterior,
-                    self.provenance().polarisation(),
-                )
+                .checked_characteristic(canonical, &coords, &exterior, self.provenance().channel())
                 .map_err(|e| {
                     LocalDerivativeFailure::Evaluation(Diagnostic::new(Stage::Evaluation, e))
                 })?;
@@ -497,7 +495,11 @@ impl ModePoint {
             (StackRegion::RightExterior, stack.right_exterior()),
         ];
         let references = signature.exteriors();
-        let polarisation = self.provenance().polarisation();
+        // The branch relation below is a scalar channel's.
+        let polarisation = self
+            .provenance()
+            .polarisation()
+            .ok_or(LocalDerivativeFailure::CoupledChannel)?;
         let mut kappas = [None, None];
         for (side_index, ((region, material), reference)) in
             exteriors.into_iter().zip(references).enumerate()
@@ -552,12 +554,7 @@ impl ModePoint {
         let [left, right] = kappas;
         let exterior = ExteriorWavevectors::from_options(left, right);
         let result = backend
-            .checked_characteristic(
-                canonical,
-                &coords,
-                &exterior,
-                self.provenance().polarisation(),
-            )
+            .checked_characteristic(canonical, &coords, &exterior, self.provenance().channel())
             .map_err(|e| {
                 LocalDerivativeFailure::Evaluation(Diagnostic::new(Stage::Evaluation, e))
             })?;

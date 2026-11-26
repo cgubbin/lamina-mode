@@ -163,12 +163,8 @@ fn compare<M>(
         .chart()
         .map(J::variable(arr0(z), 0).unwrap())
         .unwrap();
-    let solver = Compiled::compile(
-        p.context().stack(),
-        Scatter2::new(),
-        p.context().polarisation(),
-    )
-    .unwrap();
+    let solver =
+        Compiled::compile(p.context().stack(), Scatter2::new(), p.context().channel()).unwrap();
     let expected = solver
         .determinant(point.coordinates(), point.exterior_wavevectors())
         .unwrap();
@@ -584,7 +580,7 @@ fn incomplete_results_preserve_provenance_clusters_and_domain_reuse() {
         assert!(provenance.belongs_to(&p));
         assert_eq!(
             provenance.problem().polarisation(),
-            Polarisation::TransverseElectric
+            Some(Polarisation::TransverseElectric)
         );
         assert_eq!(
             provenance.problem().coordinate(),

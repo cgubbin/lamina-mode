@@ -17,7 +17,7 @@ fn basis(thickness: f64, wavelength: f64) -> Result<Vec<ModePoint>, String> {
         stack,
         GuidedWindow {
             wavelength: Length::centimetres(wavelength),
-            polarisation: Polarisation::TransverseElectric,
+            family: Polarisation::TransverseElectric.into(),
             direction: GuidedDirection::Forward,
             abs_beta: [0.0, 20.0],
             cutoff_margin: 1e-8,

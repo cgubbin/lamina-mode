@@ -8,7 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .finalise();
     let request = GuidedWindow {
         wavelength: Length::centimetres(1.),
-        polarisation: Polarisation::TransverseElectric,
+        family: Polarisation::TransverseElectric.into(),
         direction: GuidedDirection::Forward,
         abs_beta: [0., 20.],
         cutoff_margin: 1e-7,

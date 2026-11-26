@@ -519,7 +519,7 @@ impl<B: Backend<J, ComplexPlane>> FrequencyProblem<B> {
             context: Arc::new(ProblemContext {
                 constants: None,
                 stack,
-                polarisation: pol,
+                channel: pol.into(),
                 coordinate: SearchCoordinate::Spectral {
                     fixed_k_parallel: beta,
                 },

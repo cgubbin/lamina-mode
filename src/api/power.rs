@@ -212,12 +212,13 @@ impl ModePoint {
             return Err(Ineligible);
         }
         let prov = self.provenance();
+        let polarisation = prov.polarisation().ok_or(Ineligible)?;
         let stack = prov.stack();
         let at = Complex::new(k.re, 0.);
         // Lossless in the entries this polarisation sees.
         let lossless = |(region, m): (lamina_core::StackRegion, &Region)| {
             material::tensors(region, m, at).is_ok_and(|tensors| {
-                Channel::of(&tensors, prov.polarisation())
+                Channel::of(&tensors, polarisation)
                     .entries()
                     .iter()
                     .all(|v| v.re.is_finite() && v.re > 0. && v.im == 0.)
@@ -226,8 +227,7 @@ impl ModePoint {
         if !material::regions(stack).all(lossless) {
             return Err(Ineligible);
         }
-        let grid =
-            ProfileGrid::new(stack, prov.polarisation(), k, beta, 2, 4)?.ok_or(Quadrature)?;
+        let grid = ProfileGrid::new(stack, polarisation, k, beta, 2, 4)?.ok_or(Quadrature)?;
         let mut prev = None;
         for level in 0..8 {
             let integration = grid.sampling(level).ok_or(Quadrature)?;
@@ -255,7 +255,7 @@ impl ModePoint {
                 return Err(IllConditioned);
             }
             if prev.is_some_and(|p: f64| (p - total).abs() <= 1e-9 * total.abs()) {
-                let primary = match prov.polarisation() {
+                let primary = match polarisation {
                     Polarisation::TransverseElectric => fields.electric().y(),
                     Polarisation::TransverseMagnetic => fields.magnetic().y(),
                 };

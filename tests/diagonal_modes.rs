@@ -2,9 +2,9 @@
 //! closed-form uniaxial ladders, isotropic recovery, eligibility, fields,
 //! sensitivities, the group index and overlaps.
 use lamina_core::{
-    AnalyticalTensorMaterialHandle, Constant, ConstitutiveClass, ConstitutiveError,
-    ExteriorSampling, FieldSampling, LayerSampling, Polarisation, Rotation, Scatter2, SignedAxis,
-    Stack, StackRegion, Transfer2, Wall, WallKind,
+    AnalyticalTensorMaterialHandle, Constant, ConstitutiveClass, ExteriorSampling, FieldSampling,
+    LayerSampling, Polarisation, Rotation, Scatter2, SignedAxis, Stack, StackRegion, Transfer2,
+    Wall, WallKind,
 };
 use lamina_materials::{PrincipalAxes, Sellmeier, SellmeierTerm};
 use lamina_mode::*;
@@ -24,7 +24,7 @@ fn cm(x: f64) -> Length<f64> {
 fn window(polarisation: Polarisation, abs_beta: [f64; 2]) -> GuidedWindow {
     GuidedWindow {
         wavelength: cm(1.0),
-        polarisation,
+        family: polarisation.into(),
         direction: GuidedDirection::Forward,
         abs_beta,
         cutoff_margin: 1e-8,
@@ -313,24 +313,25 @@ fn a_hyperbolic_entry_is_refused_only_for_the_polarisation_that_sees_it() {
 }
 
 #[test]
-fn a_region_with_off_diagonal_entries_is_refused() {
+fn a_region_coupling_te_and_tm_is_refused_for_one_polarisation() {
+    // Optic axis out of the xz plane: the region couples TE and TM.
     let tilted = Region::oriented(
         AnalyticalTensorMaterialHandle::new(PrincipalAxes::uniaxial(
             Constant::dielectric(4.0),
             Constant::dielectric(6.25),
         )),
-        Rotation::from_optic_axis(0.3, 0.0),
+        Rotation::from_optic_axis(0.3, 0.7),
     );
     assert_eq!(tilted.class(), ConstitutiveClass::Full);
     let stack = slab(uniaxial(2.25, 2.25, 2), tilted, 1.0);
-    let refused = ConstitutiveError::Unsupported {
-        region: StackRegion::Layer(lamina_core::FiniteLayerIndex::new(0)),
-        class: ConstitutiveClass::Full,
-    };
-    assert!(matches!(
-        enumerate_guided_modes(stack.clone(), window(TE, [0.0, 3.0 * K0])),
-        Err(EnumerationError::Constitutive(e)) if e == refused
-    ));
+    let region = StackRegion::Layer(lamina_core::FiniteLayerIndex::new(0));
+    for pol in [TE, TM] {
+        assert!(matches!(
+            enumerate_guided_modes(stack.clone(), window(pol, [0.0, 3.0 * K0])),
+            Err(EnumerationError::FamilyNotInvariant { region: r }) if r == region
+        ));
+    }
+    // The scalar problems still refuse a full region.
     assert!(PropagationProblem::new(stack, K0, TE).is_err());
 }
 

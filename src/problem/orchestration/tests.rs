@@ -529,6 +529,7 @@ fn signature() -> BranchSignature {
         k_parallel: c(3.5),
         left: Some(C::new(0.0, 2.0)),
         right: Some(C::new(0.0, 1.0)),
+        pairs: [None; 2],
     }
 }
 #[test]
@@ -568,6 +569,7 @@ fn matching_preserves_radiation_branches_order_and_signature_failures() {
         BranchSignature {
             left: signature().left.map(|k| -k),
             right: signature().right.map(|k| -k),
+            pairs: [None; 2],
             ..signature()
         },
         BranchSignature {
@@ -576,6 +578,7 @@ fn matching_preserves_radiation_branches_order_and_signature_failures() {
         },
         BranchSignature {
             right: signature().left,
+            pairs: [None; 2],
             left: signature().right,
             ..signature()
         },

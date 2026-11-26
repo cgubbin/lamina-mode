@@ -112,7 +112,14 @@ fn propagation_root_at(
         }
     });
     let z = ((branches[0] + branches[1]) / (Complex::i() * 2. * k0)).ln();
-    let problem = PropagationProblem::new(stack, k0, source.provenance().polarisation())?;
+    let problem = PropagationProblem::new(
+        stack,
+        k0,
+        source
+            .provenance()
+            .polarisation()
+            .expect("a scalar channel"),
+    )?;
     let domain = problem.domain(
         ConformalRegion::new(z.re - 0.04, z.re + 0.04, z.im - 0.04, z.im + 0.04)?,
         ReferenceSelection::Coordinate {
@@ -172,13 +179,17 @@ fn temporal_root_at_beta(
                 k_parallel: beta,
                 left: Some(branches[0]),
                 right: Some(branches[1]),
+                pairs: [None; 2],
             };
             reference::Green::new(
                 &stack,
                 signature,
                 true,
                 k0,
-                source.provenance().polarisation(),
+                source
+                    .provenance()
+                    .polarisation()
+                    .expect("a scalar channel"),
             )
             .wronskian()
         };
@@ -210,7 +221,14 @@ fn temporal_root_at_beta(
             -root
         }
     });
-    let problem = FrequencyProblem::new(stack, beta.re, source.provenance().polarisation())?;
+    let problem = FrequencyProblem::new(
+        stack,
+        beta.re,
+        source
+            .provenance()
+            .polarisation()
+            .expect("a scalar channel"),
+    )?;
     let input = FrequencyDomainInput {
         bounds: FrequencyRegion::new(
             root.re - 1000.,
@@ -243,7 +261,7 @@ fn physical_coordinate_partials_match_branch_anchored_finite_differences() {
         let signature = *point.signature().unwrap();
         let provenance = point.provenance();
         let stack = &reference::scalar_stack(provenance.stack());
-        let pol = provenance.polarisation();
+        let pol = provenance.polarisation().expect("a scalar channel");
         let report = local(&point, &[PhysicalParameter::K0, PhysicalParameter::Beta]);
         let accepted_value = report.characteristic.as_ref().unwrap();
         assert!(accepted_value.re.is_finite() && accepted_value.im.is_finite());
@@ -349,7 +367,7 @@ fn plasmon_and_film_physical_partials_match_independent_finite_differences() {
     ] {
         let signature = *point.signature().unwrap();
         let provenance = point.provenance();
-        let pol = provenance.polarisation();
+        let pol = provenance.polarisation().expect("a scalar channel");
         let stack = &reference::scalar_stack(provenance.stack());
         let report = local(&point, &[PhysicalParameter::K0, PhysicalParameter::Beta]);
         for (parameter, error) in [(PhysicalParameter::K0, 0), (PhysicalParameter::Beta, 1)] {
@@ -493,14 +511,14 @@ fn thickness_partial_matches_fixed_coordinate_finite_difference_and_slope_is_gua
         signature.k0,
         signature.k_parallel,
         signature.open_exteriors().unwrap(),
-        provenance.polarisation(),
+        provenance.polarisation().expect("a scalar channel"),
     ) - characteristic(
         &Scatter2::new(),
         &displaced(-h),
         signature.k0,
         signature.k_parallel,
         signature.open_exteriors().unwrap(),
-        provenance.polarisation(),
+        provenance.polarisation().expect("a scalar channel"),
     )) / (2. * h);
     close(
         partial(

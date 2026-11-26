@@ -287,6 +287,7 @@ pub struct GuidedBetaSensitivity {
     exterior: lamina_core::ExteriorWavevectors<DirectionalJet>,
     thickness_rates: Vec<f64>,
     material_rates: Vec<Rates>,
+    polarisation: lamina_core::Polarisation,
 }
 
 type DirectionalJet = lamina_core::ModeJet1<Complex, ndarray::Ix0>;
@@ -315,7 +316,7 @@ impl GuidedBetaSensitivity {
                     stack: provenance.stack(),
                     coordinates: &self.coordinates,
                     exterior: &self.exterior,
-                    polarisation: provenance.polarisation(),
+                    polarisation: self.polarisation,
                     thickness_rates: &self.thickness_rates,
                     constitutive_rates: &self.material_rates,
                 },
@@ -399,7 +400,7 @@ impl super::ModePoint {
         let rates = direction
             .total_regional_rates(stack, k.re)
             .map_err(Direction)?;
-        let polarisation = provenance.polarisation();
+        let polarisation = provenance.polarisation().ok_or(Ineligible)?;
         let at = Complex::new(k.re, 0.0);
         let channels = material::regions(stack)
             .map(|(region, m)| material::tensors(region, m, at))
@@ -510,6 +511,7 @@ impl super::ModePoint {
             exterior,
             thickness_rates,
             material_rates,
+            polarisation,
         })
     }
 }
@@ -654,12 +656,12 @@ impl GuidedBetaSensitivity {
                     // ∂z of the fields from Maxwell's equations in the region:
                     // t weights the primary field's normal derivative, n its
                     // normal field.
-                    let channel = Channel::of(&materials[region], provenance.polarisation());
+                    let channel = Channel::of(&materials[region], self.polarisation);
                     let (t, n) = (channel.transverse, channel.normal);
                     let q = channel.kappa_squared(k, beta);
                     let i = Complex::I;
                     let zero = Complex::ZERO;
-                    let gradient = match provenance.polarisation() {
+                    let gradient = match self.polarisation {
                         Polarisation::TransverseElectric => {
                             let dy = -i * k * t * field[3];
                             [
@@ -800,7 +802,7 @@ impl GuidedBetaSensitivity {
         let stack = provenance.stack();
         let k = self.coordinates.vacuum_angular_wavenumber().value()[()];
         let beta = self.coordinates.parallel_angular_wavenumber().value()[()];
-        let grid = super::power::ProfileGrid::new(stack, provenance.polarisation(), k, beta, 2, 4)
+        let grid = super::power::ProfileGrid::new(stack, self.polarisation, k, beta, 2, 4)
             .map_err(Termination)?
             .ok_or(Quadrature)?;
         let roots = [
@@ -890,7 +892,7 @@ impl GuidedBetaSensitivity {
                 previous = Some(regional);
                 continue;
             }
-            let primary = match provenance.polarisation() {
+            let primary = match self.polarisation {
                 Polarisation::TransverseElectric => 1,
                 Polarisation::TransverseMagnetic => 4,
             };

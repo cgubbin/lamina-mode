@@ -97,6 +97,8 @@ pub enum PairingError {
     Quadrature,
     #[error("the {side:?} open tail is singular: |κ_a + κ_b| is below its floor")]
     TailSingular { side: StackSide },
+    #[error("mode {operand} is a hybrid mode; basis pairing reads TE or TM fields")]
+    CoupledChannel { operand: usize },
 }
 
 /// Each side's exterior wavevector of a mode, `None` on closed sides.
@@ -179,16 +181,19 @@ pub fn modal_pairing_with<B: ModalFieldBackend<Region> + Clone>(
     }
     let k0 = modes.map(|m| m.point.signature().map_or(f64::NAN, |s| s.k0.re));
     let stacks = modes.map(|m| m.point.provenance().stack().clone());
+    let polarisations = [0, 1].map(|operand| {
+        modes[operand]
+            .point
+            .provenance()
+            .polarisation()
+            .ok_or(PairingError::CoupledChannel { operand })
+    });
+    let [first, second] = polarisations;
+    let polarisations = [first?, second?];
     let layouts = compatible([&stacks[0], &stacks[1]], k0, registration)?;
     let partition = split_pmls(
         Layout::partition(&[&layouts[0], &layouts[1]]),
-        &[0, 1].map(|i| {
-            (
-                &layouts[i],
-                &stacks[i],
-                modes[i].point.provenance().polarisation(),
-            )
-        }),
+        &[0, 1].map(|i| (&layouts[i], &stacks[i], polarisations[i])),
         k0[0],
         &modes.map(|m| m.point.physical_coordinate()),
     );
@@ -280,12 +285,18 @@ pub fn basis_pairing_with<B: ModalFieldBackend<Region> + Clone>(
                 .map(move |&i| bases[b].modes[i].point.physical_coordinate())
         })
         .collect();
+    let polarisations = [0, 1].map(|operand| {
+        bases[operand]
+            .request
+            .family
+            .polarisation()
+            .ok_or(PairingError::CoupledChannel { operand })
+    });
+    let [first, second] = polarisations;
+    let polarisations = [first?, second?];
     let partition = split_pmls(
         Layout::partition(&[&layouts[0], &layouts[1]]),
-        &[0, 1].map(|i| {
-            let ModeFamily::Polarised(polarisation) = bases[i].request.family;
-            (&layouts[i], &bases[i].stack, polarisation)
-        }),
+        &[0, 1].map(|i| (&layouts[i], &bases[i].stack, polarisations[i])),
         bases[0].request.k0_cm(),
         &betas,
     );

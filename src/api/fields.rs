@@ -34,6 +34,10 @@ pub enum FieldRecoveryError {
     BoundaryDefect { defect: f64, limit: f64 },
     #[error("fresh characteristic magnitude {residual} exceeds {limit}")]
     Characteristic { residual: f64, limit: f64 },
+    /// Scalar field recovery; hybrid modes recover their six components
+    /// through the 4×4 backends.
+    #[error("scalar field recovery needs a TE or TM channel")]
+    CoupledChannel,
 }
 /// Postprocessing failure owns its originating accepted point and source cause.
 #[derive(Debug, thiserror::Error)]
@@ -86,13 +90,16 @@ impl ModePoint {
                 .signature()
                 .map_err(|e| FieldRecoveryError::Branch(e.clone()))?;
             let provenance = self.provenance();
+            let polarisation = provenance
+                .polarisation()
+                .ok_or(FieldRecoveryError::CoupledChannel)?;
             let result = backend
                 .unscaled_fields(
                     provenance.stack(),
                     signature.k0,
                     signature.k_parallel,
                     [signature.left, signature.right],
-                    provenance.polarisation(),
+                    polarisation,
                     sampling,
                     settings.amplitude,
                 )

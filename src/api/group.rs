@@ -116,7 +116,7 @@ impl ModePoint {
 
         // Dispersive energy weights per region and component: left exterior,
         // layers, right exterior. The entries the polarisation sees must be real.
-        let polarisation = provenance.polarisation();
+        let polarisation = provenance.polarisation().ok_or(Ineligible)?;
         let at = Complex::new(k.re, 0.);
         let dispersive = |value: Principal<Complex>, rate: Principal<Complex>| match (value, rate) {
             (Principal::Isotropic(v), Principal::Isotropic(d)) => {

@@ -56,8 +56,13 @@ impl Provenance {
     pub fn direction(&self) -> SearchCoordinate {
         self.inner.problem().coordinate()
     }
-    pub fn polarisation(&self) -> lamina_core::Polarisation {
+    /// The polarisation of a scalar channel; `None` for the coupled one.
+    pub fn polarisation(&self) -> Option<lamina_core::Polarisation> {
         self.inner.problem().polarisation()
+    }
+    /// The field subspace solved.
+    pub fn channel(&self) -> lamina_core::Channel {
+        self.inner.problem().channel()
     }
     pub fn stack(&self) -> &ModeStack {
         self.inner.problem().stack()

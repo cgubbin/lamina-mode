@@ -9,10 +9,11 @@
 use super::*;
 use crate::problem as p;
 use crate::problem::J;
+use crate::problem::guided::GuidedRegionError;
 use crate::problem::material::{self as m, Channel};
 use lamina_core::{
-    Backend, ComplexPlane, ConstitutiveError, PlaneWaveDeterminant, Polarisation,
-    ProjectPlaneWaveModeDeterminant, Scatter2, WallKind,
+    Backend, ComplexPlane, ConstitutiveClass, ConstitutiveError, PlaneWaveDeterminant,
+    Polarisation, ProjectPlaneWaveModeDeterminant, Scatter2, StackRegion, WallKind,
 };
 use lamina_units::Length;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
@@ -25,7 +26,8 @@ pub enum GuidedDirection {
 #[derive(Clone, Copy, Debug)]
 pub struct GuidedWindow {
     pub wavelength: Length<f64>,
-    pub polarisation: Polarisation,
+    /// TE or TM of a separable stack, or every mode (the coupled channel).
+    pub family: ModeFamily,
     pub direction: GuidedDirection,
     /// Open interval in inverse centimetres.
     pub abs_beta: [f64; 2],
@@ -70,6 +72,22 @@ impl TensorEntry {
         }
     }
 }
+/// The field family of a guided mode: TE or TM of a separable stack, or
+/// hybrid, carrying all six components, otherwise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModeLabel {
+    TransverseElectric,
+    TransverseMagnetic,
+    Hybrid,
+}
+impl From<Polarisation> for ModeLabel {
+    fn from(polarisation: Polarisation) -> Self {
+        match polarisation {
+            Polarisation::TransverseElectric => Self::TransverseElectric,
+            Polarisation::TransverseMagnetic => Self::TransverseMagnetic,
+        }
+    }
+}
 #[derive(Debug, thiserror::Error)]
 pub enum EnumerationError {
     #[error("invalid guided interval or numerical controls")]
@@ -89,6 +107,14 @@ pub enum EnumerationError {
     Problem(String),
     #[error("guided enumeration needs open or walled sides; the {side:?} side is closed by a PML")]
     Termination { side: lamina_core::StackSide },
+    /// TE and TM are invariant subspaces only of a separable stack.
+    #[error("{region:?} couples TE and TM: request every mode instead")]
+    FamilyNotInvariant { region: StackRegion },
+    #[error("{region:?}: ε or μ cannot carry a guided count ({cause:?})")]
+    Tensor {
+        region: StackRegion,
+        cause: super::hybrid::TensorCause,
+    },
 }
 #[derive(Debug)]
 pub enum GuidedLimit {
@@ -97,6 +123,28 @@ pub enum GuidedLimit {
     Budget,
     Correction(BranchFailure),
     OutsideBracket,
+    /// The argument-principle count failed: a root on an end of the interval
+    /// that moving it inside did not clear, or a non-integer winding.
+    CountUnknown,
+    /// The rectangle is not a counting region.
+    Region(GuidedRegionError),
+    /// A counted root that is not real: not a guided mode.
+    NonRealRoot {
+        beta: Complex,
+    },
+    /// A cell that still counts several roots at the resolution limit: a
+    /// near-degenerate subspace of that dimension.
+    NearDegenerate {
+        count: usize,
+        cell: Rect<f64>,
+    },
+    /// A cell the argument-principle search left unresolved.
+    Cell(super::basis::BasisLimit),
+    /// On a separable stack, the coupled count differs from the TE and TM
+    /// counts of the interval.
+    SeparableCount {
+        counts: [Option<usize>; 2],
+    },
 }
 #[derive(Debug)]
 pub struct GuidedGap {
@@ -112,7 +160,12 @@ pub struct GuidedBasis {
     pub eligible: Option<[f64; 2]>,
     pub expected: Option<usize>,
     pub modes: Vec<ModePoint>,
+    /// The family of each mode, in the order of `modes`.
+    pub labels: Vec<ModeLabel>,
     pub unresolved: Vec<GuidedGap>,
+    /// The argument-principle count's evidence, for a stack with a
+    /// full-tensor region or every mode; `None` for an oscillation count.
+    pub hybrid: Option<HybridCountEvidence>,
 }
 impl GuidedBasis {
     /// Numerical coverage of the eligible open interval at the stated tolerances.
@@ -211,7 +264,25 @@ pub fn enumerate_guided_modes(
     stack: impl Into<ModeStack>,
     req: GuidedWindow,
 ) -> Result<GuidedBasis, EnumerationError> {
+    let stack = stack.into();
+    let full = m::regions(&stack).any(|(_, r)| r.class() == ConstitutiveClass::Full);
+    if full || req.family == ModeFamily::All {
+        return enumerate_guided_modes_with(lamina_core::Scatter4::new(), stack, req);
+    }
     enumerate_guided_modes_with(Scatter2::new(), stack, req)
+}
+
+/// The expected count of one family on the interval, `None` when it failed.
+pub(super) fn count_family<B, E>(
+    backend: B,
+    stack: ModeStack,
+    req: GuidedWindow,
+) -> Result<Option<usize>, EnumerationError>
+where
+    B: GuidedBackend + Backend<J, ComplexPlane, Entries = E>,
+    E: ProjectPlaneWaveModeDeterminant<Determinant = PlaneWaveDeterminant<J>>,
+{
+    search_guided_modes(backend, stack, req, None).map(|(basis, _)| basis.expected)
 }
 
 /// Enumerate one polarization and direction, correcting roots with the
@@ -222,7 +293,7 @@ pub fn enumerate_guided_modes_with<B, E>(
     req: GuidedWindow,
 ) -> Result<GuidedBasis, EnumerationError>
 where
-    B: Backend<J, ComplexPlane, Entries = E> + Clone,
+    B: GuidedBackend + Backend<J, ComplexPlane, Entries = E>,
     E: ProjectPlaneWaveModeDeterminant<Determinant = PlaneWaveDeterminant<J>>,
 {
     search_guided_modes(backend, stack.into(), req, None).map(|(basis, _)| basis)
@@ -235,9 +306,68 @@ pub(super) fn search_guided_modes<B, E>(
     predictions: Option<&[f64]>,
 ) -> Result<(GuidedBasis, bool), EnumerationError>
 where
+    B: GuidedBackend + Backend<J, ComplexPlane, Entries = E>,
+    E: ProjectPlaneWaveModeDeterminant<Determinant = PlaneWaveDeterminant<J>>,
+{
+    let full = m::regions(&stack).find(|(_, r)| r.class() == ConstitutiveClass::Full);
+    let polarisation = match req.family.polarisation() {
+        Some(polarisation) if full.is_none() => polarisation,
+        Some(polarisation) => {
+            if let Some((region, _)) = m::regions(&stack).find(|(_, r)| !r.is_separable()) {
+                return Err(EnumerationError::FamilyNotInvariant { region });
+            }
+            let basis =
+                super::hybrid::hybrid_guided_modes(backend, stack, req, polarisation.into())?;
+            return Ok((basis, false));
+        }
+        None => {
+            let basis = super::hybrid::hybrid_guided_modes(
+                backend,
+                stack,
+                req,
+                lamina_core::Channel::Coupled,
+            )?;
+            return Ok((basis, false));
+        }
+    };
+    let (mut basis, local) = scalar_guided_modes(backend, stack, req, polarisation, predictions)?;
+    basis.labels = vec![polarisation.into(); basis.modes.len()];
+    Ok((basis, local))
+}
+
+/// One polarisation of a stack of isotropic and diagonal regions, counted by
+/// its oscillation index.
+fn scalar_guided_modes<B, E>(
+    backend: B,
+    stack: ModeStack,
+    req: GuidedWindow,
+    polarisation: Polarisation,
+    predictions: Option<&[f64]>,
+) -> Result<(GuidedBasis, bool), EnumerationError>
+where
     B: Backend<J, ComplexPlane, Entries = E> + Clone,
     E: ProjectPlaneWaveModeDeterminant<Determinant = PlaneWaveDeterminant<J>>,
 {
+    let (k, [lo, hi], cfg) = validate(&req)?;
+    // Only the entries the polarisation sees are inspected; they must be
+    // real and positive for the count to be monotone.
+    m::check_regions(&stack)?;
+    scalar_count(
+        backend,
+        stack,
+        req,
+        polarisation,
+        predictions,
+        k,
+        [lo, hi],
+        cfg,
+    )
+}
+
+/// k0 in cm⁻¹, the interval and the refinement controls of a request.
+pub(super) fn validate(
+    req: &GuidedWindow,
+) -> Result<(f64, [f64; 2], crate::refinement::ValidatedConfig), EnumerationError> {
     let k = TAU / req.wavelength.as_centimetres();
     let [lo, hi] = req.abs_beta;
     if !(k.is_finite()
@@ -256,14 +386,29 @@ where
     let cfg = crate::refinement::RefinementConfig::from(req.refinement)
         .validate()
         .map_err(|_| EnumerationError::InvalidRequest)?;
-    // Only the entries the polarisation sees are inspected; they must be
-    // real and positive for the count to be monotone.
-    m::check_regions(&stack)?;
-    let entries = TensorEntry::seen_by(req.polarisation);
+    Ok((k, [lo, hi], cfg))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn scalar_count<B, E>(
+    backend: B,
+    stack: ModeStack,
+    req: GuidedWindow,
+    polarisation: Polarisation,
+    predictions: Option<&[f64]>,
+    k: f64,
+    [lo, hi]: [f64; 2],
+    cfg: crate::refinement::ValidatedConfig,
+) -> Result<(GuidedBasis, bool), EnumerationError>
+where
+    B: Backend<J, ComplexPlane, Entries = E> + Clone,
+    E: ProjectPlaneWaveModeDeterminant<Determinant = PlaneWaveDeterminant<J>>,
+{
+    let entries = TensorEntry::seen_by(polarisation);
     let medium = |material: &Region, region: usize| {
         let id = m::region_id(region, stack.len());
         let tensors = m::tensors(id, material, k.into())?;
-        let channel = Channel::of(&tensors, req.polarisation);
+        let channel = Channel::of(&tensors, polarisation);
         let seen = channel.entries();
         let positive = |v: Complex| v.im == 0. && v.re > 0.;
         if let Some(i) = (0..3).find(|&i| !positive(seen[i])) {
@@ -294,7 +439,7 @@ where
         None => End::Open(exteriors[side]),
         Some((kind, _)) => End::Wall {
             dirichlet: (kind == WallKind::PerfectElectric)
-                == (req.polarisation == Polarisation::TransverseElectric),
+                == (polarisation == Polarisation::TransverseElectric),
         },
     });
     // The light line and its margin come from the open sides only.
@@ -329,7 +474,9 @@ where
         light_line,
         upper_bound,
         modes: vec![],
+        labels: vec![],
         unresolved: vec![],
+        hybrid: None,
     };
     if lo >= hi {
         return Ok((report, false));
@@ -367,7 +514,7 @@ where
     if low == high {
         return Ok((report, false));
     }
-    let problem = p::InPlaneProblem::in_plane(stack, k, req.polarisation, backend)
+    let problem = p::InPlaneProblem::in_plane(stack, k, polarisation, backend)
         .map_err(|e| EnumerationError::Problem(e.to_string()))?;
     let correct = |l: f64, h: f64| {
         let mid = l + 0.5 * (h - l);

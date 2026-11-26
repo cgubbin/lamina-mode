@@ -79,10 +79,10 @@ use crate::analytic::AnalyticChart;
 #[cfg(test)]
 use crate::conformal::{ValidateConformalRegion, chart::LinearCoordinateMap};
 use lamina_core::{
-    Backend, CanonicalCoordinates, ComplexPlane, ComplexPlaneEvaluator, ComplexScalar,
+    Backend, CanonicalCoordinates, Channel, ComplexPlane, ComplexPlaneEvaluator, ComplexScalar,
     DeterminantEvaluationError, ExteriorWavevectors, Jet, ModeJet1, PlaneWaveDeterminant,
-    Polarisation, ProjectPlaneWaveModeDeterminant, ScalarAlgebra, SeedJet, Stack,
-    StackCompileError, StackThicknessJet, TensorConstitutiveLift,
+    ProjectPlaneWaveModeDeterminant, ScalarAlgebra, SeedJet, Stack, StackCompileError,
+    StackThicknessJet, TensorConstitutiveLift,
 };
 
 use argloc::FunctionBundle;
@@ -260,14 +260,14 @@ where
 #[derive(Clone, Debug)]
 pub(crate) struct CompiledPlaneWaveModeSolver<J, M, B> {
     evaluator: ComplexPlaneEvaluator<J, M, B>,
-    polarisation: Polarisation,
+    channel: Channel,
 }
 
 impl<J, M, B> CompiledPlaneWaveModeSolver<J, M, B> {
     pub(crate) fn compile(
         stack: &Stack<M, <J::Scalar as ComplexField>::RealField>,
         backend: B,
-        polarisation: Polarisation,
+        channel: impl Into<Channel>,
     ) -> Result<Self, StackCompileError<<J::Scalar as ComplexField>::RealField>>
     where
         J: Jet<Dimension = Ix0> + StackThicknessJet,
@@ -280,7 +280,7 @@ impl<J, M, B> CompiledPlaneWaveModeSolver<J, M, B> {
 
         Ok(Self {
             evaluator,
-            polarisation,
+            channel: channel.into(),
         })
     }
 
@@ -288,12 +288,8 @@ impl<J, M, B> CompiledPlaneWaveModeSolver<J, M, B> {
         &self.evaluator
     }
 
-    fn polarisation(&self) -> Polarisation {
-        self.polarisation
-    }
-
-    pub(crate) fn into_parts(self) -> (ComplexPlaneEvaluator<J, M, B>, Polarisation) {
-        (self.evaluator, self.polarisation)
+    pub(crate) fn into_parts(self) -> (ComplexPlaneEvaluator<J, M, B>, Channel) {
+        (self.evaluator, self.channel)
     }
 }
 
@@ -320,7 +316,7 @@ where
         exterior: &ExteriorWavevectors<J>,
     ) -> Result<J, Self::Error> {
         self.evaluator()
-            .checked_determinant(coordinates, exterior, self.polarisation())
+            .checked_determinant(coordinates, exterior, self.channel)
             .map(|determinant| determinant.into_inner())
     }
 }
