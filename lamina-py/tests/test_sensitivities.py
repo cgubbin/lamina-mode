@@ -293,7 +293,7 @@ def test_constant_material_inputs_keep_their_version_2_hashes():
     assert lamina.GuidedInput.resolve(stack, request).canonical_hash() == (
         "a03671272b57b82415b0a426a472fafb9ddafdd5d0f58519a8fe27d12609f3c8")
     assert lamina.enumerate_guided_modes(stack, request).canonical_hash() == (
-        "1a17ac6ae5b8057d55a98b97267dd27a1378b3175febf0baca069132498f2ab2")
+        "61dd2d2119228045af7dfc16ec9ae2c98dd2d2b8ae8e7c6fdfd5710c6bdbe363")
 
 
 @pytest.mark.parametrize("parameter", [

@@ -223,6 +223,36 @@ lamina-py presents lamina-mode's results in Python: SI quantities with the unit 
 results with numpy arrays, and a versioned, canonical JSON form of every input and result with its SHA-256
 identity. Every number comes from lamina-mode.
 
+## Anisotropic regions
+
+A region may hold a tensor medium: one scalar model per stack axis (`Diagonal`), one per principal axis
+(`Biaxial`, or `Uniaxial` with the ordinary model on a and b), or constant complex tensors (`TensorMaterial`),
+each oriented by a `Rotation` from its own frame to the stack frame (T_stack = R T Rᵀ). A scalar model is a
+`Material` (constant), `SellmeierMaterial`, `Lorentz`, `DrudeLorentz` or `Tabulated`:
+
+```python
+k0 = 2 * math.pi / 1e-6
+calcite = lamina.Uniaxial(lamina.SellmeierMaterial(1.73, [(0.98, 0.14e-6)]), 2.18, optic_axis=(0.6, 0.7))
+metal = lamina.DrudeLorentz(1.0, plasma_rad_per_m=2.0 * k0, damping_rad_per_m=0.0)
+rotated = lamina.Biaxial(2.0, 3.0, 4.0, lamina.Rotation.from_euler(0.4, 0.7, 0.2))
+stack = lamina.Stack(1.0, [(calcite, 0.8e-6)], 2.1)
+basis = lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(wavelength_m=1e-6))
+basis.regions[1].region_class, basis.regions[1].separable  # "full", False
+basis.regions[1].relative_permittivity                      # 3×3, stack frame, at the wavelength
+basis.labels                                                # ("hybrid", ...)
+```
+
+Rotations are recorded and hashed as matrices; `Rotation.from_euler` (z-y′-z″) and `Rotation.from_optic_axis(θ, φ)`
+(the c axis at polar angle θ from z and azimuth φ from x) resolve to one, with exact entries at quarter turns. A
+matrix that is not a proper rotation to 1e-12 is `InvalidInput`. The class of a region follows from its model and
+rotation, not from its tag: a principal medium turned by a signed axis permutation is diagonal, and one with a
+principal axis exactly on y is separable (TE and TM decouple). TE or TM of a stack with a non-separable region is
+`InvalidInput`. Guided enumeration needs Hermitian, positive-definite ε and μ at the wavelength; a lossy region is
+`InvalidInput`. Lorentz and Drude–Lorentz resonances, plasma and damping are angular wavenumbers k0 = ω/c in rad/m.
+A `Tabulated` permittivity is interpolated linearly in k0 and held at its value at the operating wavelength, which
+must lie inside the table; it has no wavelength dispersion, so a wavelength sensitivity or group index is
+`InvalidInput`. A modal basis takes stacks of isotropic and diagonal regions.
+
 ## Families and labels
 
 A request names a `family`: `"TE"` or `"TM"` for one polarisation of a separable stack, or `"all"`, the default,

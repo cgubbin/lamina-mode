@@ -117,6 +117,74 @@ pub enum ScalarModel {
         sellmeier: Sellmeier,
         relative_permeability: f64,
     },
+    /// ε(k0) = ε∞ + Σ Δεⱼ Ωⱼ² / (Ωⱼ² − k0² − i Γⱼ k0), angular wavenumbers
+    /// k0 = ω/c in rad/m.
+    Lorentz {
+        epsilon_infinity: f64,
+        oscillators: Vec<Oscillator>,
+        relative_permeability: f64,
+    },
+    /// ε(k0) = ε∞ − Ωp² / (k0² + i Γ k0) + Σ Δεⱼ Ωⱼ² / (Ωⱼ² − k0² − i Γⱼ k0).
+    DrudeLorentz {
+        epsilon_infinity: f64,
+        plasma_rad_per_m: f64,
+        damping_rad_per_m: f64,
+        oscillators: Vec<Oscillator>,
+        relative_permeability: f64,
+    },
+    /// A complex permittivity tabulated at ascending wavelengths, linearly
+    /// interpolated in k0 and held constant at its value at the operating
+    /// wavelength, which must lie inside the table.
+    Tabulated {
+        wavelength_m: Vec<f64>,
+        relative_permittivity: Vec<C2>,
+        relative_permeability: f64,
+    },
+}
+
+/// One Lorentz oscillator: its static contribution Δε, resonance Ω and
+/// damping Γ as angular wavenumbers.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Oscillator {
+    pub delta_epsilon: f64,
+    pub resonance_rad_per_m: f64,
+    pub damping_rad_per_m: f64,
+}
+
+/// A stack axis (x, y, z) or a material's principal axis (a, b, c).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Axis {
+    X,
+    Y,
+    Z,
+    A,
+    B,
+    C,
+}
+
+impl Axis {
+    pub fn name(self) -> &'static str {
+        ["x", "y", "z", "a", "b", "c"][self as usize]
+    }
+}
+
+/// A tensor material in its own frame. Internally tagged by `"kind"`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TensorMaterial {
+    /// One scalar model on each principal axis.
+    Principal {
+        a: ScalarModel,
+        b: ScalarModel,
+        c: ScalarModel,
+    },
+    /// Constant complex tensors, rows first.
+    Tensor {
+        relative_permittivity: [[C2; 3]; 3],
+        relative_permeability: [[C2; 3]; 3],
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -139,6 +207,18 @@ pub struct SellmeierTerm {
 pub enum Material {
     /// One scalar model for every direction.
     Isotropic { model: ScalarModel },
+    /// One scalar model on each stack axis.
+    Diagonal {
+        x: ScalarModel,
+        y: ScalarModel,
+        z: ScalarModel,
+    },
+    /// A tensor material and the rotation, rows first, from its frame to the
+    /// stack frame: column k holds the stack-frame components of axis k.
+    Full {
+        material: TensorMaterial,
+        rotation: [[f64; 3]; 3],
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -340,8 +420,23 @@ pub struct GuidedBasis {
     pub count_evidence: Option<CountEvidence>,
     /// Modes whose |β| differ by no more than this share a degenerate group.
     pub degeneracy_gap_rad_per_m: f64,
+    /// Left exterior, layers, right exterior, as solved.
+    pub regions: Vec<SolvedRegion>,
     pub modes: Vec<Mode>,
     pub unresolved: Vec<Gap>,
+}
+
+/// A region as solved: its class and separability, derived from its model
+/// and rotation, and its stack-frame tensors at the operating wavelength.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SolvedRegion {
+    /// "isotropic", "diagonal" or "full".
+    pub class: String,
+    pub separable: bool,
+    /// Rows first.
+    pub relative_permittivity: [[C2; 3]; 3],
+    pub relative_permeability: [[C2; 3]; 3],
 }
 
 /// Evidence of an argument-principle count.
