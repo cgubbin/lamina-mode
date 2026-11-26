@@ -194,6 +194,15 @@ Added:
   their hashes. Enumerating a PML-terminated stack raises
   `UnsupportedTermination`, an `InvalidInput`.
 
+Changed:
+
+- `hybrid_power_profile_with` and `hybrid_group_index_with` integrate their
+  two densities from one field evaluation per quadrature level, and a
+  self-integral evaluates the mode's fields once instead of twice: a quarter
+  of the field evaluations for a profile, half for a group index. The
+  self-pairing of a profile is the pairing of the unscaled fields times the
+  square of its scale; it agrees with the previous value to round-off.
+
 Fixed:
 
 - A solve whose discovery failed on a chart (for example a direct β rectangle

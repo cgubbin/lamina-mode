@@ -169,6 +169,19 @@ fn integrate<B: ModalDerivativeBackend>(
     conjugate: bool,
     density: Density,
 ) -> Result<Vec<Complex>, HybridFieldError> {
+    integrate_all(backend, modes, amplitudes, &[(conjugate, density)]).map(|mut all| all.remove(0))
+}
+
+/// [`integrate`] for several densities of the same two modes, sharing one
+/// field evaluation per refinement level, and one for both modes when they
+/// are the same mode with the same amplitude. Each integral's shares are
+/// those of the first level at which every integral has converged.
+fn integrate_all<B: ModalDerivativeBackend>(
+    backend: &B,
+    modes: [&ModePoint; 2],
+    amplitudes: [Complex; 2],
+    integrals: &[(bool, Density)],
+) -> Result<Vec<Vec<Complex>>, HybridFieldError> {
     let signatures = [0, 1].map(|i| modes[i].signature().map_err(|_| HybridFieldError::Branch));
     let [sa, sb] = signatures;
     let (sa, sb) = (sa?, sb?);
@@ -183,67 +196,81 @@ fn integrate<B: ModalDerivativeBackend>(
     let grid = ProfileGrid::coupled(stack, k, beta, 2, 4)?.ok_or(HybridFieldError::Quadrature)?;
     let exteriors = GuidedExteriors::new(stack, k.re, Channel::Coupled)
         .map_err(|_| HybridFieldError::Ineligible)?;
-    let pair = |_: [Complex; 6], g: [Complex; 6]| if conjugate { g.map(|v| v.conj()) } else { g };
-    let mut previous: Option<Complex> = None;
+    let same = std::ptr::eq(modes[0], modes[1]) && amplitudes[0] == amplitudes[1];
+    let mut previous: Vec<Option<Complex>> = vec![None; integrals.len()];
     for level in 0..8 {
         let sampling = grid.sampling(level).ok_or(HybridFieldError::Quadrature)?;
-        let [fa, fb] = [0, 1].map(|i| {
-            modes[i]
-                .seed_fields(backend, &sampling, amplitudes[i])
-                .map(|f| components(&f))
-        });
-        let (fa, fb) = (fa?, fb?);
+        let fa = modes[0]
+            .seed_fields(backend, &sampling, amplitudes[0])
+            .map(|f| components(&f))?;
+        let fb_owned = match same {
+            true => None,
+            false => Some(
+                modes[1]
+                    .seed_fields(backend, &sampling, amplitudes[1])
+                    .map(|f| components(&f))?,
+            ),
+        };
+        let fb = fb_owned.as_ref().unwrap_or(&fa);
         let spans = grid.spans(level);
-        let last = spans.len() - 1;
-        let mut shares = vec![];
-        for span in &spans {
-            let share = match span.intervals {
-                Some(_) => {
-                    let value = |i: usize| density(span.region, &fa[i], &pair(fa[i], fb[i]));
-                    Complex::new(span.simpson(|i| value(i).re), span.simpson(|i| value(i).im))
-                }
-                None => {
-                    // An open exterior: its outgoing waves at the interface.
-                    let (side, index) = if span.region == 0 {
-                        (0, span.last())
-                    } else {
-                        (1, span.first)
-                    };
-                    let which = [StackSide::Left, StackSide::Right][side];
-                    let fault = HybridFieldError::Exterior { side: which };
-                    let a = exteriors
-                        .outgoing(side, sa.k_parallel, &fa[index])
-                        .ok_or(fault)?;
-                    let fault = HybridFieldError::Exterior { side: which };
-                    let b = exteriors
-                        .outgoing(side, sb.k_parallel, &fb[index])
-                        .ok_or(fault)?;
-                    let mut sum = Complex::ZERO;
-                    for (ka, va) in &a {
-                        for (kb, vb) in &b {
-                            let (kb, wb) = if conjugate {
-                                (-kb.conj(), vb.map(|v| v.conj()))
-                            } else {
-                                (*kb, *vb)
-                            };
-                            sum += density(span.region, va, &wb) * Complex::I / (ka + kb);
-                        }
+        let mut all = Vec::with_capacity(integrals.len());
+        let mut converged = true;
+        for ((conjugate, density), previous) in integrals.iter().zip(previous.iter_mut()) {
+            let conjugate = *conjugate;
+            let pair =
+                |_: [Complex; 6], g: [Complex; 6]| if conjugate { g.map(|v| v.conj()) } else { g };
+            let mut shares = vec![];
+            for span in &spans {
+                let share = match span.intervals {
+                    Some(_) => {
+                        let value = |i: usize| density(span.region, &fa[i], &pair(fa[i], fb[i]));
+                        Complex::new(span.simpson(|i| value(i).re), span.simpson(|i| value(i).im))
                     }
-                    let _ = last;
-                    sum
-                }
-            };
-            shares.push(share);
+                    None => {
+                        // An open exterior: its outgoing waves at the interface.
+                        let (side, index) = if span.region == 0 {
+                            (0, span.last())
+                        } else {
+                            (1, span.first)
+                        };
+                        let which = [StackSide::Left, StackSide::Right][side];
+                        let fault = HybridFieldError::Exterior { side: which };
+                        let a = exteriors
+                            .outgoing(side, sa.k_parallel, &fa[index])
+                            .ok_or(fault)?;
+                        let fault = HybridFieldError::Exterior { side: which };
+                        let b = exteriors
+                            .outgoing(side, sb.k_parallel, &fb[index])
+                            .ok_or(fault)?;
+                        let mut sum = Complex::ZERO;
+                        for (ka, va) in &a {
+                            for (kb, vb) in &b {
+                                let (kb, wb) = if conjugate {
+                                    (-kb.conj(), vb.map(|v| v.conj()))
+                                } else {
+                                    (*kb, *vb)
+                                };
+                                sum += density(span.region, va, &wb) * Complex::I / (ka + kb);
+                            }
+                        }
+                        sum
+                    }
+                };
+                shares.push(share);
+            }
+            let total: Complex = shares.iter().sum();
+            if !total.re.is_finite() || !total.im.is_finite() {
+                return Err(HybridFieldError::Quadrature);
+            }
+            let scale = shares.iter().map(|s| s.norm()).fold(0.0, f64::max);
+            converged &= previous
+                .is_some_and(|p| (p - total).norm() <= 1e-10 * scale.max(f64::MIN_POSITIVE));
+            *previous = Some(total);
+            all.push(shares);
         }
-        let total: Complex = shares.iter().sum();
-        if !total.re.is_finite() || !total.im.is_finite() {
-            return Err(HybridFieldError::Quadrature);
+        if converged {
+            return Ok(all);
         }
-        let scale = shares.iter().map(|s| s.norm()).fold(0.0, f64::max);
-        if previous.is_some_and(|p| (p - total).norm() <= 1e-10 * scale.max(f64::MIN_POSITIVE)) {
-            return Ok(shares);
-        }
-        previous = Some(total);
     }
     Err(HybridFieldError::Quadrature)
 }
@@ -268,12 +295,21 @@ impl ModePoint {
             return Err(HybridFieldError::Ineligible);
         }
         let one = Complex::ONE;
-        let power: f64 = integrate(backend, [self, self], [one, one], true, &|_, f, g| {
-            0.5 * cross_x(f, g) * CM_TO_M_OVER_Z0
-        })?
+        // The power and the unconjugated self-pairing from one set of fields;
+        // the pairing is bilinear, so that of the scaled fields is scale² times it.
+        let density: Density = &|_, f, g| 0.5 * cross_x(f, g) * CM_TO_M_OVER_Z0;
+        let [power, pairing]: [Complex; 2] = integrate_all(
+            backend,
+            [self, self],
+            [one, one],
+            &[(true, density), (false, density)],
+        )?
         .iter()
-        .map(|s| s.re)
-        .sum();
+        .map(|shares| shares.iter().sum())
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_| HybridFieldError::Quadrature)?;
+        let power = power.re;
         if !power.is_finite() || power == 0.0 {
             return Err(HybridFieldError::IllConditioned);
         }
@@ -295,12 +331,7 @@ impl ModePoint {
             return Err(HybridFieldError::IllConditioned);
         }
         let scale = reference.conj() / reference.norm() / power.abs().sqrt();
-        let bilinear: Complex =
-            integrate(backend, [self, self], [scale, scale], false, &|_, f, g| {
-                0.5 * cross_x(f, g) * CM_TO_M_OVER_Z0
-            })?
-            .iter()
-            .sum();
+        let bilinear = scale * scale * pairing;
         Ok(HybridProfile {
             point: self.clone(),
             fields: self.seed_fields(backend, sampling, scale)?,
@@ -533,25 +564,30 @@ impl ModePoint {
             })
             .collect::<Result<_, HybridFieldError>>()?;
         let one = Complex::ONE;
-        let energy: Complex =
-            integrate(backend, [self, self], [one, one], true, &|region, f, g| {
-                let w = &weights[region];
-                let mut sum = Complex::ZERO;
-                for i in 0..3 {
-                    for j in 0..3 {
-                        // g = f*: Σ f_i* w_ij f_j with the conjugate on g.
-                        sum += g[i] * w[0][i][j] * f[j] + g[3 + i] * w[1][i][j] * f[3 + j];
-                    }
+        let energy_density: Density = &|region, f, g| {
+            let w = &weights[region];
+            let mut sum = Complex::ZERO;
+            for i in 0..3 {
+                for j in 0..3 {
+                    // g = f*: Σ f_i* w_ij f_j with the conjugate on g.
+                    sum += g[i] * w[0][i][j] * f[j] + g[3 + i] * w[1][i][j] * f[3 + j];
                 }
-                sum
-            })?
-            .iter()
-            .sum();
-        let flux: Complex = integrate(backend, [self, self], [one, one], true, &|_, f, g| {
-            cross_x(f, g)
-        })?
+            }
+            sum
+        };
+        let flux_density: Density = &|_, f, g| cross_x(f, g);
+        // Energy and flux from one set of fields.
+        let [energy, flux]: [Complex; 2] = integrate_all(
+            backend,
+            [self, self],
+            [one, one],
+            &[(true, energy_density), (true, flux_density)],
+        )?
         .iter()
-        .sum();
+        .map(|shares| shares.iter().sum())
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_| HybridFieldError::Quadrature)?;
         let certificate = 0.5 * energy.re / flux.re;
         Ok(HybridGroupIndex {
             value: derivative.re,
