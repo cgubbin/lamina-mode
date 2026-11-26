@@ -44,9 +44,13 @@ g = basis.group_index(0)   # certified: dβ/dk0 agrees with c W / P within g.tol
 g.value, g.energy_estimate, g.relative_discrepancy
 ```
 
-Parameters: `thickness`, `interface_position`, `translation`, `wavelength` (with dispersion), `permittivity`,
-`permeability`, and the Sellmeier `constant`, `coefficient` and `pole_wavelength` of a region's material. Each
-result names its `parameter_unit` and carries the conditioning of the implicit derivative.
+Parameters: `thickness`, `interface_position`, `translation`, `wavelength` (with dispersion), `permittivity` and
+`permeability` (every diagonal entry at once, or one stack-frame `component=(row, column)`), `rotation(region, axis)`
+(a turn of the region's material about a stack axis, per radian: dT/dθ = G T − T G with G v = axis × v), and the
+Sellmeier `constant`, `coefficient` and `pole_wavelength` of a region's model, on an `axis` for a tensor region
+("x", "y", "z" of a `Diagonal`, "a", "b", "c" of a principal medium). Each result names its `parameter_unit` and
+carries the conditioning of the implicit derivative. A rate that is off-diagonal or complex in the stack frame
+gives dβ only; a symmetric perturbation of ε_xz is the sum of the (0, 2) and (2, 0) components.
 
 ## Walls
 
@@ -267,8 +271,12 @@ basis.count_method            # "argument_principle"
 ```
 
 An argument-principle count keeps its rectangles clear of the light-line branch point, so its default cutoff
-margin is 1e-6 k0 (1e-5 rad/m for TE and TM). Fields, sensitivities, pairings and local derivatives of modes so
-counted are not available yet; they raise `InvalidInput`.
+margin is 1e-6 k0 (1e-5 rad/m for TE and TM). Modes so counted are solved through the 4×4 (Berreman)
+characteristic: their profiles carry all six components, name their phase reference (`"Ey+Z0Hy"`, or `"Ex+Z0Hx"`
+where that vanishes) and record the unconjugated norm (1/2) ∫ (E × H) · x dz; their sensitivities give dβ/dp with
+its conditioning but no field derivatives or power fractions (request no `z_m`); their group index is certified
+against the energy estimate of the full tensors, which for hybrid modes may need a `tolerance` near 1e-6. Pairings
+and local derivatives take TE and TM modes of isotropic and diagonal regions; others raise `InvalidInput`.
 
 ## Conventions
 

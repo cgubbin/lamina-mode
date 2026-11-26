@@ -72,6 +72,18 @@ named in each profile).
 `degenerate_group`: modes whose |β| lie within `degeneracy_gap_rad_per_m` (1e-6 k0) of a neighbour share an index,
 and a mode alone has none. Sensitivity and group-index records carry the basis's `assumption`.
 
+**Parameters.** `permittivity` and `permeability` take an optional stack-frame `component`, `[row, column]`; without
+one the rate is the identity (every diagonal entry), as in version 1. `rotation` names a region and a stack axis
+`"x" | "y" | "z"`: the material turns about it, per radian, dT/dθ = G T − T G with G v = axis × v, for ε and μ. The
+Sellmeier parameters take an `axis`: null for an isotropic region, `"x" | "y" | "z"` for a diagonal one and
+`"a" | "b" | "c"` for a principal one. A direction whose stack-frame rate is real and diagonal, on a TE or TM mode
+counted by its oscillation index, gives field derivatives and power fractions; any other gives dβ only, through the
+4×4 characteristic, and records null fractions and no conditioning threshold.
+
+**Profiles.** `normalisation` names `phase_reference_component` and records `bilinear_norm_w_per_m` for modes counted
+by the argument principle, null otherwise; `seed_exterior_power_w_per_m` and `relative_boundary_defect` are recorded
+for the others, null for these.
+
 **Version 1 inputs.** A version 1 input maps onto a version 2 input that solves to the same modes: each material
 `{"relative_permittivity": …}` or `{"sellmeier": …}` becomes `{"kind": "isotropic", "model": {"kind": "constant" |
 "sellmeier", …}}` with its fields unchanged, `"polarisation"` becomes `"family"` with the same value, and

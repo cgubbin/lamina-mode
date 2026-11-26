@@ -558,15 +558,46 @@ pub struct LocalDerivatives {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Parameter {
-    Thickness { layer: usize },
-    Interface { interface: usize },
+    Thickness {
+        layer: usize,
+    },
+    Interface {
+        interface: usize,
+    },
     Translation,
     Wavelength,
-    Permittivity { region: usize },
-    Permeability { region: usize },
-    SellmeierConstant { region: usize },
-    SellmeierCoefficient { region: usize, term: usize },
-    SellmeierPoleWavelength { region: usize, term: usize },
+    /// The stack-frame entry `[row, column]` of ε, or with no component the
+    /// identity: every diagonal entry at once.
+    Permittivity {
+        region: usize,
+        component: Option<[usize; 2]>,
+    },
+    Permeability {
+        region: usize,
+        component: Option<[usize; 2]>,
+    },
+    /// A turn of the region's material about a stack axis, per radian:
+    /// dT/dθ = G T − T G with G v = axis × v.
+    Rotation {
+        region: usize,
+        axis: Axis,
+    },
+    /// A parameter of the scalar model on `axis` (x, y, z of a diagonal
+    /// region, a, b, c of a principal one; null for an isotropic region).
+    SellmeierConstant {
+        region: usize,
+        axis: Option<Axis>,
+    },
+    SellmeierCoefficient {
+        region: usize,
+        axis: Option<Axis>,
+        term: usize,
+    },
+    SellmeierPoleWavelength {
+        region: usize,
+        axis: Option<Axis>,
+        term: usize,
+    },
 }
 
 /// Conditioning of a simple root's implicit derivative.
