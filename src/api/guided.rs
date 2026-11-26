@@ -51,6 +51,24 @@ pub enum TensorEntry {
     MuYy,
     MuZz,
 }
+impl TensorEntry {
+    /// The entries a polarisation sees, in the order `t`, `n`, `v` of its
+    /// channel: ε_xx, ε_zz, μ_yy (TM) or μ_xx, μ_zz, ε_yy (TE).
+    pub(crate) fn channel(polarisation: Polarisation) -> [Self; 3] {
+        match polarisation {
+            Polarisation::TransverseMagnetic => [Self::EpsilonXx, Self::EpsilonZz, Self::MuYy],
+            Polarisation::TransverseElectric => [Self::MuXx, Self::MuZz, Self::EpsilonYy],
+        }
+    }
+}
+/// A stack region in words: the left or right exterior, or layer `i`.
+pub(crate) fn region_name(region: lamina_core::StackRegion) -> String {
+    match region {
+        lamina_core::StackRegion::LeftExterior => "the left exterior".into(),
+        lamina_core::StackRegion::RightExterior => "the right exterior".into(),
+        lamina_core::StackRegion::Layer(layer) => format!("layer {}", layer.get()),
+    }
+}
 impl std::fmt::Display for TensorEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {

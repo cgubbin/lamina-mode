@@ -38,6 +38,15 @@ pub enum GroupIndexError {
     InvalidTolerance,
     #[error("requires a lossless guided mode in materials with real dispersion")]
     Ineligible,
+    #[error(
+        "requires real, positive entries where the polarisation sees them: {entry} of {} is {value}",
+        super::guided::region_name(*region)
+    )]
+    IneligibleEntry {
+        region: lamina_core::StackRegion,
+        entry: TensorEntry,
+        value: Complex,
+    },
     #[error("the wavelength sensitivity failed: {0:?}")]
     Sensitivity(GuidedBetaError),
     #[error(transparent)]
@@ -110,7 +119,18 @@ impl ModePoint {
                 LocalDerivativeSettings::default(),
                 ImplicitSlopeSettings::default(),
             )
-            .map_err(Sensitivity)?;
+            .map_err(|e| match e {
+                GuidedBetaError::IneligibleEntry {
+                    region,
+                    entry,
+                    value,
+                } => IneligibleEntry {
+                    region,
+                    entry,
+                    value,
+                },
+                other => Sensitivity(other),
+            })?;
         let k0_rate = direction.k0_rate(k.re).map_err(|_| Ineligible)?;
         let derivative = sensitivity.beta_rate / k0_rate;
 
@@ -134,8 +154,17 @@ impl ModePoint {
                 let weights = [0, 1].map(|i| dispersive(values[i], rates[i]));
                 let real = |z: &Complex| z.re.is_finite() && z.im == 0.;
                 let seen = [values, weights].map(|t| Channel::of(&t, polarisation).entries());
-                if !seen.iter().flatten().all(real) {
-                    return Err(Ineligible);
+                let names = TensorEntry::channel(polarisation);
+                for entries in seen {
+                    if let Some((entry, value)) =
+                        names.into_iter().zip(entries).find(|(_, v)| !real(v))
+                    {
+                        return Err(IneligibleEntry {
+                            region,
+                            entry,
+                            value,
+                        });
+                    }
                 }
                 Ok(weights.map(|w| w.map(|z| z.re)))
             })

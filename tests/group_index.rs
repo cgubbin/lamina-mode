@@ -89,3 +89,68 @@ fn group_index_rejects_invalid_tolerance() {
         Err(GroupIndexError::InvalidTolerance)
     ));
 }
+
+/// A lossless hBN film in its type II band, where ε_xx < 0: the group index
+/// is refused naming the film's layer and the entry.
+#[test]
+fn an_ineligible_entry_is_named() {
+    use lamina_core::{AnalyticalMaterialHandle, AnalyticalTensorMaterialHandle, Rotation};
+    use lamina_materials::{Lorentz, LorentzOscillator, PrincipalAxes};
+    use lamina_units::VacuumWavenumber;
+    let phonon = |eps_inf: f64, to: f64, lo: f64| {
+        let oscillator = LorentzOscillator::from_delta_epsilon(
+            eps_inf * (lo * lo / (to * to) - 1.0),
+            VacuumWavenumber::inverse_centimetres(to),
+            VacuumWavenumber::inverse_centimetres(0.0),
+        )
+        .unwrap();
+        Lorentz::new(eps_inf, vec![oscillator]).unwrap()
+    };
+    let air = || -> Region { AnalyticalMaterialHandle::new(Constant::dielectric(1.0)).into() };
+    let film = Region::oriented(
+        AnalyticalTensorMaterialHandle::new(PrincipalAxes::uniaxial(
+            phonon(4.87, 1370.0, 1610.0),
+            phonon(2.95, 780.0, 830.0),
+        )),
+        Rotation::identity(),
+    );
+    let stack = Stack::builder(air(), air())
+        .layer(film, Length::nanometres(100.0))
+        .finalise();
+    let k0 = std::f64::consts::TAU * 1500.0;
+    let problem = PropagationProblem::new(stack, k0, Polarisation::TransverseMagnetic).unwrap();
+    let domain = problem
+        .domain(
+            ConformalRegion::new(3.0, 3.5, -0.6, 0.6).unwrap(),
+            ReferenceSelection::Sheet(CoordinateSheet::Principal),
+            ConformalChartConfig::default(),
+            AnalyticAssumption::CallerAssumedHolomorphicPoleFree,
+        )
+        .unwrap();
+    let report = problem
+        .plan(vec![domain], vec![])
+        .unwrap()
+        .solve(Default::default(), Default::default(), Default::default())
+        .unwrap();
+    let [point] = report.observations() else {
+        panic!("{:?}", report.unresolved())
+    };
+    let error = point
+        .guided_group_index_with(&Scatter2::new(), FieldRecoverySettings::default(), 1e-6)
+        .unwrap_err();
+    let GroupIndexError::IneligibleEntry {
+        region,
+        entry,
+        value,
+    } = &error
+    else {
+        panic!("{error}")
+    };
+    assert_eq!(
+        *region,
+        lamina_core::StackRegion::Layer(lamina_core::FiniteLayerIndex::new(0))
+    );
+    assert_eq!(*entry, TensorEntry::EpsilonXx);
+    assert!(value.re < 0.0 && value.im == 0.0);
+    assert!(error.to_string().contains("ε_xx of layer 0"), "{error}");
+}
