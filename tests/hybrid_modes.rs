@@ -408,3 +408,56 @@ fn self_dual_slab_modes_are_reported_as_degenerate_subspaces() {
         pairs.len()
     );
 }
+
+#[test]
+fn walled_rotated_uniaxial_stacks_keep_their_separability() {
+    // PEC walls preserve TE and TM: an optic axis in the xz plane gives
+    // TE + TM modes; one out of it, hybrid modes. Neither side has a light
+    // line, so every real mode below the bound is counted.
+    use lamina_core::{Wall, WallKind};
+    let walled = |phi: f64| -> ModeStack {
+        Stack::builder(isotropic(2.1, 1.0), isotropic(2.1, 1.0))
+            .layer(uniaxial(4.0, 6.25, 0.6, phi), cm(1.2))
+            .finalise()
+            .with_left_termination(Wall::new(WallKind::PerfectElectric, cm(-0.15)))
+            .with_right_termination(Wall::new(WallKind::PerfectElectric, cm(1.35)))
+    };
+    let window = |family| GuidedWindow {
+        abs_beta: [1.6 * K0, 3.0 * K0],
+        ..window(family, [0.0, 1.0])
+    };
+    let separable = walled(0.0);
+    let all = enumerate_guided_modes(separable.clone(), window(ModeFamily::All)).unwrap();
+    assert!(all.is_complete(), "{:?}", all.unresolved);
+    let mut counts = vec![];
+    for pol in [TE, TM] {
+        let basis = enumerate_guided_modes(separable.clone(), window(pol.into())).unwrap();
+        assert!(basis.is_complete(), "{pol:?}: {:?}", basis.unresolved);
+        counts.push(basis.expected.unwrap());
+    }
+    assert_eq!(all.expected, Some(counts[0] + counts[1]));
+    assert!(all.labels.iter().all(|l| *l != ModeLabel::Hybrid));
+    assert_eq!(
+        all.hybrid.as_ref().unwrap().separable_counts,
+        Some([Some(counts[0]), Some(counts[1])])
+    );
+    let hybrid = enumerate_guided_modes(walled(0.7), window(ModeFamily::All)).unwrap();
+    assert!(hybrid.is_complete(), "{:?}", hybrid.unresolved);
+    assert!(hybrid.labels.iter().all(|l| *l == ModeLabel::Hybrid));
+    // Unit power with the walls' gaps integrated and no tails beyond them.
+    let sampling = lamina_core::FieldSampling::new()
+        .left_exterior(lamina_core::ExteriorSampling::point(cm(0.0)));
+    for point in &hybrid.modes {
+        let profile = point
+            .hybrid_power_profile_with(&Scatter4::new(), &sampling)
+            .unwrap();
+        assert_eq!(profile.signed_power_w_per_m, 1.0);
+    }
+    println!(
+        "walled: xz-plane axis TE {} + TM {} = {:?}; out of the plane {} hybrid modes",
+        counts[0],
+        counts[1],
+        all.expected,
+        hybrid.modes.len()
+    );
+}

@@ -7,6 +7,27 @@ released in step until 1.0. Each entry names any shared convention it changes.
 
 Added:
 
+- Guided modes of stacks with full-tensor regions (docs/hybrid-modes.md):
+  `ModeFamily::All` solves the coupled channel of Transfer4 or Scatter4 and
+  labels each mode TE, TM (separable stacks) or `Hybrid`; TE and TM of a
+  separable stack with full-class regions use the 4×4 backends' scalar
+  channels. Counts by the argument principle on graded β rectangles above the
+  light line, with exterior roots continued over each rectangle (closed form
+  for separable exteriors, the quartic otherwise), sampled region evidence
+  (`GuidedRegionEvidence`), Transfer4 for rectangles Scatter4 cannot continue
+  over, `NonRealRoot` and `NearDegenerate` gaps, and a separable cross-check
+  against the TE and TM counts (`HybridCountEvidence`). Eligibility: Hermitian,
+  positive-definite ε and μ; upper bound k0 max √(λmax(ε) λmax(μ)).
+- Unit-power six-component fields (`hybrid_power_profile_with`), with the
+  phase rule `E_y + Z₀H_y` real and positive at the left interface (fallback
+  `E_x + Z₀H_x`, recorded); the unconjugated reciprocity pairing and power
+  overlaps; β rates along thickness, wavenumber, tensor-rate and rotation
+  directions (`HybridPerturbation`); the group index with its Hermitian
+  dispersive energy certificate; tracking of bases with near-degenerate pairs
+  followed as subspaces.
+- Leaky and quasi-normal problems take a channel: the coupled channel with
+  full-tensor layers and isotropic exteriors.
+
 - Guided modes of stacks whose regions are isotropic or carry ε and μ
   diagonal in the stack frame (lamina-core `Region`; principal axes along
   x, y and z). A polarisation sees three entries per region: μ_xx, μ_zz and
@@ -184,6 +205,17 @@ Fixed:
   none and reconciliation raised no diagnostic.
 
 Changed (breaking):
+
+- `GuidedWindow::polarisation` becomes `family: ModeFamily`
+  (`From<Polarisation>`); `ModeFamily` gains `All`. `GuidedBasis` gains
+  `labels` and `hybrid`; `GuidedLimit` gains the argument-principle causes.
+- Problems carry a `Channel`: `Provenance::polarisation` returns
+  `Option<Polarisation>` (`None` for the coupled channel) and
+  `Provenance::channel` is added; scalar-only capabilities refuse the coupled
+  channel (`CoupledChannel` causes). `BranchSignature` gains `pairs`.
+  `enumerate_guided_modes_with` requires a `GuidedBackend` (the four core
+  backends). A region with off-diagonal entries is no longer refused by guided
+  enumeration.
 
 - Stacks are `ModeStack` (lamina-core `AnalyticalTensorStack` of `Region`s).
   Functions that take a stack accept `impl Into<ModeStack>`, so scalar stacks
