@@ -180,3 +180,47 @@ fn stops_when_every_corrector_region_is_crowded() {
         stop.cause
     );
 }
+
+/// Deep in the type II ladder of a 100 nm hBN film (n_eff ≈ 24 and 51) the
+/// characteristic's terms are large, so its round-off at a root exceeds the
+/// default residual limit 1e-10 k0/2π although the root is located to
+/// round-off of the chart coordinate. Continuation follows such branches,
+/// lossless and lossy, in 0.01 cm⁻¹ steps over 0.5 cm⁻¹, onto the roots an
+/// independent search finds at the end.
+#[test]
+fn continues_branches_whose_residual_is_at_its_round_off_floor() {
+    use hbn_support::*;
+    // (damping ⊥ and ∥ in cm⁻¹, ν̃, β)
+    let seeds = [
+        (0.0, 1371.0, Complex::new(206147.1, 0.0)),
+        (5.0, 1373.0, Complex::new(438211.98, 161347.64)),
+    ];
+    for (gamma, nu, beta) in seeds {
+        let stack = hbn_film(hbn(gamma, 4.0 * gamma / 5.0), 100.0);
+        let seed = root_near(&stack, nu, beta, 0.003);
+        let targets: Vec<f64> = (1..=50).map(|i| k0_of(nu + 0.01 * i as f64)).collect();
+        let trace = seed
+            .continue_with(
+                Scatter2::new(),
+                &targets,
+                BranchSettings {
+                    radius: 0.002,
+                    minimum_step: 1e-3,
+                    retries: 60,
+                    refinement: seed.config(),
+                    ..settings()
+                },
+            )
+            .unwrap();
+        assert!(trace.stop.is_none(), "γ = {gamma}: {:?}", trace.stop);
+        let end = trace.points.last().unwrap();
+        let evidence = end.evidence();
+        assert!(evidence.value.norm() <= evidence.residual_limit);
+        let beta = end.physical_coordinate();
+        let independent = root_near(&stack, nu + 0.5, beta, 0.003).physical_coordinate();
+        assert!(
+            (beta - independent).norm() < 1e-9 * beta.norm(),
+            "γ = {gamma}: continued to {beta}, the independent root is {independent}"
+        );
+    }
+}

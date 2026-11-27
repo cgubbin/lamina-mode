@@ -383,6 +383,8 @@ pub struct Mode {
     pub characteristic_derivative: C2,
     /// |characteristic_value| at the accepted root.
     pub residual: f64,
+    /// The limit the residual was judged against: the configured one, or the
+    /// characteristic's round-off floor at the root where that is larger.
     pub residual_limit: f64,
     pub correction: Option<f64>,
     pub correction_limit: f64,

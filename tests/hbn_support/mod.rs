@@ -56,11 +56,33 @@ pub fn root_on(stack: &ModeStack, nu: f64, beta: f64, radius: f64, right: f64) -
     // t² + (s − n²) t + r² = 0; the larger root keeps both exteriors bound.
     let b = s - (beta * beta) / (k0 * k0);
     let z = 0.5 * ((-b + (b * b - 4.0 * r * r).sqrt()) / 2.0).ln();
+    root_about(
+        stack,
+        nu,
+        Complex::new(z, 0.0),
+        radius,
+        Complex::new(beta, 0.0),
+    )
+}
+
+/// The TM root nearest the complex `beta` at ν̃ of a film in air, from one
+/// argument-principle box of half-width `radius` about it on the in-plane
+/// chart β² = k0² (1 + e^{2z}).
+pub fn root_near(stack: &ModeStack, nu: f64, beta: Complex, radius: f64) -> ModePoint {
+    let k0 = k0_of(nu);
+    let z = 0.5 * (beta * beta / (k0 * k0) - 1.0).ln();
+    root_about(stack, nu, z, radius, beta)
+}
+
+/// The TM root nearest `beta` in a box of half-width `radius` about `z`.
+fn root_about(stack: &ModeStack, nu: f64, z: Complex, radius: f64, beta: Complex) -> ModePoint {
+    let k0 = k0_of(nu);
     let problem =
         PropagationProblem::new(stack.clone(), k0, Polarisation::TransverseMagnetic).unwrap();
     let domain = problem
         .domain(
-            ConformalRegion::new(z - radius, z + radius, -radius, radius).unwrap(),
+            ConformalRegion::new(z.re - radius, z.re + radius, z.im - radius, z.im + radius)
+                .unwrap(),
             ReferenceSelection::Sheet(CoordinateSheet::Principal),
             ConformalChartConfig::default(),
             AnalyticAssumption::CallerAssumedHolomorphicPoleFree,
@@ -75,7 +97,7 @@ pub fn root_on(stack: &ModeStack, nu: f64, beta: f64, radius: f64, right: f64) -
         .observations()
         .iter()
         .min_by(|a, b| {
-            let d = |p: &ModePoint| (p.physical_coordinate().re - beta).abs();
+            let d = |p: &ModePoint| (p.physical_coordinate() - beta).norm();
             d(a).total_cmp(&d(b))
         })
         .unwrap_or_else(|| panic!("no root near {beta} at {nu}: {:?}", report.unresolved()))

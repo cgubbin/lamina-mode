@@ -183,7 +183,18 @@ residual_rtol=0, residual_scale=1, z_atol=z_rtol=1e-10. The discovery near-zero
 threshold scales the same way from 1e-12. Residual units follow the core characteristic
 gauge; configure a positive fixed residual scale when needed. It is never inferred
 from a nearly zero initial residual. Small residuals or small damped moves alone
-do not establish convergence. Numerical acceptance remains conditional on the
+do not establish convergence.
+
+A characteristic is evaluated to round-off of the size of its terms, which at
+large |β| or k0 (deep in a hyperbolic ladder, for example) exceeds any fixed
+residual limit. A point whose Newton correction is within 64 units of round-off
+of its coordinate, |F/F_prime| <= 64 ε max(1, |z|), and whose derivative a
+central difference of values (relative step 1e-8, two more bundles) confirms to
+1e-3, is at that floor: its residual is judged against the larger of the limit
+above and `64 ε |F_prime| max(1, |z|)`, recorded as `evidence.residual_floor`,
+with `evidence.residual_limit` the limit applied. Near a pole the correction is
+the distance to it and the central difference disagrees with the derivative, so
+a pole is not accepted this way. Numerical acceptance remains conditional on the
 caller's domain assumption, with no mathematical isolation/error-bound certificate.
 
 Default per-candidate limits are 32 successful updates, 12 step halvings after the

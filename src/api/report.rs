@@ -145,8 +145,15 @@ pub struct NumericalEvidence {
     pub value: Complex,
     pub derivative: Complex,
     pub correction: Option<f64>,
+    /// The limit the residual is judged against: the configured one, or the
+    /// characteristic's round-off floor at the point where that is larger.
     pub residual_limit: f64,
     pub correction_limit: f64,
+    /// `64 ε |F′| max(|z|, 1)`, set when the point's Newton correction is
+    /// within 64 units of round-off of its coordinate and a central difference
+    /// of values confirms its derivative: the residual of a root located to
+    /// round-off, which no further correction reduces.
+    pub residual_floor: Option<f64>,
 }
 impl From<r::NumericalEvidence> for NumericalEvidence {
     fn from(v: r::NumericalEvidence) -> Self {
@@ -157,6 +164,7 @@ impl From<r::NumericalEvidence> for NumericalEvidence {
             correction: v.correction,
             residual_limit: v.residual_limit,
             correction_limit: v.correction_limit,
+            residual_floor: v.residual_floor,
         }
     }
 }
