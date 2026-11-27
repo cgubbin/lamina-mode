@@ -68,7 +68,9 @@ fn solve(
 #[test]
 fn default_tolerances_resolve_a_mid_infrared_root() {
     let k0 = TAU * 1500.0;
-    // The old absolute defaults stagnate at this scale.
+    // With the old absolute defaults the residual at the root is below the
+    // limit 1e-10 only to round-off: the root is accepted against its
+    // round-off floor (before that was judged, it stagnated).
     let absolute = (
         DiscoveryConfig {
             zero_tolerance: Some(DEFAULT_ZERO_TOLERANCE),
@@ -79,9 +81,15 @@ fn default_tolerances_resolve_a_mid_infrared_root() {
             ..Default::default()
         },
     );
-    let (report, statuses) = solve(k0, absolute.0, absolute.1);
-    assert_eq!(statuses, ["Stagnated"]);
-    assert!(!report.is_complete());
+    let (old, statuses) = solve(k0, absolute.0, absolute.1);
+    assert_eq!(statuses, ["Accepted"]);
+    let [at_floor] = old.observations() else {
+        panic!()
+    };
+    let evidence = at_floor.evidence();
+    let floor = evidence.residual_floor.unwrap();
+    assert!(floor > DEFAULT_RESIDUAL_ATOL && evidence.residual_limit == floor);
+    assert!(evidence.value.norm() > DEFAULT_RESIDUAL_ATOL);
     let (report, statuses) = solve(k0, Default::default(), Default::default());
     assert_eq!(statuses, ["Accepted"]);
     assert!(report.is_complete());
@@ -92,6 +100,9 @@ fn default_tolerances_resolve_a_mid_infrared_root() {
         point.evidence().residual_limit,
         DEFAULT_RESIDUAL_ATOL * k0 / TAU
     );
+    assert_eq!(point.evidence().residual_floor, None);
+    let (a, b) = (at_floor.physical_coordinate(), point.physical_coordinate());
+    assert!((a - b).norm() < 1e-12 * b.norm(), "{a} {b}");
     assert_eq!(
         point.config().residual_atol,
         Some(DEFAULT_RESIDUAL_ATOL * k0 / TAU)

@@ -462,3 +462,50 @@ fn fresh_finite_check_can_veto_acceptance() {
     assert!(matches!(out.status(), CandidateStatus::ZeroDerivative));
     assert_eq!(out.work().evaluations, 2);
 }
+
+/// A characteristic `A (z − r)` evaluated with round-off of its terms,
+/// `|A r| ε`, here an exact pseudo-noise of 1e-7 that exceeds the residual
+/// limit (1e-10): Newton locates the root to round-off of z but cannot reduce
+/// the residual below the noise. The root is accepted against its floor.
+#[test]
+fn a_root_at_its_round_off_floor_is_accepted() {
+    let (slope, root) = (1e9, c(0.123456789));
+    let noise = |z: C| 1e-7 * (1e17 * z.re).cos();
+    let characteristic = |z: C| bundle((z - root) * slope + noise(z), c(slope));
+    let out = run(
+        &estimate(c(0.12)),
+        RefinementConfig::default(),
+        characteristic,
+    );
+    let CandidateStatus::Accepted(accepted) = out.status() else {
+        panic!("{:?}", out.status())
+    };
+    let evidence = accepted.evidence();
+    assert!((evidence.z - root).norm() <= 1e-15);
+    assert!(evidence.value.norm() > RefinementConfig::default().residual_atol);
+    let floor = evidence.residual_floor.unwrap();
+    assert_eq!(floor, FLOOR_ULPS * f64::EPSILON * slope);
+    assert_eq!(evidence.residual_limit, floor);
+    assert!(evidence.value.norm() <= floor);
+    // An ordinary root meets the configured limit: no floor.
+    let out = run(&estimate(c(0.12)), RefinementConfig::default(), |z| {
+        bundle(z - root, c(1.0))
+    });
+    let CandidateStatus::Accepted(accepted) = out.status() else {
+        panic!("{:?}", out.status())
+    };
+    assert_eq!(accepted.evidence().residual_floor, None);
+    assert_eq!(
+        accepted.evidence().residual_limit,
+        RefinementConfig::default().residual_atol
+    );
+    // A derivative the values do not confirm gives no floor.
+    let out = run(&estimate(c(0.12)), RefinementConfig::default(), |z| {
+        bundle(characteristic(z).value() * 1.0, c(slope * (1.0 + 1e-2)))
+    });
+    assert!(
+        !matches!(out.status(), CandidateStatus::Accepted(_)),
+        "{:?}",
+        out.status()
+    );
+}

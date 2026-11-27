@@ -3,6 +3,13 @@
 //! Raw search results and coverage diagnostics remain untouched. Residual units
 //! follow the core characteristic gauge; the fixed scale is never inferred from
 //! a nearly zero starting value. Clusters require separate future work.
+//!
+//! A characteristic is evaluated to round-off of the size of its terms, which
+//! at large |β| or k0 can exceed any fixed residual limit. A point whose Newton
+//! correction is within [`FLOOR_ULPS`] units of round-off of its coordinate,
+//! and whose derivative a central difference of values confirms, is at that
+//! round-off floor: its residual is judged against the floor
+//! `FLOOR_ULPS ε |F′| max(|z|, 1)` where that exceeds the configured limit.
 use crate::problem::{C, DomainProvenance, ProblemSearchResult};
 use argloc::{
     FunctionBundle, Rect, SearchTarget, SingularPointEstimate, SingularPointEstimateKind,
@@ -88,8 +95,33 @@ pub struct NumericalEvidence {
     pub value: C,
     pub derivative: C,
     pub correction: Option<f64>,
+    /// The limit the residual is judged against: the configured one, or the
+    /// round-off floor where that is larger.
     pub residual_limit: f64,
     pub correction_limit: f64,
+    /// The round-off floor `FLOOR_ULPS ε |F′| max(|z|, 1)` of a point at it
+    /// whose derivative a central difference confirmed; `None` otherwise.
+    pub residual_floor: Option<f64>,
+}
+
+/// A Newton correction within this many units of round-off of the
+/// coordinate marks a point at the characteristic's round-off floor.
+pub(crate) const FLOOR_ULPS: f64 = 64.0;
+/// The relative step of the central difference confirming a derivative at
+/// the floor, and the relative agreement it needs.
+const FLOOR_PROBE: f64 = 1e-8;
+const FLOOR_AGREEMENT: f64 = 1e-3;
+
+/// Whether a correction is within [`FLOOR_ULPS`] units of round-off of `z`.
+fn at_floor(z: C, correction: f64) -> bool {
+    correction <= FLOOR_ULPS * f64::EPSILON * z.norm().max(1.0)
+}
+
+/// `evidence` judged against its round-off floor `floor`.
+fn with_floor(mut evidence: NumericalEvidence, floor: f64) -> NumericalEvidence {
+    evidence.residual_floor = Some(floor);
+    evidence.residual_limit = evidence.residual_limit.max(floor);
+    evidence
 }
 /// Constructed only after a fresh checked evaluation passes both criteria.
 #[derive(Clone, Debug)]
@@ -242,6 +274,7 @@ fn evidence<E>(
             correction: Some(correction),
             residual_limit: config.residual_limit,
             correction_limit,
+            residual_floor: None,
         },
         delta,
     ))
@@ -334,7 +367,7 @@ pub(crate) fn correct_seed<E>(
         Err(error) => finish!(CandidateStatus::EvaluationFailed(error)),
     };
     loop {
-        let (current, delta) = match evidence(z, &bundle, config) {
+        let (mut current, delta) = match evidence(z, &bundle, config) {
             Ok(value) => value,
             Err(status) => {
                 if finite(*bundle.value()) && finite(*bundle.derivative()) {
@@ -346,11 +379,42 @@ pub(crate) fn correct_seed<E>(
                         residual_limit: config.residual_limit,
                         correction_limit: config.config.z_atol
                             + config.config.z_rtol * z.norm().max(1.0),
+                        residual_floor: None,
                     });
                 }
                 finish!(status)
             }
         };
+        // At the round-off floor, with a derivative the values confirm, the
+        // residual is judged against the floor.
+        let mut floor = None;
+        if !passes(&current) && current.correction.is_some_and(|v| at_floor(z, v)) {
+            let h = FLOOR_PROBE * z.norm().max(1.0);
+            let probes = [z + h, z - h];
+            if probes
+                .iter()
+                .all(|&p| inside(enclosure, p) && inside(outer, p))
+                && out.work.evaluations + 2 <= config.config.max_evaluations
+            {
+                let mut values = [C::new(0.0, 0.0); 2];
+                for (slot, &p) in values.iter_mut().zip(&probes) {
+                    out.work.evaluations += 1;
+                    match evaluate(p) {
+                        Ok(value) => *slot = *value.value(),
+                        Err(error) => finish!(CandidateStatus::EvaluationFailed(error)),
+                    }
+                }
+                let difference = (values[0] - values[1]) / (2.0 * h);
+                let slope = current.derivative;
+                if finite(difference)
+                    && (difference - slope).norm() <= FLOOR_AGREEMENT * slope.norm()
+                {
+                    let value = FLOOR_ULPS * f64::EPSILON * slope.norm() * z.norm().max(1.0);
+                    floor = Some(value);
+                    current = with_floor(current, value);
+                }
+            }
+        }
         out.last_valid = Some(current);
         if passes(&current) {
             if out.work.evaluations >= config.config.max_evaluations {
@@ -361,10 +425,15 @@ pub(crate) fn correct_seed<E>(
                 Ok(value) => value,
                 Err(error) => finish!(CandidateStatus::EvaluationFailed(error)),
             };
-            let (fresh, _) = match evidence(z, &fresh, config) {
+            let (mut fresh, _) = match evidence(z, &fresh, config) {
                 Ok(value) => value,
                 Err(status) => finish!(status),
             };
+            if let Some(value) = floor
+                && fresh.correction.is_some_and(|v| at_floor(z, v))
+            {
+                fresh = with_floor(fresh, value);
+            }
             out.last_valid = Some(fresh);
             if !passes(&fresh) {
                 finish!(CandidateStatus::NoProgress)

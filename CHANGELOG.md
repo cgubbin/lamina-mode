@@ -318,6 +318,22 @@ Fixed:
   exterior tensors change by 1e-5 of themselves), not a fixed 1e-4 in the
   parameter: at optical k0 in cm⁻¹, or along a fast direction such as a
   thickness at its β rate, the fixed radius lost digits or overshot.
+- Refinement accepts a root whose residual is at the characteristic's
+  round-off floor: once the Newton correction is within 64 units of round-off
+  of the coordinate and a central difference of values confirms the
+  derivative, the residual is judged against `64 ε |F′| max(|z|, 1)` where
+  that exceeds the configured limit (`NumericalEvidence::residual_floor`; the
+  applied limit is `residual_limit`). Deep in the type II ladder of a 100 nm
+  hBN film near ν̃_TO⊥ the round-off of the characteristic exceeds the default
+  limit 1e-10 k0/2π, and refinement stopped with `NoProgress` (lossless) or
+  `Stagnated` (lossy) at roots located to round-off: continuing every root
+  with 1370.5 ≤ ν̃ < 1380 cm⁻¹ up by 2 cm⁻¹ in 0.01 cm⁻¹ steps, 38 of 93
+  lossless and 31 of 83 lossy branches stopped, and searches about 71 and 57
+  further roots of the same window found none. Now all 164 and 140 roots are
+  found and continued, with no stop and no jump between branches.
+  An explicit absolute residual limit too small for the scale (the old
+  1e-10 at 1500 cm⁻¹) likewise no longer stagnates at a root located to
+  round-off.
 - A solve whose discovery failed on a chart (for example a direct β rectangle
   with an edge on the core light line, where lamina-core returns
   `NonFiniteOutput`) returned a report with no sign that it was incomplete.
