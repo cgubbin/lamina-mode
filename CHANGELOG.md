@@ -7,6 +7,15 @@ released in step until 1.0. Each entry names any shared convention it changes.
 
 Added:
 
+- Continuation counts the roots in each corrector chart by its boundary
+  winding before correcting, and refuses a step whose chart does not hold
+  exactly one: `BranchFailure::RootCount { zeros, bounds }` (none: the branch
+  was lost; several: neighbours within the chart radius) and
+  `BranchFailure::Uncounted(RootCountFailure)`, subdivided like other
+  failures. A step in a crowded hyperbolic ladder no longer converges silently
+  onto a neighbouring root. `BranchTrace::near_degenerate` reports the steps
+  whose chart held several roots, with the count and region.
+
 - `GuidedBetaError::IneligibleEntry` and `GroupIndexError::IneligibleEntry`
   name the region, the entry (`ε_xx`) and its value when a sensitivity or group
   index is refused for an entry that is not lossless (complex, not finite or

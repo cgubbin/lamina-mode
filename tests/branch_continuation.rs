@@ -1,5 +1,6 @@
 #[path = "../examples/support/pole_fixtures.rs"]
 mod fixtures;
+mod hbn_support;
 #[path = "../examples/support/pole_material.rs"]
 mod material;
 #[path = "../examples/support/pole_green.rs"]
@@ -115,4 +116,67 @@ fn records_degenerate_slope_and_exterior_stop() {
         )
         .unwrap();
     assert!(matches!(trace.stop.unwrap().cause, BranchFailure::Exterior));
+}
+
+/// Continue a TM mode of a lossless 100 nm hBN film in air through its
+/// crowded type II ladder just above ν̃_TO⊥ = 1370 cm⁻¹, from ν̃ = 1371 to
+/// 1372 cm⁻¹, with chart half-width `radius` and `steps` equal steps.
+fn hbn_ladder(radius: f64, steps: usize) -> (BranchTrace, Complex) {
+    use hbn_support::*;
+    let stack = hbn_film(hbn(0.0, 0.0), 100.0);
+    let seed = root(&stack, 1371.0, 15.44 * k0_of(1371.0), 0.01);
+    let targets: Vec<f64> = (1..=steps)
+        .map(|i| k0_of(1371.0 + i as f64 / steps as f64))
+        .collect();
+    let trace = seed
+        .continue_with(
+            Scatter2::new(),
+            &targets,
+            BranchSettings {
+                radius,
+                minimum_step: 1e-3,
+                retries: 60,
+                refinement: seed.config(),
+                ..settings()
+            },
+        )
+        .unwrap();
+    let end = trace.points.last().unwrap().physical_coordinate();
+    (trace, end)
+}
+
+/// Neighbouring roots of the ladder are about 0.1 apart on the chart. A
+/// corrector region holding several of them is refused and the step
+/// subdivided, so a coarse continuation ends on the same root as a fine one
+/// instead of on its neighbour, and reports the crowded regions.
+#[test]
+fn refuses_a_corrector_region_holding_neighbouring_roots() {
+    let (fine, reference) = hbn_ladder(0.002, 100);
+    assert!(fine.stop.is_none(), "{:?}", fine.stop);
+    assert!(fine.near_degenerate().is_empty());
+    let (coarse, end) = hbn_ladder(0.1, 1);
+    assert!(coarse.stop.is_none(), "{:?}", coarse.stop);
+    assert!(
+        (end - reference).norm() < 1e-9 * reference.norm(),
+        "continued to {end}, the branch is at {reference}"
+    );
+    let crowded = coarse.near_degenerate();
+    assert!(!crowded.is_empty());
+    assert!(crowded.iter().all(|&(_, zeros, _)| zeros > 1));
+}
+
+/// A chart radius wider than the ladder spacing at every step: the
+/// continuation stops on a region holding several roots rather than
+/// accepting any of them.
+#[test]
+fn stops_when_every_corrector_region_is_crowded() {
+    let (trace, _) = hbn_ladder(0.5, 1);
+    assert_eq!(trace.points.len(), 1);
+    assert!(!trace.near_degenerate().is_empty());
+    let stop = trace.stop.unwrap();
+    assert!(
+        matches!(stop.cause, BranchFailure::RootCount { zeros, .. } if zeros > 1),
+        "{:?}",
+        stop.cause
+    );
 }

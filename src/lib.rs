@@ -10,6 +10,7 @@ mod mode;
 mod problem;
 mod refinement;
 mod search;
+mod winding;
 
 #[cfg(test)]
 mod checked_tests;

@@ -36,6 +36,65 @@ pub enum BranchFailure {
     Correction(String),
     #[error("station domain failed: {0}")]
     Domain(String),
+    /// The corrector region does not hold exactly one root: none when the
+    /// predictor has lost the branch, several when neighbouring roots lie
+    /// within the chart radius (a near-degenerate group at this station).
+    /// The step is refused rather than corrected onto an unknown root.
+    #[error("the corrector region holds {zeros} roots, not one")]
+    RootCount {
+        zeros: usize,
+        /// The corrector region in the station's native chart.
+        bounds: Rect<f64>,
+    },
+    #[error("the roots in the corrector region could not be counted ({0:?})")]
+    Uncounted(RootCountFailure),
+}
+
+/// Why the roots in a corrector region could not be counted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootCountFailure {
+    /// A root on or within round-off of the region's boundary.
+    BoundaryRoot,
+    /// The characteristic could not be evaluated on the boundary, or its
+    /// winding was not a non-negative integer.
+    NonIntegerWinding,
+}
+
+impl BranchTrace {
+    /// Refused steps and the stop whose corrector region held several roots:
+    /// near-degenerate neighbours of the branch, as (attempted control
+    /// coordinate, root count, region in the native chart).
+    pub fn near_degenerate(&self) -> Vec<(f64, usize, Rect<f64>)> {
+        self.retries
+            .iter()
+            .map(|(at, cause)| (*at, cause))
+            .chain(self.stop.iter().map(|stop| (stop.attempted, &stop.cause)))
+            .filter_map(|(at, cause)| match cause {
+                BranchFailure::RootCount { zeros, bounds } if *zeros > 1 => {
+                    Some((at, *zeros, *bounds))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// Require the corrector region to hold exactly one root.
+fn one_root(
+    counted: Result<(usize, Complex), crate::winding::WindingFailure>,
+    bounds: Rect<f64>,
+) -> Result<(), BranchFailure> {
+    use crate::winding::WindingFailure;
+    match counted {
+        Ok((1, _)) => Ok(()),
+        Ok((zeros, _)) => Err(BranchFailure::RootCount { zeros, bounds }),
+        Err(WindingFailure::BoundaryZero) => {
+            Err(BranchFailure::Uncounted(RootCountFailure::BoundaryRoot))
+        }
+        Err(WindingFailure::NonInteger) => Err(BranchFailure::Uncounted(
+            RootCountFailure::NonIntegerWinding,
+        )),
+    }
 }
 #[derive(Debug)]
 pub struct BranchStop {
@@ -235,6 +294,13 @@ impl ModePoint {
                     s.domain_assumption,
                 )
                 .map_err(|e| fail(e.to_string()))?;
+            let bounds = Rect {
+                x_min: k.re - s.radius,
+                x_max: k.re + s.radius,
+                y_min: k.im - s.radius,
+                y_max: k.im + s.radius,
+            };
+            one_root(problem.zeros_in(&domain), bounds)?;
             problem.corrected_point(&domain, k, config)?
         } else {
             let exp_z = if spatial {
@@ -245,6 +311,12 @@ impl ModePoint {
             let mut z = exp_z.ln();
             z.im += std::f64::consts::TAU
                 * ((self.native_coordinate().im - z.im) / std::f64::consts::TAU).round();
+            let region = Rect {
+                x_min: z.re - s.radius,
+                x_max: z.re + s.radius,
+                y_min: z.im - s.radius,
+                y_max: z.im + s.radius,
+            };
             let bounds = ConformalRegion::new(
                 z.re - s.radius,
                 z.re + s.radius,
@@ -262,6 +334,7 @@ impl ModePoint {
                 let domain = problem
                     .domain(bounds, selection, Default::default(), s.domain_assumption)
                     .map_err(|e| fail(e.to_string()))?;
+                one_root(problem.zeros_in(&domain), region)?;
                 problem.corrected_point(&domain, z, config)?
             } else {
                 let [l, r] = provenance
@@ -281,6 +354,7 @@ impl ModePoint {
                 let domain = problem
                     .domain(bounds, selection, Default::default(), s.domain_assumption)
                     .map_err(|e| fail(e.to_string()))?;
+                one_root(problem.zeros_in(&domain), region)?;
                 problem.corrected_point(&domain, z, config)?
             }
         };

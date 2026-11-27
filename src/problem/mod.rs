@@ -599,6 +599,29 @@ where
 mod tests;
 
 impl<M: Clone, S: ModeDeterminantSolver<J> + Clone> ModalProblem<M, S> {
+    /// Zeros of the characteristic inside the domain's requested region,
+    /// from its boundary winding, and their sum.
+    pub(crate) fn zeros_in<H: AnalyticChart<J>>(
+        &self,
+        domain: &ProblemDomain<M, S, H>,
+    ) -> Result<(usize, C), crate::winding::WindingFailure> {
+        let bounds = domain.provenance.requested();
+        let (x_min, x_max) = bounds.real_bounds();
+        let (y_min, y_max) = bounds.imaginary_bounds();
+        let window = argloc::Rect {
+            x_min,
+            x_max,
+            y_min,
+            y_max,
+        };
+        let clearance = 1e-6 * (x_max - x_min).max(y_max - y_min);
+        crate::winding::boundary_winding(window, clearance, |z| {
+            let bundle = self.evaluate(domain, z).ok()?;
+            Some((*bundle.value(), *bundle.derivative()))
+        })
+        .map_err(|(_, cause)| cause)
+    }
+
     pub(crate) fn corrected_point<H: AnalyticChart<J>>(
         &self,
         domain: &ProblemDomain<M, S, H>,
