@@ -624,8 +624,22 @@ fn degenerate_groups(beta: &[f64], gap: f64) -> Vec<Option<usize>> {
 }
 
 fn enumeration_failure(e: lamina_mode::EnumerationError) -> Failure {
+    use lamina_core::{ConstitutiveError, StackRegion};
     use lamina_mode::EnumerationError as E;
     match e {
+        E::Constitutive(ConstitutiveError::Unsupported {
+            region: region @ (StackRegion::LeftExterior | StackRegion::RightExterior),
+            ..
+        }) => Failure::Invalid(format!(
+            "anisotropic open exteriors are not supported yet: the {} exterior couples TE and \
+             TM (an ε or μ entry xy, yx, yz or zy); an open exterior must be isotropic, \
+             diagonal or have its principal axes in the xz plane and along y",
+            if region == StackRegion::LeftExterior {
+                "left"
+            } else {
+                "right"
+            }
+        )),
         E::Termination { .. } => Failure::Unsupported(e.to_string()),
         E::FamilyNotInvariant { .. } | E::Tensor { .. } | E::InvalidRequest => {
             Failure::Invalid(e.to_string())

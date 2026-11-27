@@ -29,6 +29,16 @@ supplied field in a basis and local coupling coefficients between its modes.
 It builds on `lamina-units`,
 `lamina-core` and `argloc`.
 
+Limits on open exteriors: guided enumeration needs each open exterior to keep
+TE and TM apart (isotropic, diagonal, or with no `xy`, `yx`, `yz` or `zy` entry
+of ε or μ, such as an optic axis in the xz plane). Anisotropic open exteriors
+that couple them, such as a uniaxial crystal with its optic axis in the
+interface plane at an angle to the propagation direction (the Dyakonov
+geometry), are not supported yet and are refused with
+`ConstitutiveError::Unsupported` before any search. The conformal in-plane
+chart, modal bases in chart windows and complex-k0 problems need isotropic open
+exteriors (diagonal ones on a TE or TM channel of an in-plane problem).
+
 Read the [modal transform guide](docs/modal-transform.md) for the
 correspondence to Bakhtazad et al. (1997), field conventions and physical scope.
 The squared coordinate repeats after `i*pi`; the exterior sheets repeat after

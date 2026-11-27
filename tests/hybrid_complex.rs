@@ -304,7 +304,8 @@ fn an_anisotropic_exterior_is_refused_off_the_guided_sheet() {
     let error = FrequencyProblem::with_backend(stack.clone(), 1.0, Channel::Coupled, Transfer4)
         .unwrap_err();
     assert!(refused(&error), "{error:?}");
-    // On the guided sheet the same stack is searched.
+    // The guided sheet refuses it too: its incoming waves can make the 4×4
+    // reference basis lose rank above the light line.
     let w = GuidedWindow {
         wavelength: cm(1.0),
         family: ModeFamily::All,
@@ -316,6 +317,15 @@ fn an_anisotropic_exterior_is_refused_off_the_guided_sheet() {
         refinement: Default::default(),
         assumption: ASSUME,
     };
-    let basis = enumerate_guided_modes(stack, w).unwrap();
-    assert!(basis.is_complete(), "{:?}", basis.unresolved);
+    let error = enumerate_guided_modes(stack, w).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            EnumerationError::Constitutive(ConstitutiveError::Unsupported {
+                region: StackRegion::RightExterior,
+                ..
+            })
+        ),
+        "{error:?}"
+    );
 }

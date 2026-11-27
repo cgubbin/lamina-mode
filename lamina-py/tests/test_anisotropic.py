@@ -243,3 +243,37 @@ def test_a_walled_diagonal_stack_has_a_modal_basis():
     b = lamina.modal_basis(isotropic, WAVELENGTH, "TE", window)
     assert a.status == b.status == "complete"
     np.testing.assert_allclose(a.beta_rad_per_m, b.beta_rad_per_m, rtol=1e-10)
+
+
+# Open exteriors. A uniaxial crystal (ε_o = 2.25, ε_e = 2.56) with its optic axis in the interface plane at an
+# angle to x couples TE and TM; its incoming waves can make the 4×4 reference basis lose rank above the light
+# line, a zero of the characteristic for every stack. Such an exterior is refused before any search.
+CRYSTAL = (2.25, 2.56)
+PARTNER = 2.40
+
+
+@pytest.mark.parametrize("degrees", [60.0, 45.9271, 45.85])
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_a_non_separable_open_exterior_is_invalid_input(degrees, side):
+    crystal = lamina.Uniaxial(*CRYSTAL, optic_axis=(math.pi / 2, math.radians(degrees)))
+    stack = lamina.Stack(crystal, [], PARTNER) if side == "left" else lamina.Stack(PARTNER, [], crystal)
+    with pytest.raises(lamina.InvalidInput, match=f"anisotropic open exteriors are not supported yet: the {side}"):
+        lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(WAVELENGTH, family="all"))
+
+
+@pytest.mark.parametrize("axis", sorted(AXES))
+def test_a_diagonal_open_exterior_is_still_counted(axis):
+    angles, _ = AXES[axis]
+    stack = lamina.Stack(lamina.Uniaxial(*CRYSTAL, optic_axis=angles), [(4.0, THICKNESS)], PARTNER)
+    every = lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(WAVELENGTH, family="all"))
+    assert every.regions[0].region_class == "diagonal"
+    assert every.is_complete and len(every) >= 2
+    union = sorted(
+        (n for family in ("TE", "TM")
+         for n in lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(WAVELENGTH, family=family)).n_eff.real),
+        reverse=True,
+    )
+    np.testing.assert_allclose(every.n_eff.real, union, rtol=1e-9)
+    alone = lamina.Stack(lamina.Uniaxial(*CRYSTAL, optic_axis=angles), [], PARTNER)
+    empty = lamina.enumerate_guided_modes(alone, lamina.GuidedRequest(WAVELENGTH, family="all"))
+    assert empty.is_complete and len(empty) == 0
