@@ -165,7 +165,7 @@ dependencies = [
 
 [[package]]
 name = "lamina-mode"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "approx",
  "argloc",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "lamina-py"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "lamina-core",
  "lamina-materials",

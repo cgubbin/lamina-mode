@@ -5,6 +5,8 @@ released in step until 1.0. Each entry names any shared convention it changes.
 
 ## Unreleased
 
+## 0.2.1 (2026-11-27)
+
 Fixed:
 
 - Guided enumeration refuses an open exterior that couples TE and TM (an ε or

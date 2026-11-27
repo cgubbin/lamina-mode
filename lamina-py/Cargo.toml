@@ -1,6 +1,6 @@
 [package]
 name = "lamina-py"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Christopher R. Gubbin <cgubbin@gmail.com>"]
@@ -18,7 +18,7 @@ crate-type = ["cdylib"]
 [dependencies]
 lamina-core = { version = "0.2.0", path = "../../lamina-core" }
 lamina-materials = { version = "0.2.0", path = "../../lamina-materials" }
-lamina-mode = { version = "0.2.0", path = ".." }
+lamina-mode = { version = "0.2.1", path = ".." }
 lamina-units = { version = "0.1.1", path = "../../lamina-units" }
 ndarray = "0.17.2"
 pyo3 = { version = "0.30.1", features = ["abi3-py310"] }
