@@ -224,6 +224,13 @@ Fixed:
 
 Changed (breaking):
 
+- `DiscoveryConfig::zero_tolerance` and `RefinementConfig::residual_atol` are
+  `Option<f64>`. The default, `None`, is `DEFAULT_ZERO_TOLERANCE` (1e-12) or
+  `DEFAULT_RESIDUAL_ATOL` (1e-10) at a 1 cm wavelength scaled by |k|/2π, with k
+  the plan's wavenumber (fixed k0, or the largest |k0| or |β| of the domains),
+  as `ModalBasisRequest::new` already did; a given value is used as given. At
+  k0 ≈ 10⁴ cm⁻¹ the old absolute defaults left roots `Stagnated`. Modal bases
+  and hybrid counts keep their thresholds.
 - `GuidedWindow::polarisation` becomes `family: ModeFamily`
   (`From<Polarisation>`); `ModeFamily` gains `All`. `GuidedBasis` gains
   `labels` and `hybrid`; `GuidedLimit` gains the argument-principle causes.

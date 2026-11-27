@@ -47,7 +47,7 @@ fn seed(
     let report = p.plan(vec![d], vec![])?.solve(
         Default::default(),
         RefinementConfig {
-            residual_atol: 1e-6,
+            residual_atol: Some(1e-6),
             ..Default::default()
         },
         Default::default(),

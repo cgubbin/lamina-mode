@@ -794,7 +794,7 @@ fn project_slab_superposition(
     window.cutoff_margin = 1e-8 / scale;
     if scale != 1.0 {
         // Residual limit relative to k0, as for the field-recovery limits.
-        window.refinement.residual_atol = 0.0;
+        window.refinement.residual_atol = Some(0.0);
         window.refinement.residual_rtol = 1e-9;
         window.refinement.residual_scale = k0;
     }
@@ -1079,7 +1079,7 @@ fn power_tangent_converges_for_interface_motion_in_a_micron_multilayer() {
     window.abs_beta = [0.0, 2.02 * k0];
     window.cutoff_margin = 1e-7;
     window.phase_tolerance = 1e-10;
-    window.refinement.residual_atol = 0.0;
+    window.refinement.residual_atol = Some(0.0);
     window.refinement.residual_rtol = 1e-9;
     window.refinement.residual_scale = k0;
     let basis = enumerate_guided_modes(stack, window).unwrap();

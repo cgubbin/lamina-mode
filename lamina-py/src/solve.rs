@@ -449,7 +449,7 @@ fn window(r: &rec::GuidedRequest) -> GuidedWindow {
         phase_tolerance: r.phase_tolerance,
         max_subdivisions: r.max_subdivisions,
         refinement: RefinementConfig {
-            residual_atol: f.residual_atol,
+            residual_atol: Some(f.residual_atol),
             residual_rtol: f.residual_rtol,
             residual_scale: k0_cm(r),
             native_atol: f.native_atol,

@@ -177,8 +177,10 @@ Acceptance requires a fresh checked bundle satisfying both:
 ```
 
 The derivative must be finite and nonzero; the correction, thresholds, and physical
-projection must be finite. Defaults are residual_atol=1e-10, residual_rtol=0,
-residual_scale=1, z_atol=z_rtol=1e-10. Residual units follow the core characteristic
+projection must be finite. Defaults are residual_atol=1e-10 k0/2π (1e-10 at a 1 cm
+wavelength, scaled with the problem's wavenumber; `residual_atol: None`),
+residual_rtol=0, residual_scale=1, z_atol=z_rtol=1e-10. The discovery near-zero
+threshold scales the same way from 1e-12. Residual units follow the core characteristic
 gauge; configure a positive fixed residual scale when needed. It is never inferred
 from a nearly zero initial residual. Small residuals or small damped moves alone
 do not establish convergence. Numerical acceptance remains conditional on the

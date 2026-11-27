@@ -91,7 +91,7 @@ pub fn propagation(
     let report = p.plan(vec![d], vec![])?.solve(
         DiscoveryConfig::default(),
         RefinementConfig {
-            residual_atol: 1e-8,
+            residual_atol: Some(1e-8),
             residual_rtol: 1e-11,
             residual_scale: KP,
             ..Default::default()
@@ -157,7 +157,7 @@ pub fn interface(temporal: bool) -> Result<ModePoint, Error> {
     let r = p.plan(vec![d], vec![])?.solve(
         DiscoveryConfig::default(),
         RefinementConfig {
-            residual_atol: 1e-8,
+            residual_atol: Some(1e-8),
             residual_rtol: 1e-11,
             residual_scale: KP,
             native_atol: 1e-5,

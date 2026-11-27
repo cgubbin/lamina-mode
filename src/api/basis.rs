@@ -165,9 +165,14 @@ impl ModalBasisRequest {
             window,
             degeneracy_gap_cm: None,
             self_pairing_rtol: 1e-8,
-            discovery: DiscoveryConfig::default(),
+            // The near-zero threshold is relative to the PML scale of the
+            // characteristic, not to k0.
+            discovery: DiscoveryConfig {
+                zero_tolerance: Some(DEFAULT_ZERO_TOLERANCE),
+                ..DiscoveryConfig::default()
+            },
             refinement: RefinementConfig {
-                residual_atol: refinement.residual_atol * scale,
+                residual_atol: Some(DEFAULT_RESIDUAL_ATOL * scale),
                 native_atol: refinement.native_atol * native,
                 ..refinement
             },
@@ -437,7 +442,9 @@ pub(super) fn solve<B: ModalFieldBackend<Region> + Clone>(
     {
         return Err(InvalidRequest);
     }
-    crate::refinement::RefinementConfig::from(request.refinement)
+    request
+        .refinement
+        .resolve(k0)
         .validate()
         .map_err(|_| InvalidRequest)?;
     let open = match request.window {
@@ -488,10 +495,10 @@ pub(super) fn solve<B: ModalFieldBackend<Region> + Clone>(
         .map_err(|e| Problem(ConstructionError::Constitutive(e)))?;
     let least_scale = p::direct::pml_log_floor(&pml_sides).min(0.0).exp();
     let argument = DiscoveryConfig {
-        zero_tolerance: request.discovery.zero_tolerance * least_scale,
+        zero_tolerance: Some(request.discovery.zero_tolerance_at(k0) * least_scale),
         ..request.discovery
     }
-    .argument_config()
+    .argument_config(k0)
     .map_err(|_| InvalidRequest)?;
     let mirror = top.is_none().then(|| mirror_square(window)).flatten();
     let resolution = if top.is_some() { 1e-9 } else { 1e-9 * k0 };
@@ -951,10 +958,11 @@ impl<X: Cells> Search<X> {
             Some(cells) => cells,
             None => p::direct::pml_log_scale(&self.pml_sides, beta).exp(),
         };
-        let refinement = crate::refinement::RefinementConfig::from(RefinementConfig {
-            residual_atol: self.refinement.residual_atol * scale,
+        let refinement = RefinementConfig {
+            residual_atol: Some(self.refinement.residual_atol_at(self.k0) * scale),
             ..self.refinement
-        })
+        }
+        .resolve(self.k0)
         .validate()
         .map_err(|_| {
             BasisLimit::Refinement(BranchFailure::Correction(

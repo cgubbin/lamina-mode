@@ -363,9 +363,13 @@ where
     let centre = 0.5 * (bounds.x_min + bounds.x_max);
     let problem = GuidedProblem::guided(stack.clone(), k, channel, backend.about(k, centre))
         .map_err(|e| EnumerationError::Problem(e.to_string()))?;
-    let argument = DiscoveryConfig::default()
-        .argument_config()
-        .map_err(|_| EnumerationError::InvalidRequest)?;
+    // The unscaled near-zero threshold, as the guided counts were tuned with.
+    let argument = DiscoveryConfig {
+        zero_tolerance: Some(DEFAULT_ZERO_TOLERANCE),
+        ..DiscoveryConfig::default()
+    }
+    .argument_config(k)
+    .map_err(|_| EnumerationError::InvalidRequest)?;
     let engine = Search {
         cells: GuidedCells {
             problem: &problem,

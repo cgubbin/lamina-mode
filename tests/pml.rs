@@ -39,7 +39,7 @@ fn closed_roots(
     // that passes no root; the near-zero threshold sits below that scale
     // rather than at the default 1e-12.
     let discovery = DiscoveryConfig {
-        zero_tolerance: 1e-30,
+        zero_tolerance: Some(1e-30),
         ..Default::default()
     };
     let (points, count) = resolved_roots(&problem, region(r), &direct, discovery);
