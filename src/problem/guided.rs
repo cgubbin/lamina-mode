@@ -20,6 +20,11 @@
 //! `ξ² = 4av / (4ac − b²)`: `ε_zz μ_yy` (TM) or `ε_yy μ_zz` (TE) for a
 //! symmetric block. Any other exterior's roots are found numerically, the
 //! quartic's coefficients by a discrete Fourier transform of `p` on a circle.
+//! Such an exterior is refused when it is open ([`GuidedExteriors::new`]):
+//! the 4×4 backends' reference basis of its incoming waves can lose rank at
+//! a real β above the light line, which no sampled check excludes. The
+//! numerical model remains for root rates along directions that couple TE
+//! and TM.
 //!
 //! The chart is linear: β itself, in cm⁻¹, at fixed real k0, with each open
 //! side's outward wavenumbers continued as functions of β. A rectangle is a
@@ -396,12 +401,23 @@ const SIGNS: [f64; 2] = [-1.0, 1.0];
 const SIDES: [StackSide; 2] = [StackSide::Left, StackSide::Right];
 
 impl GuidedExteriors {
+    /// Refuses, before any search, an open exterior whose tensors at `k0` couple
+    /// TE and TM (`ConstitutiveError::Unsupported`). Its incoming waves can make
+    /// the `(E_y, Z₀H_y)` reference of the 4×4 backends lose rank at a real β
+    /// above the light line, a zero of the characteristic for every stack.
+    /// A separable exterior's reference loses rank only on its light lines.
     pub(crate) fn new(stack: &ModeStack, k0: f64, channel: Channel) -> Result<Self, ProblemError> {
         let open = open_sides(stack);
         let exterior = |region, material: &Region, open: bool| {
             open.then(|| {
-                material::full_tensors(region, material, C::new(k0, 0.0))
-                    .map(|[values, _]| Exterior::new(values))
+                let [values, _] = material::full_tensors(region, material, C::new(k0, 0.0))?;
+                if !separable(&values) {
+                    return Err(lamina_core::ConstitutiveError::Unsupported {
+                        region,
+                        class: material.class(),
+                    });
+                }
+                Ok(Exterior::new(values))
             })
             .transpose()
         };

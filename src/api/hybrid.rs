@@ -187,6 +187,14 @@ fn bound(region: StackRegion, tensors: &[Tensor; 2], k0: f64) -> Result<f64, Enu
     Ok(k0 * product.sqrt())
 }
 
+/// A refused open exterior keeps its constitutive cause.
+fn exterior_error(e: p::ProblemError) -> EnumerationError {
+    match e {
+        p::ProblemError::Constitutive(e) => EnumerationError::Constitutive(e),
+        e => EnumerationError::Problem(e.to_string()),
+    }
+}
+
 /// Counted guided modes of `channel` in the request's interval, through the
 /// selected backend's characteristic, or Transfer4's when it cannot count.
 pub(super) fn hybrid_guided_modes<B, E>(
@@ -206,8 +214,7 @@ where
         let [values, _] = m::full_tensors(region, material, k.into())?;
         upper_bound = upper_bound.max(bound(region, &values, k)?);
     }
-    let exteriors = p::guided::GuidedExteriors::new(&stack, k, channel)
-        .map_err(|e| EnumerationError::Problem(e.to_string()))?;
+    let exteriors = p::guided::GuidedExteriors::new(&stack, k, channel).map_err(exterior_error)?;
     let open = walls.iter().any(Option::is_none);
     let light_line = exteriors.light_line(upper_bound);
     let margin = if open { req.cutoff_margin } else { 0.0 };
@@ -457,8 +464,7 @@ where
             y_max: half,
         }
     };
-    let exteriors = p::guided::GuidedExteriors::new(stack, k, channel)
-        .map_err(|e| EnumerationError::Problem(e.to_string()))?;
+    let exteriors = p::guided::GuidedExteriors::new(stack, k, channel).map_err(exterior_error)?;
     let mut cells = rectangles(lo, hi, light_line);
     let mut evidence = HybridCountEvidence {
         channel,

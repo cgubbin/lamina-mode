@@ -252,7 +252,10 @@ matrix that is not a proper rotation to 1e-12 is `InvalidInput`. The class of a 
 rotation, not from its tag: a principal medium turned by a signed axis permutation is diagonal, and one with a
 principal axis exactly on y is separable (TE and TM decouple). TE or TM of a stack with a non-separable region is
 `InvalidInput`. Guided enumeration needs Hermitian, positive-definite ε and μ at the wavelength; a lossy region is
-`InvalidInput`. Lorentz and Drude–Lorentz resonances, plasma and damping are angular wavenumbers k0 = ω/c in rad/m.
+`InvalidInput`. Anisotropic open exteriors that couple TE and TM (an ε or μ entry xy, yx, yz or zy, such as a
+uniaxial crystal with its optic axis in the interface plane at an angle to x) are not supported yet and raise
+`InvalidInput`; an exterior that is isotropic, diagonal or has its principal axes in the xz plane and along y is
+supported. Lorentz and Drude–Lorentz resonances, plasma and damping are angular wavenumbers k0 = ω/c in rad/m.
 A `Tabulated` permittivity is interpolated linearly in k0 and held at its value at the operating wavelength, which
 must lie inside the table; it has no wavelength dispersion, so a wavelength sensitivity or group index is
 `InvalidInput`. A modal basis takes stacks of isotropic and diagonal regions.

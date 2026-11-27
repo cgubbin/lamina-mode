@@ -5,6 +5,25 @@ released in step until 1.0. Each entry names any shared convention it changes.
 
 ## Unreleased
 
+Fixed:
+
+- Guided enumeration refuses an open exterior that couples TE and TM (an ε or
+  μ entry `xy`, `yx`, `yz` or `zy`) before any search, on every family and
+  backend, with `EnumerationError::Constitutive(ConstitutiveError::Unsupported
+  { region, class })`. In 0.2.0 such an exterior was accepted, and the 4×4
+  reference basis of its incoming waves could lose rank at a real β above the
+  light line: a zero of the characteristic for every stack, reported as a
+  guided mode in a complete basis. For a uniaxial crystal (ε_o = 2.25,
+  ε_e = 2.56) with its optic axis in the interface plane against ε = 2.40, a
+  spurious mode was reported at β/k0 = 1.5732133 (60°), beside the true one at
+  45.9271° and 45.85°. Isotropic, diagonal and separable full-class exteriors
+  (an optic axis in the xz plane) are unaffected: their reference loses rank
+  only on their light lines, outside the guided interval. Their results are
+  unchanged bit for bit. Anisotropic open exteriors will be supported by
+  a later change.
+- lamina-py: such a stack raises `InvalidInput` ("anisotropic open exteriors are
+  not supported yet").
+
 ## 0.2.0 (2026-11-27)
 
 Added:
