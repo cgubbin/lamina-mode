@@ -7,6 +7,14 @@ released in step until 1.0. Each entry names any shared convention it changes.
 
 Added:
 
+- `ModePoint::continue_through_folds_with` follows a branch by arclength in
+  the (k0, Re β) plane, holding fixed k0 or β, whichever the tangent moves
+  along most, so it passes folds (zero-group-velocity points of lossless
+  modes) that stop `continue_with`. Folds are located on fixed-β stations and
+  reported as `Fold` (location, station, slope, and the points and slopes on
+  both sides); `ArclengthSettings`, `ArclengthTrace`, `ArclengthEnd`,
+  `Control` and `FrequencyStation` configure and report it.
+
 - Continuation counts the roots in each corrector chart by its boundary
   winding before correcting, and refuses a step whose chart does not hold
   exactly one: `BranchFailure::RootCount { zeros, bounds }` (none: the branch

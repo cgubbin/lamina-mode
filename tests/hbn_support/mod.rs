@@ -85,3 +85,8 @@ pub fn root_on(stack: &ModeStack, nu: f64, beta: f64, radius: f64, right: f64) -
 pub fn root(stack: &ModeStack, nu: f64, beta: f64, radius: f64) -> ModePoint {
     root_on(stack, nu, beta, radius, 1.0)
 }
+
+/// An isotropic lossless polar dielectric.
+pub fn isotropic(eps_inf: f64, to: f64, lo: f64) -> Region {
+    lamina_core::AnalyticalMaterialHandle::new(phonon(eps_inf, to, lo, 0.0)).into()
+}

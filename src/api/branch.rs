@@ -113,7 +113,34 @@ pub struct BranchTrace {
     pub stop: Option<BranchStop>,
 }
 
-fn control(point: &ModePoint) -> f64 {
+/// The real coordinate held fixed at a station.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Control {
+    /// Vacuum wavenumber k0 fixed; β solved.
+    K0,
+    /// In-plane wavenumber β fixed; k0 solved.
+    Beta,
+}
+
+/// The frequency-domain evidence of a station that solves k0 directly, for a
+/// point found on another chart.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrequencyStation {
+    pub continuation: ContinuationConfig,
+    pub exterior_assumption: ExteriorAnalyticAssumption,
+    pub exclusions: Vec<FrequencyExclusion>,
+}
+
+pub(super) struct Station<'a> {
+    pub control: Control,
+    pub target: f64,
+    pub prediction: Complex,
+    pub radius: f64,
+    pub frequency: Option<&'a FrequencyStation>,
+    pub domain_assumption: AnalyticAssumption,
+}
+
+fn control_value(point: &ModePoint) -> f64 {
     match point.provenance().direction() {
         SearchCoordinate::InPlane { fixed_k0 } => fixed_k0,
         SearchCoordinate::Spectral { fixed_k_parallel } => fixed_k_parallel,
@@ -137,7 +164,7 @@ impl ModePoint {
             .resolve(self.root.provenance().wavenumber())
             .validate()
             .map_err(|_| BranchFailure::InvalidRequest)?;
-        let start = control(self);
+        let start = control_value(self);
         let mut previous = start;
         if settings.slope.validate().is_err()
             || settings.refinement.max_updates == 0
@@ -174,7 +201,7 @@ impl ModePoint {
                         trace.points.push(point)
                     }
                     Err(cause) => {
-                        let here = control(last);
+                        let here = control_value(last);
                         let mid = here + (target - here) * 0.5;
                         if retries == 0
                             || mid == target
@@ -208,26 +235,80 @@ impl ModePoint {
         B: Backend<p::J, ComplexPlane, Entries = E> + ModalDerivativeBackend + Clone,
         E: ProjectPlaneWaveModeDeterminant<Determinant = PlaneWaveDeterminant<p::J>>,
     {
-        let provenance = self.provenance();
-        let strategy = provenance.strategy();
-        let spatial = strategy == Strategy::Propagation;
+        let spatial = self.provenance().strategy() == Strategy::Propagation;
+        let control = if spatial { Control::K0 } else { Control::Beta };
+        let slope = self.slope(backend.clone(), control, &s)?;
+        let prediction = self.physical_coordinate() + slope * (target - control_value(self));
+        self.station(
+            backend,
+            Station {
+                control,
+                target,
+                prediction,
+                radius: s.radius,
+                frequency: None,
+                domain_assumption: s.domain_assumption,
+            },
+            config,
+        )
+    }
+
+    /// The rate of the free coordinate per unit of `control` at this point:
+    /// dβ/dk0 under k0 control, dk0/dβ under β control.
+    pub(super) fn slope<B>(
+        &self,
+        backend: B,
+        control: Control,
+        s: &BranchSettings,
+    ) -> Result<Complex, BranchFailure>
+    where
+        B: ModalDerivativeBackend + Clone,
+    {
         let derivative = self
             .local_derivatives_with(
-                backend.clone(),
+                backend,
                 &[PhysicalParameter::K0, PhysicalParameter::Beta],
                 s.local_assumption,
                 Default::default(),
             )
             .map_err(|e| BranchFailure::Derivative(e.to_string()))?;
-        let slope = derivative.implicit_slope(
-            if spatial {
-                ImplicitSlopeRequest::BetaPerK0
-            } else {
-                ImplicitSlopeRequest::K0PerBeta
-            },
-            s.slope,
-        )?;
-        let prediction = self.physical_coordinate() + slope.value * (target - control(self));
+        Ok(derivative
+            .implicit_slope(
+                match control {
+                    Control::K0 => ImplicitSlopeRequest::BetaPerK0,
+                    Control::Beta => ImplicitSlopeRequest::K0PerBeta,
+                },
+                s.slope,
+            )?
+            .value)
+    }
+
+    /// Correct `prediction` of the free coordinate at the control value
+    /// `target`. k0 control solves β on the in-plane chart; β control solves
+    /// k0 on the spectral chart of a stack with constant exteriors seeded on
+    /// it, else directly in k0, with the frequency evidence of the source
+    /// point or `frequency`.
+    pub(super) fn station<B, E>(
+        &self,
+        backend: B,
+        station: Station<'_>,
+        config: crate::refinement::ValidatedConfig,
+    ) -> Result<Self, BranchFailure>
+    where
+        B: Backend<p::J, ComplexPlane, Entries = E> + ModalDerivativeBackend + Clone,
+        E: ProjectPlaneWaveModeDeterminant<Determinant = PlaneWaveDeterminant<p::J>>,
+    {
+        let Station {
+            control,
+            target,
+            prediction,
+            radius,
+            frequency,
+            domain_assumption,
+        } = station;
+        let provenance = self.provenance();
+        let strategy = provenance.strategy();
+        let spatial = control == Control::K0;
         let (k, b) = if spatial {
             (target.into(), prediction)
         } else {
@@ -268,8 +349,16 @@ impl ModePoint {
         // The chart's κ_χ: each root without its channel's √s.
         let unscaled = sides.map(|(r, c)| c.scale().map_or(r, |s| r / s.sqrt()));
         let fail = |e: String| BranchFailure::Domain(e);
-        let (root, signature, enclosure) = if strategy == Strategy::DirectFrequency {
-            let source = provenance.frequency().unwrap();
+        let (root, signature, enclosure) = if !spatial && strategy != Strategy::ConformalSpectral {
+            let source = provenance
+                .frequency()
+                .map(|f| FrequencyStation {
+                    continuation: f.continuation,
+                    exterior_assumption: f.exterior_assumption,
+                    exclusions: f.exclusions.clone(),
+                })
+                .or(frequency.cloned())
+                .ok_or(BranchFailure::InvalidRequest)?;
             let problem =
                 p::frequency::FrequencyProblem::frequency(stack.clone(), target, pol, backend)
                     .map_err(|e| fail(e.to_string()))?;
@@ -277,10 +366,10 @@ impl ModePoint {
                 .frequency_domain(
                     FrequencyDomainInput {
                         bounds: FrequencyRegion::new(
-                            k.re - s.radius,
-                            k.re + s.radius,
-                            k.im - s.radius,
-                            k.im + s.radius,
+                            k.re - radius,
+                            k.re + radius,
+                            k.im - radius,
+                            k.im + radius,
                         )
                         .map_err(|e| fail(e.to_string()))?,
                         reference: FrequencyReference::Explicit(ExteriorReferenceValues {
@@ -291,14 +380,14 @@ impl ModePoint {
                         exclusions: source.exclusions.clone(),
                         exterior_assumption: source.exterior_assumption,
                     },
-                    s.domain_assumption,
+                    domain_assumption,
                 )
                 .map_err(|e| fail(e.to_string()))?;
             let bounds = Rect {
-                x_min: k.re - s.radius,
-                x_max: k.re + s.radius,
-                y_min: k.im - s.radius,
-                y_max: k.im + s.radius,
+                x_min: k.re - radius,
+                x_max: k.re + radius,
+                y_min: k.im - radius,
+                y_max: k.im + radius,
             };
             one_root(problem.zeros_in(&domain), bounds)?;
             problem.corrected_point(&domain, k, config)?
@@ -309,21 +398,20 @@ impl ModePoint {
                 (unscaled[0] / chi[0].sqrt() + unscaled[1] / chi[1].sqrt()) / (2. * Complex::i())
             };
             let mut z = exp_z.ln();
-            z.im += std::f64::consts::TAU
-                * ((self.native_coordinate().im - z.im) / std::f64::consts::TAU).round();
+            if strategy == Strategy::Propagation {
+                // Stay on the source chart's sheet.
+                z.im += std::f64::consts::TAU
+                    * ((self.native_coordinate().im - z.im) / std::f64::consts::TAU).round();
+            }
             let region = Rect {
-                x_min: z.re - s.radius,
-                x_max: z.re + s.radius,
-                y_min: z.im - s.radius,
-                y_max: z.im + s.radius,
+                x_min: z.re - radius,
+                x_max: z.re + radius,
+                y_min: z.im - radius,
+                y_max: z.im + radius,
             };
-            let bounds = ConformalRegion::new(
-                z.re - s.radius,
-                z.re + s.radius,
-                z.im - s.radius,
-                z.im + s.radius,
-            )
-            .map_err(|e| fail(e.to_string()))?;
+            let bounds =
+                ConformalRegion::new(z.re - radius, z.re + radius, z.im - radius, z.im + radius)
+                    .map_err(|e| fail(e.to_string()))?;
             let selection = ReferenceSelection::Coordinate {
                 reference: z,
                 coordinate: prediction,
@@ -332,7 +420,7 @@ impl ModePoint {
                 let problem = p::InPlaneProblem::in_plane(stack.clone(), target, pol, backend)
                     .map_err(|e| fail(e.to_string()))?;
                 let domain = problem
-                    .domain(bounds, selection, Default::default(), s.domain_assumption)
+                    .domain(bounds, selection, Default::default(), domain_assumption)
                     .map_err(|e| fail(e.to_string()))?;
                 one_root(problem.zeros_in(&domain), region)?;
                 problem.corrected_point(&domain, z, config)?
@@ -352,7 +440,7 @@ impl ModePoint {
                 )
                 .map_err(|e| fail(e.to_string()))?;
                 let domain = problem
-                    .domain(bounds, selection, Default::default(), s.domain_assumption)
+                    .domain(bounds, selection, Default::default(), domain_assumption)
                     .map_err(|e| fail(e.to_string()))?;
                 one_root(problem.zeros_in(&domain), region)?;
                 problem.corrected_point(&domain, z, config)?

@@ -206,7 +206,7 @@ impl LocalDerivativeReport {
         })
     }
 
-    fn partial(
+    pub(crate) fn partial(
         &self,
         parameter: PhysicalParameter,
     ) -> Result<PhysicalPartial, ImplicitSlopeFailure> {
