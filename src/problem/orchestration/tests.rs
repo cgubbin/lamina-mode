@@ -1062,3 +1062,26 @@ fn physical_interpretation_keeps_original_signature_errors_and_batch_evidence() 
             .all(|d| matches!(d.result, Err(PointError::Input(InputError::InvalidConfig))))
     );
 }
+
+/// Refinement stops at the first fully resolved step only when clustered
+/// leaves are split; without splitting argloc's default window is kept.
+#[test]
+fn refinement_stops_when_resolved_only_with_cluster_splitting() {
+    let argloc_default = argloc::ArgumentConfig::<f64>::new(1e-6)
+        .quad_tree
+        .target_window;
+    let window = |max_subdivisions| {
+        DiscoveryConfig {
+            max_subdivisions,
+            ..DiscoveryConfig::default()
+        }
+        .argument_config(1.0)
+        .unwrap()
+        .quad_tree
+        .target_window
+    };
+    assert_eq!(window(DiscoveryConfig::default().max_subdivisions), 1);
+    assert_eq!(window(1), 1);
+    assert_eq!(window(0), argloc_default);
+    assert!(argloc_default > 1);
+}
