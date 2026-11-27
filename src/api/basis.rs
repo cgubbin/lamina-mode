@@ -828,68 +828,18 @@ impl<X: Cells> Search<X> {
         window: Rect<f64>,
         clearance: f64,
     ) -> Result<(usize, Complex), (Complex, BasisLimit)> {
-        let corner = |x: f64, y: f64| Complex::new(x, y);
-        let (x, y) = ([window.x_min, window.x_max], [window.y_min, window.y_max]);
-        let path = [
-            corner(x[0], y[0]),
-            corner(x[1], y[0]),
-            corner(x[1], y[1]),
-            corner(x[0], y[1]),
-            corner(x[0], y[0]),
-        ];
-        let failed = |z| (z, BasisLimit::NonIntegerCount);
-        let domain = self.domain(window).map_err(|cause| (path[0], cause))?;
-        let evaluate = |z: Complex| {
-            let (value, derivative) = self.cells.evaluate(&domain, z).ok_or_else(|| failed(z))?;
-            if value == Complex::ZERO {
-                return Err((z, BasisLimit::BoundaryRoot));
-            }
-            let log = derivative / value;
-            if !value.re.is_finite()
-                || !value.im.is_finite()
-                || !log.re.is_finite()
-                || !log.im.is_finite()
-            {
-                return Err(failed(z));
-            }
-            Ok((value, log))
-        };
-        let mut turns = 0.0;
-        let mut moment = Complex::ZERO;
-        for edge in path.windows(2) {
-            let (a, b) = (edge[0], edge[1]);
-            let length = (b - a).norm();
-            let (mut t, mut step) = (0.0_f64, 1.0_f64 / 16.0);
-            let mut here = evaluate(a)?;
-            while t < 1.0 {
-                step = step.min(1.0 - t);
-                let (z0, z1) = (a + (b - a) * t, a + (b - a) * (t + step));
-                let there = evaluate(z1)?;
-                let turn = (there.0 / here.0).arg();
-                let predicted = ((here.1 + there.1) * 0.5 * (z1 - z0)).im;
-                if turn.abs() > std::f64::consts::FRAC_PI_4 || (turn - predicted).abs() > 0.05 {
-                    if step * length <= clearance {
-                        return Err((z1, BasisLimit::BoundaryRoot));
-                    }
-                    step *= 0.5;
-                    continue;
-                }
-                turns += turn;
-                moment += (z0 + z1) * 0.5 * Complex::new((there.0 / here.0).norm().ln(), turn);
-                t += step;
-                here = there;
-                step *= 2.0;
-            }
-        }
-        let winding = turns / std::f64::consts::TAU;
-        let count = winding.round();
-        if (winding - count).abs() > 1e-6 || count < 0.0 {
-            return Err(failed(path[0]));
-        }
-        Ok((
-            count as usize,
-            moment / Complex::new(0.0, std::f64::consts::TAU),
-        ))
+        let start = Complex::new(window.x_min, window.y_min);
+        let domain = self.domain(window).map_err(|cause| (start, cause))?;
+        crate::winding::boundary_winding(window, clearance, |z| self.cells.evaluate(&domain, z))
+            .map_err(|(z, cause)| {
+                (
+                    z,
+                    match cause {
+                        crate::winding::WindingFailure::BoundaryZero => BasisLimit::BoundaryRoot,
+                        crate::winding::WindingFailure::NonInteger => BasisLimit::NonIntegerCount,
+                    },
+                )
+            })
     }
 
     /// The expected count over the window boundary, the region where it
