@@ -229,12 +229,27 @@ Added:
   
 Changed:
 
-- `hybrid_power_profile_with` and `hybrid_group_index_with` integrate their
-  two densities from one field evaluation per quadrature level, and a
-  self-integral evaluates the mode's fields once instead of twice: a quarter
-  of the field evaluations for a profile, half for a group index. The
-  self-pairing of a profile is the pairing of the unscaled fields times the
-  square of its scale; it agrees with the previous value to round-off.
+- Single-stack mode integrals are closed forms from lamina-core's
+  `directional_forms` instead of refined composite Simpson sums of sampled
+  fields: the hybrid unit-power profile, reciprocity pairing, power overlap
+  (and tracking) and group-index energy; the scalar unit-power profile and
+  group-index stored energy; regional powers and their rates
+  (`power_field_tangent_with`). Values agree with the previous quadrature to
+  its tolerance and are exact to round-off (the power of a unit profile is
+  1 ± 1e-13 against tight Gauss–Legendre, from 1 ± 3e-11). A hybrid profile
+  takes about 7 ms instead of 0.75 s, a pairing or overlap about 4 ms instead
+  of 2 s; the hybrid_fields test target runs in 32 s instead of 231 s. A side
+  closed by a PML is still refused. Two-stack registered pairings, modal
+  bases, projection and local coupling keep their quadrature.
+- `guided_power_profile_with`, `guided_power_overlap_with`,
+  `guided_reciprocity_with` and `guided_local_coupling_with` also require
+  `ModalDerivativeBackend` of their backend (every built-in backend has it).
+- Error variants: `GuidedPowerError::Quadrature` becomes `Integrals`;
+  `GroupIndexError::{Quadrature, Recovery}` become `Integrals` and
+  `IllConditioned`; `GuidedPowerSensitivityError::Quadrature` becomes
+  `Integrals`; `HybridFieldError::Quadrature` is gone and `Mismatched` reports
+  two modes whose stacks differ in layer thicknesses. Of the
+  `guided_group_index_with` field-recovery settings only the amplitude enters.
 
 
 Fixed:

@@ -49,10 +49,10 @@ pub enum GroupIndexError {
     },
     #[error("the wavelength sensitivity failed: {0:?}")]
     Sensitivity(GuidedBetaError),
-    #[error(transparent)]
-    Recovery(#[from] Box<FieldRecoveryFailure>),
-    #[error("the stored-energy quadrature did not converge")]
-    Quadrature,
+    #[error("the stored-energy and power integrals failed")]
+    Integrals(#[source] std::sync::Arc<dyn std::error::Error + Send + Sync>),
+    #[error("the power vanishes")]
+    IllConditioned,
     #[error(transparent)]
     Termination(#[from] super::PmlIntegral),
     #[error(
@@ -69,9 +69,9 @@ pub enum GroupIndexError {
 
 impl ModePoint {
     /// Evaluate and certify the group index of a lossless guided mode. The
-    /// field-recovery settings apply to the stored-energy integral; their
-    /// characteristic limit must suit the device scale, as for unit-power
-    /// profiles.
+    /// stored energy and the power are closed-form integrals of the mode's
+    /// fields; of the field-recovery settings only the amplitude enters, and
+    /// it cancels in their ratio.
     pub fn guided_group_index_with<B>(
         &self,
         backend: &B,
@@ -170,85 +170,54 @@ impl ModePoint {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        // Composite Simpson in each layer and wall gap, and analytic tails of
-        // open exteriors. The integrands oscillate at twice the transverse
-        // wavenumber, so start at eight intervals per radian. Simpson's error
-        // falls as h^4, so each halving is Richardson-extrapolated, and the
-        // result is accepted when successive extrapolations agree.
-        let grid = super::power::ProfileGrid::new(stack, polarisation, k, beta, 8, 2)?
-            .ok_or(Quadrature)?;
-        let decay = sig.exteriors().map(|r| r.map(|r| 2. * r.im));
-        let mut previous: Option<(f64, f64)> = None;
-        let mut previous_estimate: Option<f64> = None;
-        for level in 0..8 {
-            let sampling = grid.sampling(level).ok_or(Quadrature)?;
-            let recovered = self.recover_fields_with(backend.clone(), &sampling, settings)?;
-            let fields = recovered.fields.quantity();
-            let (e, h) = (fields.electric(), fields.magnetic());
-            let flux =
-                |i: usize| 0.5 * (e.y()[i] * h.z()[i].conj() - e.z()[i] * h.y()[i].conj()).re;
-            let energy = |i: usize, [we, wm]: [Principal<f64>; 2]| {
-                let e2 = [
-                    e.x()[i].norm_sqr(),
-                    e.y()[i].norm_sqr(),
-                    e.z()[i].norm_sqr(),
-                ];
-                let h2 = [
-                    h.x()[i].norm_sqr(),
-                    h.y()[i].norm_sqr(),
-                    h.z()[i].norm_sqr(),
-                ];
-                0.25 * (we.weigh(e2) + wm.weigh(h2))
-            };
-            let (mut power, mut stored) = (0., 0.);
-            for span in grid.spans(level) {
-                let weight = weights[span.region];
-                match span.intervals {
-                    None => {
-                        let decay = decay[usize::from(span.region > 0)].expect("open");
-                        power += flux(span.first) / decay;
-                        stored += energy(span.first, weight) / decay;
-                    }
-                    Some(_) => {
-                        power += span.simpson(flux);
-                        stored += span.simpson(|i| energy(i, weight));
-                    }
-                }
-            }
-            let extrapolated = previous.map(|(p, w)| {
-                let richardson = |fine: f64, coarse: f64| fine + (fine - coarse) / 15.;
-                richardson(stored, w) / richardson(power, p)
-            });
-            previous = Some((power, stored));
-            let Some(ratio) = extrapolated else {
-                continue;
-            };
-            if !ratio.is_finite() {
-                return Err(Quadrature);
-            }
-            let settled =
-                previous_estimate.is_some_and(|p| (p - ratio).abs() <= 1e-12 * ratio.abs());
-            previous_estimate = Some(ratio);
-            if settled {
-                let relative_discrepancy = (derivative - ratio).norm() / ratio.abs();
-                if relative_discrepancy > tolerance {
-                    return Err(Uncertified {
-                        derivative,
-                        energy_estimate: ratio,
-                        relative_discrepancy,
-                        tolerance,
-                    });
-                }
-                return Ok(GroupIndex {
-                    value: derivative.re,
-                    derivative,
-                    energy_estimate: ratio,
-                    relative_discrepancy,
-                    tolerance,
-                    sensitivity,
-                });
-            }
+        // Stored energy ¼ ∫ (E† ε_d E + η† μ_d η) dz and power
+        // ½ Re ∫ (E_y η_z* − E_z η_y*) dz in closed form, from one solve.
+        crate::problem::walls(stack).map_err(|side| super::PmlIntegral { side })?;
+        let energy: Vec<super::forms::Weight> = weights
+            .iter()
+            .map(|pair| {
+                let diagonal = |w: &Principal<f64>| {
+                    let entries = w.entries();
+                    std::array::from_fn(|i| {
+                        std::array::from_fn(|j| match i == j {
+                            true => Complex::from(0.25 * entries[i]),
+                            false => Complex::ZERO,
+                        })
+                    })
+                };
+                super::forms::blocks(&[diagonal(&pair[0]), diagonal(&pair[1])])
+            })
+            .collect();
+        let amplitude = settings.amplitude;
+        let integrals = super::forms::still_forms(
+            backend,
+            [self, self],
+            [amplitude, amplitude],
+            &[(true, &energy), (true, &[super::forms::flux()])],
+        )
+        .map_err(|_| Ineligible)?
+        .map_err(Integrals)?;
+        let [stored, power] = [0, 1].map(|form| integrals[form].iter().sum::<Complex>().re);
+        let ratio = stored / (0.5 * power);
+        if !ratio.is_finite() {
+            return Err(IllConditioned);
         }
-        Err(Quadrature)
+        let relative_discrepancy = (derivative - ratio).norm() / ratio.abs();
+        if relative_discrepancy > tolerance {
+            return Err(Uncertified {
+                derivative,
+                energy_estimate: ratio,
+                relative_discrepancy,
+                tolerance,
+            });
+        }
+        Ok(GroupIndex {
+            value: derivative.re,
+            derivative,
+            energy_estimate: ratio,
+            relative_discrepancy,
+            tolerance,
+            sensitivity,
+        })
     }
 }

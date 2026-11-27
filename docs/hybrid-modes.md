@@ -88,9 +88,11 @@ only the outgoing waves in each exterior. They are scaled to
 P = ½ Re ∫ (E_y H_z* − E_z H_y*) dz = ±1 W per metre of invariant width,
 ```
 
-with the sign of the mode's power flow: refined Simpson sums over layers and
-wall gaps, and closed-form tails, each exterior field being a sum of its
-outgoing waves. The phase rule makes `E_y + Z₀H_y` at the left interface real
+with the sign of the mode's power flow. Power, pairings, overlaps and the
+group index's energy are closed-form integrals of the mode (lamina-core's
+`directional_forms`): a block matrix exponential per layer and wall gap, a
+Sylvester equation per open exterior, exact at degenerate layer eigenvalues
+and at cutoff. The phase rule makes `E_y + Z₀H_y` at the left interface real
 and positive (for TE `H_y = 0`, for TM `E_y = 0`, so TE and TM modes keep their
 scalar normalisation). Where that reference falls below 10⁻⁶ of the tangential
 field there, `E_x + Z₀H_x` is used instead, and the reference is recorded. The

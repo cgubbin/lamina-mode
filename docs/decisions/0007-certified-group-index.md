@@ -14,8 +14,8 @@ lamina-mode evaluates n_g = dβ/dk0 twice:
 1. as the total derivative of β along the root when the vacuum wavelength changes, with every material's
    dispersion included through the materials' own derivatives;
 2. as c W / P, the energy velocity's reciprocal, with the stored energy W weighted by ε + k0 ∂ε/∂k0 and
-   μ + k0 ∂μ/∂k0. On the solver's own field gauge (E and Z0 H) this is W′/P′ with no unit factors. Layers use
-   composite Simpson with Richardson extrapolation and exterior tails are analytic.
+   μ + k0 ∂μ/∂k0. On the solver's own field gauge (E and Z0 H) this is W′/P′ with no unit factors. W′ and P′
+   are closed-form integrals of the mode over every layer, wall gap and open exterior.
 
 The result is certified only if the derivative is real (to round-off) and the two estimates agree within the
 caller's tolerance (default 1e-8 in the bindings). Otherwise it fails with both values (`Uncertified`).
