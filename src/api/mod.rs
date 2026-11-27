@@ -60,10 +60,12 @@ pub use qnm_scattering::*;
 pub use sensitivity::*;
 pub use tracking::*;
 mod branch;
+mod fold;
 mod report;
 mod solver;
 pub use branch::*;
 pub use diagnostic::*;
+pub use fold::*;
 pub use report::*;
 pub use solver::*;
 

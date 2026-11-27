@@ -8,6 +8,12 @@ The caller's local and domain declarations must cover the swept neighbourhood, i
 
 The trace owns its seed and accepted points. Each subsequent point has one local chart and one correction candidate, indexed zero. Its provenance identifies the new station. Compare the point's control coordinate to its entry in `destinations` to identify inserted steps. Inspect `retries` for failed trials and `stop` for the first target that exhausted the policy. The prefix can be sampled for fields or used to resume.
 
+## Through folds
+
+`continue_with` holds k₀ fixed at its targets, so it stops at a fold, where dβ/dk₀ diverges and the branch turns back in k₀ (for a lossless mode, a zero-group-velocity point). `ModePoint::continue_through_folds_with` follows the branch as a curve F(k₀, β) = 0 instead. Its tangent (dk₀, dβ) ∝ (∂F/∂β, −∂F/∂k₀) is finite through a fold. Each step holds fixed the coordinate along which the tangent moves most: k₀ (β solved on the in-plane chart) away from a fold, β (k₀ solved directly, or on the spectral chart for a point found there) near and through it. Steps are arclength in the real (k₀, Re β) plane in cm⁻¹, halved on failure and doubled back up to `ArclengthSettings::step` on success. The tangent keeps its orientation from point to point, so past a fold k₀ decreases. Every station counts the roots in its chart and accepts only one, as in `continue_with`.
+
+A sign change of dk₀/dβ between two accepted points is a fold. It is located by regula falsi on Re dk₀/dβ over stations at fixed β, to `fold_tolerance` of |β|, and reported as a `Fold`: its k₀ and β, the station there and its slope, and the accepted points on both sides with their slopes. A trace ends when k₀ or Re β leaves its bounds, after `max_points`, or when a step fails at `minimum_step` (`ArclengthEnd`). Stations solving k₀ directly need frequency-domain evidence; a point found at fixed k₀ has none, and takes `ArclengthSettings::frequency`. Their k₀ boxes have half-width `frequency_radius` and must keep clear of the singularities of the materials (`FrequencyProblem::known_singularities`). For a lossless 100 nm hBN film in air, the fundamental TM mode's type I fold lies at ν̃ = 829.0767638 cm⁻¹ (exact 829.076764); the isotropic films with hBN's lower and upper phonon axes fold at 829.1366259 and 1605.267328 cm⁻¹.
+
 ## Physical report
 
 Run these from lamina-mode, supplying a new output directory. The plotter requires Python 3 and gnuplot 6 on PATH.
