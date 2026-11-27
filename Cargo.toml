@@ -18,7 +18,7 @@ path = "src/lib.rs"
 
 
 [dependencies]
-argloc = { version = "0.3.3", path = "../argloc" }
+argloc = { version = "0.3.4", path = "../argloc" }
 
 lamina-core = { version = "0.1.0", path = "../lamina-core" }
 lamina-units = { version = "0.1.1", path = "../lamina-units" }
