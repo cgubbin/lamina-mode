@@ -5,6 +5,8 @@ released in step until 1.0. Each entry names any shared convention it changes.
 
 ## Unreleased
 
+## 0.2.0 (2026-11-27)
+
 Added:
 
 - `ModePoint::hybrid_power_field_tangent_with` gives the rates of unit-power
@@ -403,7 +405,7 @@ changes, with lamina-core's, make the next release 0.2.0; lamina-core's version
 is still 0.1.0, so the package versions and the lamina-core requirement are
 unchanged here.
 
-## 0.1.0 (unreleased)
+## 0.1.0
 
 First release on crates.io.
 

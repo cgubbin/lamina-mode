@@ -1,6 +1,6 @@
 [package]
 name = "lamina-mode"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Modes of planar multilayers, with numerical evidence, fields and sensitivities"
@@ -20,7 +20,7 @@ path = "src/lib.rs"
 [dependencies]
 argloc = { version = "0.3.4", path = "../argloc" }
 
-lamina-core = { version = "0.1.0", path = "../lamina-core" }
+lamina-core = { version = "0.2.0", path = "../lamina-core" }
 lamina-units = { version = "0.1.1", path = "../lamina-units" }
 nalgebra = "0.33.3"
 ndarray = "0.17.2"
@@ -29,7 +29,7 @@ num-traits = "0.2.19"
 thiserror = "2.0.20"
 
 [dev-dependencies]
-lamina-materials = { version = "0.1.0", path = "../lamina-materials" }
+lamina-materials = { version = "0.2.0", path = "../lamina-materials" }
 approx = "0.5.1"
 num-complex = "0.4.6"
 
