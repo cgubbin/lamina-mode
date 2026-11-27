@@ -25,6 +25,15 @@ Added:
   splits.
 - `UnresolvedCause::AssumptionViolated`: a discovery leaf with a negative
   winding is unresolved, so a box holding a pole is never complete.
+- `FrequencyProblem::known_singularities`: the declared poles and zeros of the
+  stack's regions at which the channel's characteristic is singular (poles of
+  every entry; zeros of ε_xx, ε_zz for TM, μ_xx, μ_zz for TE, every zero for
+  the coupled channel), and the regions that declare none.
+- `FrequencyProblem::singularity_exclusions` and `FrequencyProblem::domains`:
+  exclusions around the known singularities, and a box less the exclusions
+  inside it as rectangular domains, each with its exterior reference continued
+  from the box's through adjacent tiles. The holes are recorded in
+  `FrequencyEvidence::holes` and in the plan's coverage.
 - Guided modes of stacks with full-tensor regions (docs/hybrid-modes.md):
   `ModeFamily::All` solves the coupled channel of Transfer4 or Scatter4 and
   labels each mode TE, TM (separable stacks) or `Hybrid`; TE and TM of a

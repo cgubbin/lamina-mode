@@ -1080,3 +1080,32 @@ fn sampled_cutoff_and_right_side_budget_preserve_identity_and_work() {
         matches!(p.evaluate(&d,c(1.8)),Err(ExecutionError::Optical(e)) if matches!(e.as_ref(),ChartDispersionError::Chart(FrequencyError::Exterior{side:1,source:ExteriorFailure::EvaluationBudget,evaluations:7})))
     );
 }
+#[test]
+fn tiles_cover_the_box_less_its_holes() {
+    let r = |a, b, c, d| ConformalRegion::new(a, b, c, d).unwrap();
+    let area = |t: &ConformalRegion<f64>| {
+        let ((a, b), (c, d)) = (t.real_bounds(), t.imaginary_bounds());
+        (b - a) * (d - c)
+    };
+    let bounds = r(0.0, 4.0, 0.0, 4.0);
+    // One hole inside: bottom, left, right and top tiles.
+    let tiles = super::tiles(bounds, [r(1.0, 2.0, 1.0, 3.0)].into_iter());
+    assert_eq!(
+        tiles,
+        vec![
+            r(0.0, 4.0, 0.0, 1.0),
+            r(0.0, 1.0, 1.0, 3.0),
+            r(2.0, 4.0, 1.0, 3.0),
+            r(0.0, 4.0, 3.0, 4.0)
+        ]
+    );
+    // A hole across a corner and one past an edge, clipped to the box.
+    let holes = [r(-1.0, 1.0, -1.0, 1.0), r(3.0, 5.0, 2.0, 3.0)];
+    let tiles = super::tiles(bounds, holes.into_iter());
+    let total: f64 = tiles.iter().map(area).sum();
+    assert!((total - (16.0 - 1.0 - 1.0)).abs() < 1e-12, "{tiles:?}");
+    for (i, a) in tiles.iter().enumerate() {
+        assert!(holes.iter().all(|h| !interiors_overlap(*a, *h)));
+        assert!(tiles[i + 1..].iter().all(|b| !interiors_overlap(*a, *b)));
+    }
+}

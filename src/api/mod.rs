@@ -74,7 +74,8 @@ pub use crate::conformal::{ConformalRegion, ConformalRegionError};
 pub use crate::problem::frequency::{
     ContinuationConfig, ExclusionReason, ExteriorAnalyticAssumption, ExteriorFailure,
     ExteriorReferenceValues, FrequencyDomainInput, FrequencyError, FrequencyEvidence,
-    FrequencyExclusion, FrequencyReference, FrequencyRegion,
+    FrequencyExclusion, FrequencyReference, FrequencyRegion, KnownSingularity,
+    MaterialSingularities,
 };
 pub use crate::problem::guided::{GuidedRegionError, GuidedRegionEvidence};
 pub use crate::problem::material::{ConstantExterior, InvalidConstantExterior, ModeStack, Region};
@@ -95,6 +96,7 @@ pub use argloc::{
     ArgumentLeaf, Rect, RunSummary, SearchTarget, SingularPointEstimate, SingularPointEstimateKind,
     Termination,
 };
+pub use lamina_core::{ConstitutiveQuantity, SingularityKind};
 /// Complex f64 coordinates. Physical wavenumbers use cm^-1.
 pub type Complex = crate::problem::C;
 
