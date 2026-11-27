@@ -740,7 +740,8 @@ pub enum GuidedPowerSensitivityError {
     Fields(GuidedBetaError),
     SingularPhase,
     IllConditionedPower,
-    Quadrature,
+    /// The closed-form power integrals failed.
+    Integrals(std::sync::Arc<dyn std::error::Error + Send + Sync>),
     Termination(super::PmlIntegral),
 }
 
@@ -813,144 +814,93 @@ impl GuidedBetaSensitivity {
 
         let provenance = self.point.provenance();
         let stack = provenance.stack();
-        let k = self.coordinates.vacuum_angular_wavenumber().value()[()];
-        let beta = self.coordinates.parallel_angular_wavenumber().value()[()];
-        let grid = super::power::ProfileGrid::new(stack, self.polarisation, k, beta, 2, 4)
-            .map_err(Termination)?
-            .ok_or(Quadrature)?;
-        let roots = [
-            self.exterior
-                .left()
-                .and_then(lamina_core::ExteriorBranch::scalar),
-            self.exterior
-                .right()
-                .and_then(lamina_core::ExteriorBranch::scalar),
-        ];
-        // Walls stay fixed: the right gap narrows as the layers thicken.
-        let width_rates: Vec<_> = std::iter::once(0.0)
-            .chain(self.thickness_rates.iter().copied())
-            .chain(std::iter::once(-self.thickness_rates.iter().sum::<f64>()))
+        crate::problem::walls(stack).map_err(|side| Termination(super::PmlIntegral { side }))?;
+        // Regional power ½ Re ∫ (E_y η_z* − E_z η_y*) dz and its total rate
+        // along the direction (β along the branch, the layers' far ends and
+        // the right wall gap moving with it), in closed form.
+        let operand = lamina_core::ModalFormOperand {
+            direction: lamina_core::ModalCharacteristicDirection {
+                stack,
+                coordinates: &self.coordinates,
+                exterior: &self.exterior,
+                polarisation: self.polarisation,
+                thickness_rates: &self.thickness_rates,
+                constitutive_rates: &self.material_rates,
+            },
+            amplitude,
+        };
+        let integrals = backend
+            .directional_forms(
+                [operand, operand],
+                &[lamina_core::ModalForm {
+                    conjugate: true,
+                    weights: &[super::forms::flux()],
+                }],
+            )
+            .map_err(Integrals)?;
+        let half = 0.5 * CM_TO_M_OVER_Z0;
+        let regional: Vec<[f64; 2]> = integrals[0]
+            .iter()
+            .map(|share| [half * share.value()[()].re, half * share.first()[()].re])
             .collect();
-        let mut previous: Option<Vec<[f64; 2]>> = None;
-        for level in 0..8 {
-            let integration = grid.sampling(level).ok_or(Quadrature)?;
-            let fields = self
-                .field_tangent_with(
-                    backend,
-                    &integration,
-                    GuidedObservationFrame::MaterialAttached,
-                    amplitude,
-                )
-                .map_err(Fields)?;
-            let spans = grid.spans(level);
-            let regional: Vec<_> = spans
-                .iter()
-                .map(|span| {
-                    let at = |i: usize| flux_and_rate(&fields[i]);
-                    match span.intervals {
-                        // An open exterior's tail, analytic in its decay constant.
-                        None => {
-                            let root = roots[usize::from(span.region > 0)].expect("open");
-                            let [flux, rate] = at(span.first);
-                            let decay = root.value()[()].im;
-                            let power = CM_TO_M_OVER_Z0 * flux / (2.0 * decay);
-                            [
-                                power,
-                                CM_TO_M_OVER_Z0 * rate / (2.0 * decay)
-                                    - power * root.first()[()].im / decay,
-                            ]
-                        }
-                        // A layer is sampled at fixed fractions. A gap is sampled
-                        // at fixed distances from its interface, and only the
-                        // right gap changes width, at its fixed wall.
-                        Some(_) => {
-                            let flux = span.mean(|i| at(i)[0]);
-                            let edge = if span.region == spans.len() - 1 {
-                                at(span.last())[0]
-                            } else {
-                                flux
-                            };
-                            [
-                                CM_TO_M_OVER_Z0 * span.width * flux,
-                                CM_TO_M_OVER_Z0
-                                    * (span.width * span.mean(|i| at(i)[1])
-                                        + width_rates[span.region] * edge),
-                            ]
-                        }
-                    }
-                })
-                .collect();
-            let total: f64 = regional.iter().map(|p| p[0]).sum();
-            let total_rate: f64 = regional.iter().map(|p| p[1]).sum();
-            if !total.is_finite() || !total_rate.is_finite() || total == 0.0 {
-                return Err(IllConditionedPower);
-            }
-            // Every region is converged against a common scale: powers against
-            // the total power, rates against the largest regional rate. A region
-            // whose rate nearly cancels needs no more relative accuracy than the
-            // fractions' rates carry.
-            let largest_rate =
-                |regions: &[[f64; 2]]| regions.iter().map(|p| p[1].abs()).fold(0.0, f64::max);
-            let converged = previous.as_ref().is_some_and(|prev| {
-                let rate_scale = total
-                    .abs()
-                    .max(largest_rate(prev))
-                    .max(largest_rate(&regional));
-                prev.iter().zip(&regional).all(|(a, b)| {
-                    (a[0] - b[0]).abs() <= 1e-9 * total.abs()
-                        && (a[1] - b[1]).abs() <= 1e-9 * rate_scale
-                })
-            });
-            if !converged {
-                previous = Some(regional);
-                continue;
-            }
-            let primary = match self.polarisation {
-                Polarisation::TransverseElectric => 1,
-                Polarisation::TransverseMagnetic => 4,
-            };
-            let left = &fields[spans[0].last()];
-            let reference = left.field[primary];
-            let reference_rate = left.tangent.expect("attached tangent")[primary];
-            let peak = fields
-                .iter()
-                .map(|sample| sample.field[primary].norm())
-                .fold(0.0, f64::max);
-            let (phase, phase_rate) = phase_scale(reference, reference_rate, peak)?;
-            let scale = phase / total.abs().sqrt();
-            let log_rate = Complex::new(-0.5 * total_rate / total, phase_rate);
-            if [scale, log_rate]
-                .iter()
-                .any(|v| !v.re.is_finite() || !v.im.is_finite())
-            {
-                return Err(IllConditionedPower);
-            }
-            let mut samples = self
-                .field_tangent_on_mesh(backend, sampling, frame, amplitude, mesh_velocities)
-                .map_err(Fields)?;
-            for sample in &mut samples {
-                if let Ok(tangent) = &mut sample.tangent {
-                    for (derivative, field) in tangent.iter_mut().zip(sample.field) {
-                        *derivative = scale * (*derivative + log_rate * field);
-                    }
-                }
-                for field in &mut sample.field {
-                    *field *= scale;
-                }
-            }
-            let regional_power = regional
-                .into_iter()
-                .map(|[power, rate]| RegionalPowerSensitivity {
-                    power_w_per_m: power / total.abs(),
-                    power_rate_w_per_m: (rate - power * total_rate / total) / total.abs(),
-                })
-                .collect();
-            return Ok(GuidedPowerSensitivity {
-                eigenvalue: self.clone(),
-                samples,
-                regional_power,
-            });
+        let total: f64 = regional.iter().map(|p| p[0]).sum();
+        let total_rate: f64 = regional.iter().map(|p| p[1]).sum();
+        if !total.is_finite() || !total_rate.is_finite() || total == 0.0 {
+            return Err(IllConditionedPower);
         }
-        Err(Quadrature)
+        // The phase reference and its rate at the left interface.
+        let fields = self
+            .field_tangent_with(
+                backend,
+                &super::power::interface_sampling(stack),
+                GuidedObservationFrame::MaterialAttached,
+                amplitude,
+            )
+            .map_err(Fields)?;
+        let primary = match self.polarisation {
+            Polarisation::TransverseElectric => 1,
+            Polarisation::TransverseMagnetic => 4,
+        };
+        let left = &fields[0];
+        let reference = left.field[primary];
+        let reference_rate = left.tangent.expect("attached tangent")[primary];
+        let peak = fields
+            .iter()
+            .map(|sample| sample.field[primary].norm())
+            .fold(0.0, f64::max);
+        let (phase, phase_rate) = phase_scale(reference, reference_rate, peak)?;
+        let scale = phase / total.abs().sqrt();
+        let log_rate = Complex::new(-0.5 * total_rate / total, phase_rate);
+        if [scale, log_rate]
+            .iter()
+            .any(|v| !v.re.is_finite() || !v.im.is_finite())
+        {
+            return Err(IllConditionedPower);
+        }
+        let mut samples = self
+            .field_tangent_on_mesh(backend, sampling, frame, amplitude, mesh_velocities)
+            .map_err(Fields)?;
+        for sample in &mut samples {
+            if let Ok(tangent) = &mut sample.tangent {
+                for (derivative, field) in tangent.iter_mut().zip(sample.field) {
+                    *derivative = scale * (*derivative + log_rate * field);
+                }
+            }
+            for field in &mut sample.field {
+                *field *= scale;
+            }
+        }
+        let regional_power = regional
+            .into_iter()
+            .map(|[power, rate]| RegionalPowerSensitivity {
+                power_w_per_m: power / total.abs(),
+                power_rate_w_per_m: (rate - power * total_rate / total) / total.abs(),
+            })
+            .collect();
+        Ok(GuidedPowerSensitivity {
+            eigenvalue: self.clone(),
+            samples,
+            regional_power,
+        })
     }
 }

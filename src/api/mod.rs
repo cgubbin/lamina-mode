@@ -21,6 +21,7 @@ mod coupling;
 mod derivatives;
 mod diagnostic;
 mod fields;
+mod forms;
 mod group;
 mod guided;
 mod hybrid;

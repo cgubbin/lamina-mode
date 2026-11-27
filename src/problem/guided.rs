@@ -380,25 +380,6 @@ fn gauge(tensors: &[Tensor; 2], xi: C, incoming: [C; 2], scale: f64) -> f64 {
     }
 }
 
-/// The six-component fields `(E, Z₀H)` spanning the null space of the
-/// Maxwell matrix at an eigenvalue `n`: `dimension` right singular vectors.
-fn null_fields(tensors: &[Tensor; 2], xi: C, n: C, dimension: usize) -> Vec<[C; 6]> {
-    let svd = maxwell(tensors, xi, n).svd(false, true);
-    let Some(v_t) = svd.v_t else {
-        return vec![];
-    };
-    let mut order: Vec<usize> = (0..6).collect();
-    order.sort_by(|&a, &b| svd.singular_values[a].total_cmp(&svd.singular_values[b]));
-    order[..dimension]
-        .iter()
-        .map(|&row| std::array::from_fn(|k| v_t[(row, k)].conj()))
-        .collect()
-}
-
-/// One exterior field as outgoing waves: each wave's outward wavenumber
-/// (cm⁻¹) and its field per unit amplitude at the interface.
-pub(crate) type OutgoingWaves = Vec<(C, [C; 6])>;
-
 /// Outward wavenumbers of one side with their β-rates.
 type Waves2 = Vec<(C, C)>;
 
@@ -470,52 +451,6 @@ impl GuidedExteriors {
             })
         });
         Ok(ExteriorWavevectors::from_branches(left, right))
-    }
-
-    /// The field `f` at an open side's interface (side 0 left, 1 right)
-    /// as a sum of the outgoing waves at β; `None` if it does not lie in
-    /// their span to `1e-6` of its size.
-    pub(crate) fn outgoing(&self, side: usize, beta: C, f: &[C; 6]) -> Option<OutgoingWaves> {
-        let exterior = self.sides.get(side)?.as_ref()?;
-        let xi = beta / self.k0;
-        let waves = exterior.waves(xi, SIGNS[side], Channel::Coupled)?;
-        let tensors = exterior.tensors();
-        let outward: Vec<C> = waves.outgoing.iter().map(|(n, _)| *n).collect();
-        let scale = root_scale(tensors, xi);
-        let basis: Vec<(C, [C; 6])> = if (outward[0] - outward[1]).norm() <= DOUBLE_ROOT * scale {
-            let n = 0.5 * (outward[0] + outward[1]);
-            null_fields(tensors, xi, SIGNS[side] * n, 2)
-                .into_iter()
-                .map(|v| (self.k0 * n, v))
-                .collect()
-        } else {
-            outward
-                .iter()
-                .flat_map(|&n| {
-                    null_fields(tensors, xi, SIGNS[side] * n, 1)
-                        .into_iter()
-                        .map(move |v| (n, v))
-                })
-                .map(|(n, v)| (self.k0 * n, v))
-                .collect()
-        };
-        if basis.len() != 2 {
-            return None;
-        }
-        let matrix = nalgebra::SMatrix::<C, 6, 2>::from_fn(|r, c| basis[c].1[r]);
-        let target = nalgebra::SVector::<C, 6>::from_fn(|r, _| f[r]);
-        let a = matrix.svd(true, true).solve(&target, 1e-12).ok()?;
-        let defect = (matrix * a - target).norm();
-        if defect.is_nan() || defect > 1e-6 * target.norm() {
-            return None;
-        }
-        Some(
-            basis
-                .iter()
-                .enumerate()
-                .map(|(i, (kappa, v))| (*kappa, v.map(|x| x * a[i])))
-                .collect(),
-        )
     }
 
     /// The β-rate of each open side's outward wavenumbers along a direction

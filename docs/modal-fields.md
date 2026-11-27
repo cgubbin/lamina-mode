@@ -85,12 +85,12 @@ scale, all interface conditions, film magnetic parity and decay.
 `ModalProfile`. A coefficient of magnitude |a| multiplying this profile carries
 signed longitudinal power of ±|a|² W/m of invariant width. Take E in V/m and
 the stored magnetic components as Z₀H in V/m. The calculation integrates
-Re(E × (Z₀H)*)ₓ/(2 Z₀) through the stack in metres. It evaluates the two
-semi-infinite tail contributions analytically from the interface fluxes and
-decay constants. Composite Simpson integration within each finite layer starts
-with a mesh based on its optical thickness and doubles until successive power
-estimates agree to relative tolerance 10⁻⁹. The caller controls the output samples
-independently of this mesh.
+Re(E × (Z₀H)*)ₓ/(2 Z₀) through the stack in metres, in closed form: lamina-core's
+`directional_forms` integrates the mode over each finite layer and wall gap by a
+block matrix exponential and over each open exterior from its outgoing waves,
+exactly, including at cutoff. A side closed by a PML is refused. The caller's
+sampling controls only the returned samples. The backend must implement both
+`ModalFieldBackend` and `ModalDerivativeBackend`, as every built-in one does.
 
 The sign preserves forward or backward transport. A common complex multiplier makes
 the left-interface primary (Ey for TE, Z₀Hy for TM) real and positive. The returned

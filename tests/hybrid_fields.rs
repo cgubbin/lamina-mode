@@ -115,14 +115,11 @@ fn hybrid_fields_carry_unit_power_are_continuous_and_decay() {
             let size = |v: &[Complex; 6]| v.iter().map(|x| x.norm_sqr()).sum::<f64>().sqrt();
             assert!(left.windows(2).all(|w| size(&w[0]) < size(&w[1])));
             assert!(right.windows(2).all(|w| size(&w[0]) > size(&w[1])));
-            // Unit power from the profile itself: Simpson over the film and
-            // the outgoing tails from the decay of the sampled exteriors are
-            // checked by the library; here the film share and the left
-            // interface reference.
+            // The phase rule: the left-interface reference is real and positive.
             let r = left[3][1] + left[3][4];
             assert!(r.im.abs() <= 1e-9 * r.norm() && r.re > 0.0);
-            // Unit power, independently: Simpson over 6 cm of each exterior
-            // and the film, from the profile's own scaled fields.
+            // Unit power, independently: Gauss–Legendre over 6 cm of each
+            // exterior and the film, from the profile's own scaled fields.
             let power = independent_power(point, &profile, backend);
             worst_power = worst_power.max((power - 1.0).abs());
             worst_im = worst_im.max((profile.bilinear_norm_w_per_m.im).abs());
@@ -133,16 +130,34 @@ fn hybrid_fields_carry_unit_power_are_continuous_and_decay() {
          {worst_jump:e}, largest |Im N| {worst_im:e} W/m"
     );
     assert!(worst_jump < 1e-9, "{worst_jump:e}");
-    assert!(worst_power < 1e-6, "{worst_power:e}");
+    // The profile's power is a closed form: exact to round-off.
+    assert!(worst_power < 1e-11, "{worst_power:e}");
+}
+
+/// Five-point Gauss–Legendre nodes and weights on `panels` uniform panels of
+/// `[0, length]`; the weights are symmetric under reversal of the nodes.
+fn gauss_legendre(length: f64, panels: usize) -> (Vec<f64>, Vec<f64>) {
+    let rule = [
+        (-0.906_179_845_938_664, 0.236_926_885_056_189),
+        (-0.538_469_310_105_683, 0.478_628_670_499_366),
+        (0.0, 0.568_888_888_888_889),
+        (0.538_469_310_105_683, 0.478_628_670_499_366),
+        (0.906_179_845_938_664, 0.236_926_885_056_189),
+    ];
+    let h = length / panels as f64;
+    (0..panels)
+        .flat_map(|panel| {
+            rule.map(|(node, weight)| (h * (panel as f64 + 0.5 + 0.5 * node), 0.5 * h * weight))
+        })
+        .unzip()
 }
 
 /// `½ Re ∫ (E_y H_z* − E_z H_y*) dz` in W/m of a profile's scaled fields by
-/// Simpson's rule on explicit samples, 6 cm into each exterior.
+/// composite Gauss–Legendre on explicit samples, 6 cm into each exterior.
 fn independent_power(point: &ModePoint, profile: &HybridProfile, backend: &str) -> f64 {
-    let n = 4000;
     let (reach, width) = (6.0, 0.8);
-    let distances: Vec<f64> = (0..=n).map(|i| reach * i as f64 / n as f64).collect();
-    let offsets: Vec<f64> = (0..=n).map(|i| width * i as f64 / n as f64).collect();
+    let (distances, outer) = gauss_legendre(reach, 2000);
+    let (offsets, inner) = gauss_legendre(width, 400);
     let sampling = FieldSampling::new()
         .left_exterior(ExteriorSampling::distances_in(
             distances.iter().copied(),
@@ -163,33 +178,12 @@ fn independent_power(point: &ModePoint, profile: &HybridProfile, backend: &str) 
     .unwrap();
     assert_eq!(fields.scale, profile.scale);
     let f = components(&fields);
-    let density: Vec<f64> = f
+    let weights = outer.iter().chain(&inner).chain(&outer);
+    let total: f64 = f
         .iter()
-        .map(|v| 0.5 * (v[1] * v[5].conj() - v[2] * v[4].conj()).re)
-        .collect();
-    let simpson = |values: &[f64], length: f64| {
-        let h = length / (values.len() - 1) as f64;
-        values
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                let w = if i == 0 || i == values.len() - 1 {
-                    1.0
-                } else if i % 2 == 1 {
-                    4.0
-                } else {
-                    2.0
-                };
-                w * v
-            })
-            .sum::<f64>()
-            * h
-            / 3.0
-    };
-    let m = n + 1;
-    let total = simpson(&density[..m], reach)
-        + simpson(&density[m..2 * m], width)
-        + simpson(&density[2 * m..], reach);
+        .zip(weights)
+        .map(|(v, w)| w * 0.5 * (v[1] * v[5].conj() - v[2] * v[4].conj()).re)
+        .sum();
     // cm to m, Z0 H to H.
     total * 0.01 / 376.730313412
 }

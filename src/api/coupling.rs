@@ -44,7 +44,9 @@ pub enum GuidedCouplingError {
 
 /// Form local coupling coefficients with the positive-left-primary phase rule.
 /// `gap_atol_cm` is an absolute separation in inverse centimetres.
-pub fn guided_local_coupling_with<B: ModalFieldBackend<Region> + Clone>(
+pub fn guided_local_coupling_with<
+    B: ModalFieldBackend<Region> + lamina_core::ModalDerivativeBackend + Clone,
+>(
     backend: &B,
     basis: &GuidedBasis,
     direction: &GuidedPerturbation,

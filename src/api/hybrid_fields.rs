@@ -3,21 +3,18 @@
 //! thickness, tensor-entry, rotation and wavelength directions, and the
 //! group index with its energy certificate.
 //!
-//! Layer integrals are composite Simpson sums of sampled fields, refined
-//! until they settle; an open exterior's field is written as its outgoing
-//! waves at the interface, `f(t) = Σ a_i v_i e^{iκ_i t}`, so its integrals
-//! are closed sums `Σ a_i b_j d(v_i, w_j) i/(κ_i + κ_j')`.
-use super::power::{CM_TO_M_OVER_Z0, PmlIntegral, ProfileGrid};
+//! Integrals over the whole line are closed forms (see [`super::forms`]):
+//! one block exponential per region and form, exact over finite layers, wall
+//! gaps and open exteriors; a side closed by a PML is refused.
+use super::forms::{self, Weight, exterior_jets, seed};
+use super::power::{CM_TO_M_OVER_Z0, PmlIntegral};
 use super::*;
-use crate::problem::J;
 use crate::problem::guided::GuidedExteriors;
 use crate::problem::material::{self as m, Tensor};
 use lamina_core::{
-    CanonicalCoordinates, Channel, ConstitutiveTensor, ExteriorBranch, ExteriorWavevectors,
-    FieldSampling, ModalCharacteristicDirection, ModalDerivativeBackend, OwnedModeFields,
-    ScalarAlgebra, SeedJet, StackSide,
+    CanonicalCoordinates, ConstitutiveTensor, FieldSampling, ModalCharacteristicDirection,
+    ModalDerivativeBackend, OwnedModeFields, StackSide,
 };
-use ndarray::arr0;
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
@@ -28,11 +25,12 @@ pub enum HybridFieldError {
     Ineligible,
     #[error("field recovery failed")]
     Fields(#[source] Arc<dyn std::error::Error + Send + Sync>),
-    /// An exterior field that does not lie in the exterior's outgoing waves.
-    #[error("the {side:?} exterior field is not a sum of its outgoing waves")]
+    /// The exterior wavevectors could not be continued along a direction.
+    #[error("the {side:?} exterior cannot be continued along the direction")]
     Exterior { side: StackSide },
-    #[error("field quadrature exceeded its accuracy or sampling budget")]
-    Quadrature,
+    /// Two modes whose stacks differ in their layers.
+    #[error("the modes' stacks differ in their layer thicknesses")]
+    Mismatched,
     #[error("the power or the phase reference vanishes")]
     IllConditioned,
     #[error(transparent)]
@@ -78,52 +76,6 @@ fn components(fields: &OwnedModeFields) -> Vec<[Complex; 6]> {
         .collect()
 }
 
-fn constant(value: Complex) -> J {
-    <J as SeedJet>::constant(arr0(value))
-}
-
-/// `value + rate·t` as a first-order jet in the direction's parameter.
-fn seed(value: Complex, rate: Complex) -> J {
-    constant(value).add(
-        &J::variable(arr0(Complex::ZERO), 0)
-            .expect("one jet slot")
-            .scale(rate),
-    )
-}
-
-/// The exterior wavevectors of a point with their rates along a direction.
-fn exterior_jets(
-    signature: &BranchSignature,
-    rates: [Option<[Complex; 2]>; 2],
-) -> ExteriorWavevectors<J> {
-    let side = |scalar: Option<Complex>, pair: Option<[Complex; 2]>, rate: Option<[Complex; 2]>| {
-        let rate = rate.unwrap_or([Complex::ZERO; 2]);
-        match (pair, scalar) {
-            (Some(pair), _) => Some(ExteriorBranch::Pair([
-                seed(pair[0], rate[0]),
-                seed(pair[1], rate[1]),
-            ])),
-            (None, Some(kappa)) => Some(ExteriorBranch::Scalar(seed(kappa, rate[0]))),
-            (None, None) => None,
-        }
-    };
-    ExteriorWavevectors::from_branches(
-        side(signature.left, signature.pairs[0], rates[0]),
-        side(signature.right, signature.pairs[1], rates[1]),
-    )
-}
-
-/// Zero rates for every region.
-fn no_rates(stack: &ModeStack) -> Vec<[ConstitutiveTensor<Complex>; 2]> {
-    vec![
-        [
-            ConstitutiveTensor::Isotropic(Complex::ZERO),
-            ConstitutiveTensor::Isotropic(Complex::ZERO)
-        ];
-        stack.len() + 2
-    ]
-}
-
 impl ModePoint {
     /// The backend's seed fields at `sampling`, multiplied by `amplitude`.
     fn seed_fields<B: ModalDerivativeBackend>(
@@ -132,152 +84,51 @@ impl ModePoint {
         sampling: &FieldSampling<f64>,
         amplitude: Complex,
     ) -> Result<OwnedModeFields, HybridFieldError> {
-        let signature = self.signature().map_err(|_| HybridFieldError::Branch)?;
-        let provenance = self.provenance();
-        let stack = provenance.stack();
-        let coordinates =
-            CanonicalCoordinates::new(constant(signature.k0), constant(signature.k_parallel));
-        let exterior = exterior_jets(signature, [None, None]);
+        let still = forms::Still::new(self).map_err(|_| HybridFieldError::Branch)?;
         backend
-            .directional_fields(
-                ModalCharacteristicDirection {
-                    stack,
-                    coordinates: &coordinates,
-                    exterior: &exterior,
-                    polarisation: self.provenance().channel(),
-                    thickness_rates: &vec![0.0; stack.len()],
-                    constitutive_rates: &no_rates(stack),
-                },
-                sampling,
-                amplitude,
-            )
+            .directional_fields(still.direction(), sampling, amplitude)
             .map(|fields| fields.fields)
             .map_err(HybridFieldError::Fields)
     }
 }
 
-/// A bilinear density `d(region, f, g)` of two six-component fields.
-type Density<'a> = &'a dyn Fn(usize, &[Complex; 6], &[Complex; 6]) -> Complex;
-
-/// `∫ d(f_a, g_b) dz` over the whole line in cm, with `g_b = f_b*` when
-/// `conjugate`, from seed fields multiplied by `amplitudes`; the regions'
-/// shares, left exterior first.
+/// The whole-line integrals of `forms` (pairing conjugated or not, and
+/// weights) of two modes of stacks with the same layers, each the backend's
+/// seed times its amplitude. A side closed by a PML is refused.
 fn integrate<B: ModalDerivativeBackend>(
     backend: &B,
     modes: [&ModePoint; 2],
     amplitudes: [Complex; 2],
-    conjugate: bool,
-    density: Density,
+    integrals: &[(bool, &[Weight])],
 ) -> Result<Vec<Complex>, HybridFieldError> {
-    integrate_all(backend, modes, amplitudes, &[(conjugate, density)]).map(|mut all| all.remove(0))
-}
-
-/// [`integrate`] for several densities of the same two modes, sharing one
-/// field evaluation per refinement level, and one for both modes when they
-/// are the same mode with the same amplitude. Each integral's shares are
-/// those of the first level at which every integral has converged.
-fn integrate_all<B: ModalDerivativeBackend>(
-    backend: &B,
-    modes: [&ModePoint; 2],
-    amplitudes: [Complex; 2],
-    integrals: &[(bool, Density)],
-) -> Result<Vec<Vec<Complex>>, HybridFieldError> {
-    let signatures = [0, 1].map(|i| modes[i].signature().map_err(|_| HybridFieldError::Branch));
-    let [sa, sb] = signatures;
-    let (sa, sb) = (sa?, sb?);
-    let provenance = modes[0].provenance();
-    let stack = provenance.stack();
-    let k = sa.k0;
-    let beta = if sa.k_parallel.norm() >= sb.k_parallel.norm() {
-        sa.k_parallel
-    } else {
-        sb.k_parallel
-    };
-    let grid = ProfileGrid::coupled(stack, k, beta, 2, 4)?.ok_or(HybridFieldError::Quadrature)?;
-    let exteriors = GuidedExteriors::new(stack, k.re, Channel::Coupled)
-        .map_err(|_| HybridFieldError::Ineligible)?;
-    let same = std::ptr::eq(modes[0], modes[1]) && amplitudes[0] == amplitudes[1];
-    let mut previous: Vec<Option<Complex>> = vec![None; integrals.len()];
-    for level in 0..8 {
-        let sampling = grid.sampling(level).ok_or(HybridFieldError::Quadrature)?;
-        let fa = modes[0]
-            .seed_fields(backend, &sampling, amplitudes[0])
-            .map(|f| components(&f))?;
-        let fb_owned = match same {
-            true => None,
-            false => Some(
-                modes[1]
-                    .seed_fields(backend, &sampling, amplitudes[1])
-                    .map(|f| components(&f))?,
-            ),
-        };
-        let fb = fb_owned.as_ref().unwrap_or(&fa);
-        let spans = grid.spans(level);
-        let mut all = Vec::with_capacity(integrals.len());
-        let mut converged = true;
-        for ((conjugate, density), previous) in integrals.iter().zip(previous.iter_mut()) {
-            let conjugate = *conjugate;
-            let pair =
-                |_: [Complex; 6], g: [Complex; 6]| if conjugate { g.map(|v| v.conj()) } else { g };
-            let mut shares = vec![];
-            for span in &spans {
-                let share = match span.intervals {
-                    Some(_) => {
-                        let value = |i: usize| density(span.region, &fa[i], &pair(fa[i], fb[i]));
-                        Complex::new(span.simpson(|i| value(i).re), span.simpson(|i| value(i).im))
-                    }
-                    None => {
-                        // An open exterior: its outgoing waves at the interface.
-                        let (side, index) = if span.region == 0 {
-                            (0, span.last())
-                        } else {
-                            (1, span.first)
-                        };
-                        let which = [StackSide::Left, StackSide::Right][side];
-                        let fault = HybridFieldError::Exterior { side: which };
-                        let a = exteriors
-                            .outgoing(side, sa.k_parallel, &fa[index])
-                            .ok_or(fault)?;
-                        let fault = HybridFieldError::Exterior { side: which };
-                        let b = exteriors
-                            .outgoing(side, sb.k_parallel, &fb[index])
-                            .ok_or(fault)?;
-                        let mut sum = Complex::ZERO;
-                        for (ka, va) in &a {
-                            for (kb, vb) in &b {
-                                let (kb, wb) = if conjugate {
-                                    (-kb.conj(), vb.map(|v| v.conj()))
-                                } else {
-                                    (*kb, *vb)
-                                };
-                                sum += density(span.region, va, &wb) * Complex::I / (ka + kb);
-                            }
-                        }
-                        sum
-                    }
-                };
-                shares.push(share);
-            }
-            let total: Complex = shares.iter().sum();
-            if !total.re.is_finite() || !total.im.is_finite() {
-                return Err(HybridFieldError::Quadrature);
-            }
-            let scale = shares.iter().map(|s| s.norm()).fold(0.0, f64::max);
-            converged &= previous
-                .is_some_and(|p| (p - total).norm() <= 1e-10 * scale.max(f64::MIN_POSITIVE));
-            *previous = Some(total);
-            all.push(shares);
-        }
-        if converged {
-            return Ok(all);
-        }
+    let provenances = modes.map(ModePoint::provenance);
+    let [a, b] = [provenances[0].stack(), provenances[1].stack()];
+    for stack in [a, b] {
+        crate::problem::walls(stack).map_err(|side| PmlIntegral { side })?;
     }
-    Err(HybridFieldError::Quadrature)
-}
-
-/// `E_y η_z − E_z η_y` of `f` against `g`: the x component of `E_f × η_g`.
-fn cross_x(f: &[Complex; 6], g: &[Complex; 6]) -> Complex {
-    f[1] * g[5] - f[2] * g[4]
+    let thicknesses = |stack: &ModeStack| -> Vec<f64> {
+        stack
+            .layers_left_to_right()
+            .iter()
+            .map(|layer| layer.thickness().as_centimetres())
+            .collect()
+    };
+    if thicknesses(a) != thicknesses(b) {
+        return Err(HybridFieldError::Mismatched);
+    }
+    let regions = forms::still_forms(backend, modes, amplitudes, integrals)
+        .map_err(|_| HybridFieldError::Branch)?
+        .map_err(HybridFieldError::Fields)?;
+    regions
+        .iter()
+        .map(|shares| {
+            let total: Complex = shares.iter().sum();
+            match total.re.is_finite() && total.im.is_finite() {
+                true => Ok(total),
+                false => Err(HybridFieldError::IllConditioned),
+            }
+        })
+        .collect()
 }
 
 impl ModePoint {
@@ -295,21 +146,16 @@ impl ModePoint {
             return Err(HybridFieldError::Ineligible);
         }
         let one = Complex::ONE;
-        // The power and the unconjugated self-pairing from one set of fields;
-        // the pairing is bilinear, so that of the scaled fields is scale² times it.
-        let density: Density = &|_, f, g| 0.5 * cross_x(f, g) * CM_TO_M_OVER_Z0;
-        let [power, pairing]: [Complex; 2] = integrate_all(
+        // The power and the unconjugated self-pairing from one solve; the
+        // pairing is bilinear, so that of the scaled fields is scale² times it.
+        let totals = integrate(
             backend,
             [self, self],
             [one, one],
-            &[(true, density), (false, density)],
-        )?
-        .iter()
-        .map(|shares| shares.iter().sum())
-        .collect::<Vec<_>>()
-        .try_into()
-        .map_err(|_| HybridFieldError::Quadrature)?;
-        let power = power.re;
+            &[(true, &[forms::flux()]), (false, &[forms::cross()])],
+        )?;
+        let half = 0.5 * CM_TO_M_OVER_Z0;
+        let (power, pairing) = (half * totals[0].re, half * totals[1]);
         if !power.is_finite() || power == 0.0 {
             return Err(HybridFieldError::IllConditioned);
         }
@@ -352,14 +198,16 @@ pub fn hybrid_reciprocity_with<B: ModalDerivativeBackend>(
     backend: &B,
     modes: [&HybridProfile; 2],
 ) -> Result<Complex, HybridFieldError> {
-    let shares = integrate(
+    // (E_a × η_b − E_b × η_a)·x̂.
+    let one = Complex::ONE;
+    let weight = forms::weight(&[(1, 5, one), (2, 4, -one), (5, 1, -one), (4, 2, one)]);
+    let totals = integrate(
         backend,
         [&modes[0].point, &modes[1].point],
         [modes[0].scale, modes[1].scale],
-        false,
-        &|_, f, g| 0.5 * (cross_x(f, g) - cross_x(g, f)) * CM_TO_M_OVER_Z0,
+        &[(false, &[weight])],
     )?;
-    Ok(shares.iter().sum())
+    Ok(0.5 * CM_TO_M_OVER_Z0 * totals[0])
 }
 
 /// The power overlap `½ ∫ (E_a × H_b*)·x̂ dz` in W/m of two modes of one
@@ -368,14 +216,14 @@ pub fn hybrid_power_overlap_with<B: ModalDerivativeBackend>(
     backend: &B,
     modes: [&HybridProfile; 2],
 ) -> Result<Complex, HybridFieldError> {
-    let shares = integrate(
+    // (E_a × η_b*)·x̂: the Hermitian flux form with b conjugated.
+    let totals = integrate(
         backend,
-        [&modes[0].point, &modes[1].point],
-        [modes[0].scale, modes[1].scale],
-        true,
-        &|_, f, g| 0.5 * cross_x(f, g) * CM_TO_M_OVER_Z0,
+        [&modes[1].point, &modes[0].point],
+        [modes[1].scale, modes[0].scale],
+        &[(true, &[forms::flux()])],
     )?;
-    Ok(shares.iter().sum())
+    Ok(0.5 * CM_TO_M_OVER_Z0 * totals[0])
 }
 
 /// A direction in the physical parameters of a stack: layer thickness
@@ -564,31 +412,15 @@ impl ModePoint {
             })
             .collect::<Result<_, HybridFieldError>>()?;
         let one = Complex::ONE;
-        let energy_density: Density = &|region, f, g| {
-            let w = &weights[region];
-            let mut sum = Complex::ZERO;
-            for i in 0..3 {
-                for j in 0..3 {
-                    // g = f*: Σ f_i* w_ij f_j with the conjugate on g.
-                    sum += g[i] * w[0][i][j] * f[j] + g[3 + i] * w[1][i][j] * f[3 + j];
-                }
-            }
-            sum
-        };
-        let flux_density: Density = &|_, f, g| cross_x(f, g);
-        // Energy and flux from one set of fields.
-        let [energy, flux]: [Complex; 2] = integrate_all(
+        let energy: Vec<Weight> = weights.iter().map(forms::blocks).collect();
+        // Energy and flux from one solve.
+        let totals = integrate(
             backend,
             [self, self],
             [one, one],
-            &[(true, energy_density), (true, flux_density)],
-        )?
-        .iter()
-        .map(|shares| shares.iter().sum())
-        .collect::<Vec<_>>()
-        .try_into()
-        .map_err(|_| HybridFieldError::Quadrature)?;
-        let certificate = 0.5 * energy.re / flux.re;
+            &[(true, &energy), (true, &[forms::flux()])],
+        )?;
+        let certificate = 0.5 * totals[0].re / totals[1].re;
         Ok(HybridGroupIndex {
             value: derivative.re,
             energy: certificate,
