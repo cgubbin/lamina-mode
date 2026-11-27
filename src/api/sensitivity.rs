@@ -333,6 +333,13 @@ pub enum GuidedBetaError {
     InvalidSettings,
     Direction(DirectionError),
     Ineligible,
+    /// An entry the polarisation sees is not real and positive at the
+    /// mode's k0.
+    IneligibleEntry {
+        region: lamina_core::StackRegion,
+        entry: super::TensorEntry,
+        value: Complex,
+    },
     ExteriorCutoff {
         side: usize,
         magnitude: f64,
@@ -408,12 +415,18 @@ impl super::ModePoint {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| Ineligible)?;
         // Only the entries this polarisation sees enter.
-        if channels.iter().any(|c| {
-            c.entries()
-                .iter()
-                .any(|v| !v.re.is_finite() || v.re <= 0.0 || v.im != 0.0)
-        }) {
-            return Err(Ineligible);
+        let regions = material::regions(stack).map(|(region, _)| region);
+        for (region, channel) in regions.zip(&channels) {
+            let names = super::TensorEntry::channel(polarisation);
+            for (entry, value) in names.into_iter().zip(channel.entries()) {
+                if !value.re.is_finite() || value.re <= 0.0 || value.im != 0.0 {
+                    return Err(IneligibleEntry {
+                        region,
+                        entry,
+                        value,
+                    });
+                }
+            }
         }
         let exterior_regions = [0, channels.len() - 1];
         for (side, (root, &region)) in roots.iter().zip(&exterior_regions).enumerate() {

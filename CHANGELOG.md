@@ -7,6 +7,9 @@ released in step until 1.0. Each entry names any shared convention it changes.
 
 Added:
 
+- `GuidedBetaError::IneligibleEntry` and `GroupIndexError::IneligibleEntry`
+  name the region, the entry (`ε_xx`) and its value when a sensitivity or group
+  index is refused for an entry that is not real and positive.
 - Exterior sheets on the in-plane chart: `ExteriorSector` (proper, outgoing or
   incoming improper, real) and `BranchSignature::sectors`, so every point names
   the sheet of each exterior; `PropagationProblem::full_period_plan` and
