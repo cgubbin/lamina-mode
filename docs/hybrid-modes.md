@@ -117,6 +117,30 @@ n_g = ½ ∫ (E† ε_d E + η† μ_d η) dz / ∫ Re(E_y η_z* − E_z η_y*) 
 ε_d = Herm(ε + k0 ∂ε/∂k0),  η = Z₀H.
 ```
 
+Along the same directions, the unit-power fields and the regional power
+fractions have rates. The backend's field jets along the direction (β moving
+at its rate, the exterior pairs continued) give the rate of the seed fields in
+the backend's gauge. Writing the unit-power fields as `s f` with
+`s = r* / (|r| √|P|)`, where `r` is the phase rule's reference at the left
+interface and `P` the power of the seed `f`,
+
+```text
+d(s f)/dp = s (f′ + (ln s)′ f),   (ln s)′ = −½ P′/P − i Im(r′/r).
+```
+
+`P′` and the regional powers' rates are rates of the closed-form integrals
+themselves, so a layer whose thickness changes contributes the flux at its
+moving far end. Rates are material-attached (a sample keeps its offset from
+its layer's left interface, its fraction of the layer, or its distance from
+the stack in an exterior) or fixed in the lab frame, which subtracts the
+sample's velocity times `∂f/∂z` from Maxwell's equations in its region. The
+first interface is the origin of the stack frame; a direction may move it in
+the lab frame (`origin_velocity`), which moves only fixed-lab samples relative
+to the stack, and a walled stack refuses that. A
+fixed-lab sample on a moving interface between regions that differ has no
+rate. On a separable stack the TE and TM modes of the coupled channel keep the
+scalar phase rule, and their rates are those of the scalar path.
+
 Along a parameter path, bases are followed by their power overlaps; two modes
 closer than a gap are followed together as a subspace with its 2×2 overlap
 block, as at an avoided crossing that opens when an optic axis turns away from

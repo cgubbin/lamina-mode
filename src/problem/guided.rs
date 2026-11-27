@@ -488,7 +488,21 @@ impl GuidedExteriors {
             let count = centre.len();
             let scale = centre.iter().map(|v| v.norm()).fold(self.k0, f64::max);
             let double = count == 2 && (centre[0] - centre[1]).norm() <= DOUBLE_ROOT * scale;
-            let r = 1e-4;
+            // A radius over which k0, β and the tensors change by at most
+            // 1e-5 of themselves: the roots' scale is k0, which an absolute
+            // radius would leave unresolved at large k0 or overshoot along a
+            // fast direction.
+            let speed = (k0_rate.abs() / self.k0)
+                .max(beta_rate.norm() / beta.norm().max(f64::MIN_POSITIVE))
+                .max(
+                    norm(&rates[side][0]).max(norm(&rates[side][1]))
+                        / norm(&base[0]).max(norm(&base[1])).max(f64::MIN_POSITIVE),
+                );
+            if speed == 0.0 {
+                out[side] = Some([C::ZERO; 2]);
+                continue;
+            }
+            let r = 1e-5 / speed;
             // The roots at t, ordered as at the centre.
             let at = |t: C, which: usize| -> C {
                 let Some(v) = values(t) else {

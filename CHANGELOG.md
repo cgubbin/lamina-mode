@@ -7,6 +7,28 @@ released in step until 1.0. Each entry names any shared convention it changes.
 
 Added:
 
+- `ModePoint::hybrid_power_field_tangent_with` gives the rates of unit-power
+  fields and regional power fractions of guided modes of the coupled channel
+  along a `HybridPerturbation` (thickness, k0, full tensor rates, rotations),
+  material-attached or fixed in the lab frame, as `HybridPowerSensitivity`
+  (β rate, phase reference, rate of the unit-power multiplier, samples and
+  regional powers). The rates come from the closed-form field and form jets,
+  with the moving ends of layers whose thickness changes; they match central
+  differences to 1e-8 on a general-tensor film and 4e-7 at an avoided
+  crossing, and on a separable stack equal the scalar path's to 2e-10.
+  `HybridPhaseReference` selection is shared with `hybrid_power_profile_with`.
+  `HybridPerturbation` gains `origin_velocity` (the first interface's lab-frame
+  velocity, moving fixed-lab samples; a walled stack refuses it with
+  `HybridFieldError::MovesAgainstWalls`), a breaking change for struct
+  literals.
+  A TE or TM mode solved through a 4×4 backend refuses a direction that
+  couples TE and TM (`HybridFieldError::CouplesPolarisations { region }`),
+  for its β rate as for its fields: count it on the coupled channel.
+- lamina-py: sensitivities of modes counted on the coupled channel return the
+  unit-power fields at `z_m`, their derivatives in either frame and the
+  regional power fractions with their rates, along every parameter, instead
+  of dβ alone; `z_m` on a TE or TM mode along a rate that couples TE and TM
+  still raises `InvalidInput`, now naming the coupled channel.
 - `ModePoint::continue_through_folds_with` follows a branch by arclength in
   the (k0, Re β) plane, holding fixed k0 or β, whichever the tangent moves
   along most, so it passes folds (zero-group-velocity points of lossless
@@ -291,6 +313,11 @@ Changed:
 
 Fixed:
 
+- The rates of the coupled channel's exterior wavevectors along a direction
+  are Cauchy integrals over a radius scaled to the direction (k0, β and the
+  exterior tensors change by 1e-5 of themselves), not a fixed 1e-4 in the
+  parameter: at optical k0 in cm⁻¹, or along a fast direction such as a
+  thickness at its β rate, the fixed radius lost digits or overshot.
 - A solve whose discovery failed on a chart (for example a direct β rectangle
   with an edge on the core light line, where lamina-core returns
   `NonFiniteOutput`) returned a report with no sign that it was incomplete.
