@@ -144,6 +144,17 @@ where
     leaves: Vec<ArgumentLeaf<C::RealField>>,
     summary: RunSummary<C::RealField>,
     termination: Termination,
+    subdivisions: usize,
+    inconsistent: Vec<InconsistentWinding<C::RealField>>,
+}
+
+/// A split cell whose quadrants count a different number of zeros than the
+/// cell: evidence of a pole or other singularity inside it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InconsistentWinding<R> {
+    pub bounds: Rect<R>,
+    pub whole: isize,
+    pub parts: isize,
 }
 
 impl<C> ModalSearchResult<C>
@@ -161,7 +172,20 @@ where
             leaves,
             summary,
             termination,
+            subdivisions: 0,
+            inconsistent: Vec::new(),
         }
+    }
+
+    /// Cells split to separate clustered roots, or a chart split after a
+    /// numerical failure.
+    pub fn subdivisions(&self) -> usize {
+        self.subdivisions
+    }
+
+    /// Split cells whose quadrants' counts disagree with the cell's.
+    pub fn inconsistent(&self) -> &[InconsistentWinding<C::RealField>] {
+        &self.inconsistent
     }
 
     pub fn estimates(&self) -> &[ModalEstimate<C>] {
@@ -261,21 +285,13 @@ where
             .search_region
             .try_into()
             .map_err(ModalSearchError::Domain)?;
+        self.search_cell(domain, &config)
+    }
 
-        let failure = Arc::new(Mutex::new(None));
-        let function = TrackedFunction {
-            inner: self.dispersion.clone(),
-            failure: failure.clone(),
-        };
-        let result =
-            find_zeros(function, domain, config).map_err(|engine| ModalSearchError::Search {
-                engine,
-                source: failure
-                    .lock()
-                    .expect("evaluation error observer poisoned")
-                    .take(),
-            })?;
-
+    fn interpret(
+        &self,
+        result: ArgumentResult<C>,
+    ) -> Result<ModalSearchResult<C>, ChartSearchError<C, H::Error, S::Error>> {
         let ArgumentResult {
             points,
             leaves,
@@ -300,6 +316,190 @@ where
             summary,
             termination,
         ))
+    }
+
+    /// argloc over one rectangle of this chart, inside its evaluation halo.
+    fn search_cell(
+        &self,
+        cell: Rect<R>,
+        config: &ArgumentConfig<R>,
+    ) -> Result<ModalSearchResult<C>, ChartSearchError<C, H::Error, S::Error>> {
+        let failure = Arc::new(Mutex::new(None));
+        let function = TrackedFunction {
+            inner: self.dispersion.clone(),
+            failure: failure.clone(),
+        };
+        let result = find_zeros(function, cell, config.clone()).map_err(|engine| {
+            ModalSearchError::Search {
+                engine,
+                source: failure
+                    .lock()
+                    .expect("evaluation error observer poisoned")
+                    .take(),
+            }
+        })?;
+        self.interpret(result)
+    }
+
+    /// Search every quadrant of `cell`, splitting at the first of a few
+    /// off-centre fractions at which every quadrant's search succeeds.
+    #[allow(clippy::type_complexity)]
+    fn quadrants(
+        &self,
+        cell: Rect<R>,
+        config: &ArgumentConfig<R>,
+    ) -> Result<Vec<ModalSearchResult<C>>, ChartSearchError<C, H::Error, S::Error>> {
+        let mut last = None;
+        for fraction in [0.4637, 0.5381, 0.4129] {
+            let f = R::from_f64(fraction).expect("representable fraction");
+            let x = cell.x_min + f * (cell.x_max - cell.x_min);
+            let y = cell.y_min + f * (cell.y_max - cell.y_min);
+            let parts = [
+                (cell.x_min, x, cell.y_min, y),
+                (x, cell.x_max, cell.y_min, y),
+                (cell.x_min, x, y, cell.y_max),
+                (x, cell.x_max, y, cell.y_max),
+            ];
+            let searched: Result<Vec<_>, _> = parts
+                .into_iter()
+                .map(|(x_min, x_max, y_min, y_max)| {
+                    self.search_cell(
+                        Rect {
+                            x_min,
+                            x_max,
+                            y_min,
+                            y_max,
+                        },
+                        config,
+                    )
+                })
+                .collect();
+            match searched {
+                Ok(parts) => return Ok(parts),
+                Err(error) => last = Some(error),
+            }
+        }
+        Err(last.expect("at least one split"))
+    }
+
+    /// As [`Self::search`], then split every converged leaf that holds
+    /// several roots into quadrants searched again, until each holds at most
+    /// one, the leaf is below 1e-9 of the chart's larger side, or
+    /// `max_subdivisions` splits are spent. A chart whose search fails with
+    /// no optical evaluation failure is split once the same way. Quadrant
+    /// counts that do not add up to their cell's are recorded.
+    pub fn search_subdivided(
+        &self,
+        config: ArgumentConfig<R>,
+        max_subdivisions: usize,
+    ) -> Result<ModalSearchResult<C>, ChartSearchError<C, H::Error, S::Error>> {
+        let domain: Rect<R> = self
+            .search_region
+            .try_into()
+            .map_err(ModalSearchError::Domain)?;
+        let mut budget = max_subdivisions;
+        let mut result = match self.search_cell(domain, &config) {
+            Ok(result) => result,
+            Err(ModalSearchError::Search { source: None, .. }) if budget > 0 => {
+                budget -= 1;
+                let mut parts = self.quadrants(domain, &config)?.into_iter();
+                let mut merged = parts.next().expect("four quadrants");
+                for part in parts {
+                    merged.absorb(part);
+                }
+                merged.subdivisions += 1;
+                merged
+            }
+            Err(error) => return Err(error),
+        };
+        let floor = R::from_f64(1e-9).expect("representable")
+            * Float::max(domain.x_max - domain.x_min, domain.y_max - domain.y_min);
+        let tolerance = config.quad_tree.target_score;
+        let mut queue: Vec<Rect<R>> = result.clusters(tolerance);
+        while let Some(cell) = queue.pop() {
+            let size = Float::max(cell.x_max - cell.x_min, cell.y_max - cell.y_min);
+            if budget == 0 || size <= floor {
+                continue;
+            }
+            let Ok(parts) = self.quadrants(cell, &config) else {
+                continue;
+            };
+            budget -= 1;
+            let whole = result.remove_leaf(cell);
+            let parts_count: isize = parts
+                .iter()
+                .flat_map(|p| p.leaves.iter())
+                .map(|leaf| leaf.data.root_count)
+                .sum();
+            if parts_count != whole {
+                result.inconsistent.push(InconsistentWinding {
+                    bounds: cell,
+                    whole,
+                    parts: parts_count,
+                });
+            }
+            for part in parts {
+                queue.extend(part.clusters(tolerance));
+                result.absorb(part);
+            }
+            result.subdivisions += 1;
+        }
+        Ok(result)
+    }
+}
+
+impl<C> ModalSearchResult<C>
+where
+    C: ComplexField + Copy,
+    C::RealField: Float,
+{
+    /// Bounds of converged leaves whose estimate holds several roots.
+    fn clusters(&self, tolerance: C::RealField) -> Vec<Rect<C::RealField>> {
+        self.estimates
+            .iter()
+            .map(ModalEstimate::estimate)
+            .filter(|e| e.multiplicity > 1)
+            .map(|e| e.enclosure)
+            .filter(|bounds| {
+                self.leaves.iter().any(|leaf| {
+                    leaf.bounds == *bounds
+                        && leaf.data.score.is_finite()
+                        && leaf.data.score <= tolerance
+                })
+            })
+            .collect()
+    }
+
+    /// Remove the leaf with `bounds` and its estimates, returning its count.
+    fn remove_leaf(&mut self, bounds: Rect<C::RealField>) -> isize {
+        let mut count = 0;
+        self.leaves.retain(|leaf| {
+            let keep = leaf.bounds != bounds;
+            if !keep {
+                count += leaf.data.root_count;
+            }
+            keep
+        });
+        self.estimates.retain(|e| e.estimate().enclosure != bounds);
+        count
+    }
+
+    /// Add another search's leaves, estimates and work to this one; a
+    /// termination other than convergence is kept.
+    fn absorb(&mut self, other: Self) {
+        self.estimates.extend(other.estimates);
+        self.leaves.extend(other.leaves);
+        self.summary.iterations += other.summary.iterations;
+        self.summary.elapsed += other.summary.elapsed;
+        self.summary.best_measure = match (self.summary.best_measure, other.summary.best_measure) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
+        if self.termination == Termination::Converged {
+            self.termination = other.termination;
+        }
+        self.subdivisions += other.subdivisions;
+        self.inconsistent.extend(other.inconsistent);
     }
 }
 

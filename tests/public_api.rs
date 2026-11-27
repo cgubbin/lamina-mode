@@ -426,6 +426,8 @@ fn canonical_plans_and_budget_clusters_keep_public_diagnostics() {
         .solve(
             DiscoveryConfig {
                 max_iterations: 0,
+                // Unsplit, so that the clusters stay visible.
+                max_subdivisions: 0,
                 ..Default::default()
             },
             RefinementConfig::default(),

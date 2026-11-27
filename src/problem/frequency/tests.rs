@@ -961,6 +961,8 @@ fn frequency_plans_keep_opposite_sheets_failures_and_clusters() {
     let batch = plan
         .discover(DiscoveryConfig {
             max_iterations: 0,
+            // Unsplit, so that the clusters stay visible.
+            max_subdivisions: 0,
             ..DiscoveryConfig::default()
         })
         .unwrap();

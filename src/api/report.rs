@@ -113,6 +113,10 @@ impl ChartDiscovery<'_> {
     pub fn termination(&self) -> &Termination {
         self.inner.result().termination()
     }
+    /// Leaves split to separate clustered roots.
+    pub fn subdivisions(&self) -> usize {
+        self.inner.result().subdivisions()
+    }
 }
 /// Native/physical projection of a discovery estimate, including unresolved clusters.
 #[derive(Clone, Copy, Debug)]
@@ -377,6 +381,13 @@ impl SolveReport {
                 } else if !score.is_finite() || score > tolerance {
                     push(leaf.bounds, UnresolvedCause::Leaf { score });
                 }
+            }
+            for split in entry.inner.result().inconsistent() {
+                let violation = WindingViolation::Inconsistent {
+                    whole: split.whole,
+                    parts: split.parts,
+                };
+                push(split.bounds, UnresolvedCause::AssumptionViolated(violation));
             }
             for outcome in outcomes.candidates.iter().flatten() {
                 if !matches!(outcome.status, CandidateStatus::Accepted) {

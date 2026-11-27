@@ -555,6 +555,26 @@ where
             .collect();
         Ok(RefinementReport::new(discovery, config, outcomes))
     }
+    /// As [`Self::search`], splitting clustered leaves; see
+    /// [`SingleChartModalSearch::search_subdivided`].
+    pub fn search_subdivided<H: AnalyticChart<J>>(
+        &self,
+        domain: &ProblemDomain<M, S, H>,
+        config: ArgumentConfig<f64>,
+        max_subdivisions: usize,
+    ) -> Result<ProblemSearchResult, ExecutionError<NativeSearchError<H, S>>> {
+        if !domain.provenance.belongs_to(self) {
+            return Err(ExecutionError::ForeignDomain);
+        }
+        let result = domain
+            .search
+            .search_subdivided(config, max_subdivisions)
+            .map_err(|source| ExecutionError::Optical(Box::new(source)))?;
+        Ok(ProblemSearchResult {
+            result,
+            provenance: domain.provenance.clone(),
+        })
+    }
     /// Results remain estimates, including unresolved clusters. Ownership and
     /// construction errors precede search; neither implies root acceptance.
     pub fn search<H: AnalyticChart<J>>(

@@ -436,6 +436,8 @@ fn budget_clusters_and_candidate_failures_remain_visible() {
     let batch = plan
         .discover(DiscoveryConfig {
             max_iterations: 0,
+            // Unsplit, so that the clusters stay visible.
+            max_subdivisions: 0,
             ..DiscoveryConfig::default()
         })
         .unwrap();
