@@ -1,4 +1,4 @@
-//! Longitudinal power per metre of invariant width for a lossless dielectric guide.
+//! Longitudinal power per metre of invariant width for a lossless guide.
 use super::forms;
 use super::*;
 use crate::problem::material::{self, Channel};
@@ -24,9 +24,7 @@ pub struct GuidedPowerNormalization {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum GuidedPowerError {
-    #[error(
-        "requires a lossless dielectric guided mode with real frequency and propagation constant"
-    )]
+    #[error("requires a lossless guided mode with real frequency and propagation constant")]
     Ineligible,
     #[error("guided field phase or power is ill-conditioned")]
     IllConditioned,
@@ -92,13 +90,14 @@ impl ModePoint {
         let polarisation = prov.polarisation().ok_or(Ineligible)?;
         let stack = prov.stack();
         let at = Complex::new(k.re, 0.);
-        // Lossless in the entries this polarisation sees.
+        // Lossless in the entries this polarisation sees, of either sign:
+        // the power of a mode in a negative-permittivity region is defined.
         let lossless = |(region, m): (lamina_core::StackRegion, &Region)| {
             material::tensors(region, m, at).is_ok_and(|tensors| {
                 Channel::of(&tensors, polarisation)
                     .entries()
                     .iter()
-                    .all(|v| v.re.is_finite() && v.re > 0. && v.im == 0.)
+                    .all(|v| v.re.is_finite() && v.re != 0. && v.im == 0.)
             })
         };
         if !material::regions(stack).all(lossless) {

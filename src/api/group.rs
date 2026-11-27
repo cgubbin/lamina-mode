@@ -12,6 +12,13 @@
 //! For a lossless guided mode the two agree; the result is certified only if
 //! they do, within a stated tolerance, and the derivative is real. The value
 //! is signed like β: positive for forward modes.
+//!
+//! Lossless means real entries, of either sign: the identity behind `c W / P`
+//! is variational and holds for any real (Hermitian) dispersion, so modes of
+//! hyperbolic and negative-permittivity regions are certified too. In a
+//! lossless Lorentz medium the weight `ε + k₀ ∂ε/∂k₀ = ∂(k₀ε)/∂k₀` is the
+//! Brillouin energy density, positive also where ε < 0; a backward mode then
+//! carries power against β and its group index is negative.
 use super::*;
 use crate::problem::material::{self, Channel, Principal};
 
@@ -39,7 +46,8 @@ pub enum GroupIndexError {
     #[error("requires a lossless guided mode in materials with real dispersion")]
     Ineligible,
     #[error(
-        "requires real, positive entries where the polarisation sees them: {entry} of {} is {value}",
+        "requires lossless (real, finite, non-zero) entries where the polarisation sees them: \
+         {entry} of {} is {value}",
         super::guided::region_name(*region)
     )]
     IneligibleEntry {
@@ -86,6 +94,15 @@ impl ModePoint {
             return Err(InvalidTolerance);
         }
         let sig = *self.signature().map_err(|_| Ineligible)?;
+        if let Some((region, entry, value)) =
+            super::sensitivity::lossy_entry(self, sig.k0).map_err(|_| Ineligible)?
+        {
+            return Err(IneligibleEntry {
+                region,
+                entry,
+                value,
+            });
+        }
         let (k, beta) = (sig.k0, sig.k_parallel);
         let tol = 1e-9;
         if k.re <= 0.

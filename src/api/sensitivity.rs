@@ -327,14 +327,44 @@ impl GuidedBetaSensitivity {
     }
 }
 
+/// The first entry, in stack order, that the mode's polarisation sees and
+/// that is not lossless at its real k0: complex, not finite, or zero, where
+/// the characteristic is singular. Lossless entries of either sign pass, so
+/// hyperbolic and negative-permittivity regions are eligible. `Ineligible`
+/// when the mode has no polarisation or a region cannot be evaluated.
+#[allow(clippy::type_complexity)]
+pub(crate) fn lossy_entry(
+    point: &super::ModePoint,
+    k: Complex,
+) -> Result<Option<(lamina_core::StackRegion, super::TensorEntry, Complex)>, GuidedBetaError> {
+    let provenance = point.provenance();
+    let polarisation = provenance
+        .polarisation()
+        .ok_or(GuidedBetaError::Ineligible)?;
+    let at = Complex::new(k.re, 0.0);
+    for (region, m) in material::regions(provenance.stack()) {
+        let tensors = material::tensors(region, m, at).map_err(|_| GuidedBetaError::Ineligible)?;
+        let names = super::TensorEntry::channel(polarisation);
+        let entries = Channel::of(&tensors, polarisation).entries();
+        if let Some((entry, value)) = names
+            .into_iter()
+            .zip(entries)
+            .find(|(_, v)| !v.re.is_finite() || v.re == 0.0 || v.im != 0.0)
+        {
+            return Ok(Some((region, entry, value)));
+        }
+    }
+    Ok(None)
+}
+
 /// A failed sensitivity request. The borrowed base point remains available.
 #[derive(Clone, Debug)]
 pub enum GuidedBetaError {
     InvalidSettings,
     Direction(DirectionError),
     Ineligible,
-    /// An entry the polarisation sees is not real and positive at the
-    /// mode's k0.
+    /// An entry the polarisation sees is not lossless at the mode's k0: it
+    /// is complex, not finite, or zero.
     IneligibleEntry {
         region: lamina_core::StackRegion,
         entry: super::TensorEntry,
@@ -375,6 +405,14 @@ impl super::ModePoint {
         exterior_settings.validate().map_err(|_| InvalidSettings)?;
         slope_settings.validate().map_err(|_| InvalidSettings)?;
         let sig = self.signature().map_err(|_| Ineligible)?;
+        // A lossy entry is named before the mode's complex β is refused.
+        if let Some((region, entry, value)) = lossy_entry(self, sig.k0)? {
+            return Err(IneligibleEntry {
+                region,
+                entry,
+                value,
+            });
+        }
         let k = sig.k0;
         let beta = sig.k_parallel;
         let roots = sig.exteriors();
@@ -414,20 +452,6 @@ impl super::ModePoint {
             .map(|tensors| tensors.map(|t| Channel::of(&t, polarisation)))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| Ineligible)?;
-        // Only the entries this polarisation sees enter.
-        let regions = material::regions(stack).map(|(region, _)| region);
-        for (region, channel) in regions.zip(&channels) {
-            let names = super::TensorEntry::channel(polarisation);
-            for (entry, value) in names.into_iter().zip(channel.entries()) {
-                if !value.re.is_finite() || value.re <= 0.0 || value.im != 0.0 {
-                    return Err(IneligibleEntry {
-                        region,
-                        entry,
-                        value,
-                    });
-                }
-            }
-        }
         let exterior_regions = [0, channels.len() - 1];
         for (side, (root, &region)) in roots.iter().zip(&exterior_regions).enumerate() {
             let Some(root) = *root else { continue };
