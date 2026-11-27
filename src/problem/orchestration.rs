@@ -108,10 +108,18 @@ pub struct DiscoveryConfig {
     /// Splits of converged leaves that hold several roots (and of charts
     /// whose search failed numerically) into quadrants searched again; zero
     /// leaves such leaves as cluster estimates.
+    ///
+    /// With splitting enabled, refinement also stops at the first step at
+    /// which every leaf is resolved: a leaf that converges early with a
+    /// cluster is split rather than reported. With zero, refinement continues
+    /// until the leaves have stayed resolved for argloc's default window.
     pub max_subdivisions: usize,
 }
 /// The near-zero threshold of the defaults at a 1 cm wavelength.
 pub const DEFAULT_ZERO_TOLERANCE: f64 = 1e-12;
+/// Refinement steps the leaves must stay resolved for when clustered leaves
+/// are split: one, so refinement stops as soon as every leaf is resolved.
+const RESOLVED_WINDOW: usize = 1;
 impl Default for DiscoveryConfig {
     fn default() -> Self {
         Self {
@@ -162,6 +170,9 @@ impl DiscoveryConfig {
         config.quad_tree.max_iter = self.max_iterations;
         config.quad_tree.max_depth = self.max_depth;
         config.quad_tree.max_leaves = self.max_leaves;
+        if self.max_subdivisions > 0 {
+            config.quad_tree.target_window = RESOLVED_WINDOW;
+        }
         config.integrator = config
             .integrator
             .with_relative_tolerance(self.relative_tolerance)

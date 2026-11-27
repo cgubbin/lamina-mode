@@ -278,6 +278,15 @@ Changed:
   positive in a lossless Lorentz medium also where ε < 0. Backward modes have
   a negative group index and power. Requests that failed with
   `IneligibleEntry` for a negative entry now succeed.
+- With cluster splitting enabled (`DiscoveryConfig::max_subdivisions > 0`,
+  the default), argloc's refinement stops at the first step at which every
+  leaf is resolved instead of after two more confirming steps, in plans,
+  modal bases and guided enumeration. On a tiled chart search of a 100 nm hBN
+  film the same roots are found with 13–44 % fewer characteristic evaluations
+  (1501 cm⁻¹: 88 639 → 58 525; 1375 cm⁻¹: 228 325 → 182 883); root values agree
+  to refinement round-off. With `max_subdivisions = 0` argloc's default window
+  is kept, since an early-converged leaf holding a cluster would otherwise be
+  reported rather than split.
 
 
 Fixed:

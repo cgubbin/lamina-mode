@@ -868,8 +868,10 @@ fn lossy_multilayer_poles_are_selected_tracked_and_audited() {
     assert_eq!(refreshed.failed_local_sources, [0, 1]);
     assert_eq!(refreshed.destination.coverage, QnmPoleCoverage::Reconciled);
     assert_eq!(refreshed.unmatched_source, [0, 1]);
+    // No refinement step at all: refinement that stops at the first resolved
+    // step completes this domain in one.
     let mut limited = request;
-    limited.discovery.max_iterations = 1;
+    limited.discovery.max_iterations = 0;
     let partial = select_qnm_poles(lossy_sweep_stack(0.30, 4.0), limited).unwrap();
     assert_eq!(partial.coverage, QnmPoleCoverage::Unresolved);
 }
