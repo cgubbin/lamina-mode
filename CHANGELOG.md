@@ -7,6 +7,12 @@ released in step until 1.0. Each entry names any shared convention it changes.
 
 Added:
 
+- Exterior sheets on the in-plane chart: `ExteriorSector` (proper, outgoing or
+  incoming improper, real) and `BranchSignature::sectors`, so every point names
+  the sheet of each exterior; `PropagationProblem::full_period_plan` and
+  `full_period_domains` add the iπ-shifted strip, which holds the improper
+  sheets the canonical strip omits. A lossy mode that crosses the light line
+  and leaves the proper sheet is found there.
 - `DiscoveryConfig::max_subdivisions` (default 1000): plan discovery splits
   each converged leaf that holds several roots into quadrants searched again,
   as modal bases do, and splits a chart whose search fails numerically. One
