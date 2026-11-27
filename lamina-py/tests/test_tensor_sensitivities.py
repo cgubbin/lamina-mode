@@ -31,6 +31,13 @@ def central(build, h: float, mode: int = 0) -> float:
     return (plus - minus) / (2 * h)
 
 
+def derivative(sample, h: float):
+    """d sample(p)/dp at p = 0 by Richardson-extrapolated central differences
+    over steps h and 2h: truncation O(h⁴)."""
+    d1, d2 = ((sample(s * h) - sample(-s * h)) / (2 * s * h) for s in (1, 2))
+    return (4 * d1 - d2) / 3
+
+
 def rot_x(t: float) -> np.ndarray:
     c, s = math.cos(t), math.sin(t)
     return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
@@ -76,12 +83,22 @@ def test_coupled_profiles_reduce_to_the_scalar_phase_rule(pair):
     ],
     ids=["thickness", "interface", "wavelength", "permittivity", "eps_yy", "eps_zz_right"],
 )
-def test_coupled_sensitivities_match_the_scalar_ones(pair, parameter):
+@pytest.mark.parametrize("frame", ["material_attached", "fixed_lab"])
+def test_coupled_sensitivities_match_the_scalar_ones(pair, parameter, frame):
     te, coupled, index = pair
-    scalar = te.sensitivity(0, parameter)
-    hybrid = coupled.sensitivity(index, parameter)
-    assert hybrid.power_fractions is None and hybrid.conditioning.denominator_threshold is None
+    scalar = te.sensitivity(0, parameter, z_m=Z, frame=frame)
+    hybrid = coupled.sensitivity(index, parameter, z_m=Z, frame=frame)
+    assert hybrid.conditioning.denominator_threshold is None
     assert hybrid.dbeta_rad_per_m == pytest.approx(scalar.dbeta_rad_per_m, rel=1e-7, abs=1e-9 * K0)
+    np.testing.assert_allclose(hybrid.power_fractions, scalar.power_fractions, atol=1e-9)
+    np.testing.assert_allclose(hybrid.power_fraction_rates, scalar.power_fraction_rates, atol=1e-7 * np.abs(scalar.power_fraction_rates).max() + 1e-12)
+    assert hybrid.sample_failures == scalar.sample_failures
+    np.testing.assert_allclose(hybrid.electric_v_per_m, scalar.electric_v_per_m, atol=1e-7 * np.abs(scalar.electric_v_per_m).max())
+    # A rate the mode does not see (ε_zz of an exterior for TE) is zero on the
+    # scalar path and round-off on the coupled one.
+    scale = np.abs(scalar.d_electric_v_per_m).max() + 1e-3 * np.abs(scalar.electric_v_per_m).max()
+    np.testing.assert_allclose(hybrid.d_electric_v_per_m, scalar.d_electric_v_per_m, atol=1e-7 * scale)
+    np.testing.assert_allclose(hybrid.d_magnetic_a_per_m, scalar.d_magnetic_a_per_m, atol=1e-7 * scale / 376.7)
     again = lamina.GuidedSensitivity.from_json(hybrid.to_json())
     assert again == hybrid and again.assumption == coupled.assumption
 
@@ -94,10 +111,8 @@ def test_coupled_group_index_matches_the_scalar_one(pair):
     assert lamina.GroupIndex.from_json(g.to_json()) == g
 
 
-def test_coupled_modes_refuse_field_derivatives_and_pairings(pair):
+def test_coupled_modes_refuse_pairings(pair):
     _, coupled, index = pair
-    with pytest.raises(lamina.InvalidInput, match="request no z_m"):
-        coupled.sensitivity(index, lamina.Parameter.thickness(0), z_m=[0.0])
     with pytest.raises(lamina.InvalidInput, match="TE or TM"):
         lamina.power_overlap(coupled, 0, coupled, 0)
     with pytest.raises(lamina.InvalidInput, match="TE or TM"):
@@ -178,7 +193,7 @@ def test_a_tilt_about_y_matches_central_differences_and_its_components():
     theta = 0.6
     base = solve(tilted(theta), "TM")
     s = base.sensitivity(0, lamina.Parameter.rotation(1, "y"))
-    assert s.parameter_unit == "rad" and s.power_fractions is None
+    assert s.parameter_unit == "rad"
     assert s.dbeta_rad_per_m.real == pytest.approx(central(lambda h: solve(tilted(theta + h), "TM"), 1e-3), rel=1e-5)
     # Chain rule through the tensor components: dβ/dθ = Σ (dε/dθ)_ij dβ/dε_ij.
     eps = base.regions[1].relative_permittivity
@@ -191,8 +206,19 @@ def test_a_tilt_about_y_matches_central_differences_and_its_components():
         if rate[i, j] != 0
     )
     assert total == pytest.approx(s.dbeta_rad_per_m, rel=1e-9)
-    with pytest.raises(lamina.InvalidInput, match="request no z_m"):
-        base.sensitivity(0, lamina.Parameter.rotation(1, "y"), z_m=[0.0])
+    # A tilt about y keeps the optic axis in xz, so TM stays TM: its fields and
+    # power fractions have rates. A turn about x couples TE and TM, which a TM
+    # mode cannot follow.
+    fields = base.sensitivity(0, lamina.Parameter.rotation(1, "y"), z_m=Z)
+    np.testing.assert_allclose(
+        fields.d_magnetic_a_per_m,
+        derivative(lambda h: solve(tilted(theta + h), "TM").sample_fields(0, Z).magnetic_a_per_m, 1e-3),
+        atol=1e-5 * np.abs(fields.magnetic_a_per_m).max(),
+    )
+    assert fields.power_fractions.sum() == pytest.approx(1.0, abs=1e-9)
+    for z in ([], [0.0]):
+        with pytest.raises(lamina.InvalidInput, match="couples TE and TM"):
+            base.sensitivity(0, lamina.Parameter.rotation(1, "x"), z_m=z)
 
 
 def test_an_off_diagonal_component_on_an_isotropic_tm_mode_matches_a_tilt():
@@ -229,8 +255,38 @@ def test_a_hybrid_turn_about_x_matches_central_differences(hybrid):
         turned = lamina.Rotation.from_matrix(rot_x(h) @ r)
         return solve(lamina.Uniaxial(ORDINARY, EXTRAORDINARY, turned), "all")
 
-    s = basis.sensitivity(0, lamina.Parameter.rotation(1, "x"))
+    s = basis.sensitivity(0, lamina.Parameter.rotation(1, "x"), z_m=Z)
     assert s.dbeta_rad_per_m.real == pytest.approx(central(build, 1e-3), rel=1e-5)
+    # The unit-power fields and power fractions, re-solved and re-sampled.
+    np.testing.assert_allclose(
+        s.d_electric_v_per_m,
+        derivative(lambda h: build(h).sample_fields(0, Z).electric_v_per_m, 1e-3),
+        atol=1e-6 * np.abs(s.electric_v_per_m).max(),
+    )
+    np.testing.assert_allclose(
+        s.power_fraction_rates,
+        derivative(lambda h: build(h).sensitivity(0, lamina.Parameter.rotation(1, "x")).power_fractions, 1e-3),
+        atol=1e-6,
+    )
+    assert s.power_fractions.sum() == pytest.approx(1.0, abs=1e-9)
+
+
+def test_hybrid_thickness_rates_match_central_differences_in_the_lab_frame(hybrid):
+    rotation, basis = hybrid
+    core = lamina.Uniaxial(ORDINARY, EXTRAORDINARY, rotation)
+
+    def build(h):
+        stack = lamina.Stack(CLAD[0], [(core, THICKNESS + h)], CLAD[1])
+        return lamina.enumerate_guided_modes(stack, lamina.GuidedRequest(WAVELENGTH, family="all"))
+
+    z = Z[np.abs(Z - THICKNESS) > 1e-9]
+    s = basis.sensitivity(0, lamina.Parameter.thickness(0), z_m=z, frame="fixed_lab")
+    assert all(f is None for f in s.sample_failures)
+    np.testing.assert_allclose(
+        s.d_electric_v_per_m,
+        derivative(lambda h: build(h).sample_fields(0, z).electric_v_per_m, 1e-9),
+        atol=1e-6 * np.abs(s.d_electric_v_per_m).max(),
+    )
 
 
 def test_a_hybrid_group_index_is_certified(hybrid):

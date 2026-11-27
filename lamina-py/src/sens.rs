@@ -3,8 +3,9 @@ use crate::records::{self as rec};
 use crate::solve::{Failure, M_PER_CM, Solved, Z0_OHM, c2, k0_cm, point, sampling};
 use lamina_core::{Scatter2, Scatter4};
 use lamina_mode::{
-    Complex, ConstitutiveRate, GuidedObservationFrame, GuidedPerturbation, HybridPerturbation,
-    ImplicitSlopeSettings, LocalDerivativeSettings,
+    Complex, ConstitutiveRate, GuidedFieldSample, GuidedObservationFrame, GuidedPerturbation,
+    HybridFieldError, HybridPerturbation, ImplicitSlopeSettings, LocalDerivativeSettings,
+    RegionalPowerSensitivity,
 };
 
 type Tensor = [[Complex; 3]; 3];
@@ -322,13 +323,69 @@ fn hybrid_direction(solved: &Solved, d: &Direction) -> Result<(HybridPerturbatio
             thickness_rates: d.velocities.windows(2).map(|v| v[1] - v[0]).collect(),
             k0_rate: 0.,
             tensor_rates: d.tensors.clone(),
+            origin_velocity: d.velocities[0],
         },
         1.,
     ))
 }
 
-/// dβ along a direction of a mode counted by the argument principle, or
-/// along a rate that is not real and diagonal: no field or power samples.
+/// Unit-power field samples and their rates, and regional power fractions
+/// and their rates, in SI: rates multiplied by `factor` (per internal
+/// parameter unit to per SI unit).
+fn pack(
+    record: &mut rec::GuidedSensitivity,
+    samples: &[GuidedFieldSample],
+    regional: &[RegionalPowerSensitivity],
+    factor: f64,
+) {
+    // Components [Ex, Ey, Ez, Z0 Hx, Z0 Hy, Z0 Hz]: H to A/m.
+    let split = |values: &[Complex; 6], scale: f64| {
+        let e = |i: usize| values[i] * scale;
+        let h = |i: usize| values[i + 3] * (scale / Z0_OHM);
+        (
+            [e(0).re, e(1).re, e(2).re],
+            [e(0).im, e(1).im, e(2).im],
+            [h(0).re, h(1).re, h(2).re],
+            [h(0).im, h(1).im, h(2).im],
+        )
+    };
+    for sample in samples {
+        let (er, ei, hr, hi) = split(&sample.field, 1.);
+        record.electric_real.push(er);
+        record.electric_imag.push(ei);
+        record.magnetic_real.push(hr);
+        record.magnetic_imag.push(hi);
+        let (tangent, failure) = match &sample.tangent {
+            Ok(t) => (*t, None),
+            Err(e) => ([Complex::ZERO; 6], Some(format!("{e:?}"))),
+        };
+        let (er, ei, hr, hi) = split(&tangent, factor);
+        record.d_electric_real.push(er);
+        record.d_electric_imag.push(ei);
+        record.d_magnetic_real.push(hr);
+        record.d_magnetic_imag.push(hi);
+        record.sample_failures.push(failure);
+    }
+    // Regional powers are normalised by |P|; their sum is the sign of P.
+    let sign: f64 = regional
+        .iter()
+        .map(|r| r.power_w_per_m)
+        .sum::<f64>()
+        .signum();
+    record.power_fractions = Some(regional.iter().map(|r| r.power_w_per_m * sign).collect());
+    record.power_fraction_rates = Some(
+        regional
+            .iter()
+            .map(|r| r.power_rate_w_per_m * sign * factor)
+            .collect(),
+    );
+}
+
+/// dβ along a direction of a mode solved through the 4×4 characteristic,
+/// with its unit-power fields, their rates and the regional power fractions
+/// (a TE or TM mode along a rate that couples TE and TM is refused); or, of
+/// a mode counted by its oscillation index along a rate that is not real and
+/// diagonal, dβ only.
 fn hybrid_sensitivity(
     solved: &Solved,
     mode_index: usize,
@@ -337,20 +394,19 @@ fn hybrid_sensitivity(
     z_m: &[f64],
     frame: rec::Frame,
 ) -> Result<rec::GuidedSensitivity, Failure> {
-    if !z_m.is_empty() {
+    let coupled = solved.coupled();
+    if !coupled && !z_m.is_empty() {
         return Err(Failure::Invalid(format!(
             "field derivatives along {} are available for TE and TM modes of isotropic and \
-             diagonal regions along real diagonal rates only; request no z_m",
+             diagonal regions along real diagonal rates only; count on the coupled channel \
+             (family \"all\") for its fields, or request no z_m",
             d.name
         )));
     }
     let point = point(solved, mode_index)?;
     let (direction, factor) = hybrid_direction(solved, d)?;
-    let rate = point
-        .hybrid_beta_rate_with(&Scatter4::new(), &direction)
-        .map_err(|e| Failure::Derivatives(format!("eigenvalue sensitivity: {e}")))?;
     let mode = &solved.record.modes[mode_index];
-    Ok(rec::GuidedSensitivity {
+    let mut record = rec::GuidedSensitivity {
         schema: rec::SENSITIVITY_SCHEMA.to_owned(),
         schema_version: rec::SCHEMA_VERSION,
         conventions: rec::Conventions::current(),
@@ -361,14 +417,14 @@ fn hybrid_sensitivity(
         parameter_unit: d.unit.to_owned(),
         frame,
         beta_rad_per_m: mode.beta_rad_per_m,
-        dbeta_rad_per_m: c2(rate.beta_rate * (factor * d.per_unit / M_PER_CM)),
+        dbeta_rad_per_m: [0.; 2],
         conditioning: rec::Conditioning {
             characteristic: mode.characteristic_value,
-            characteristic_direction: c2(rate.characteristic_direction * factor),
-            characteristic_beta: c2(rate.characteristic_beta),
+            characteristic_direction: [0.; 2],
+            characteristic_beta: [0.; 2],
             denominator_threshold: None,
         },
-        z_m: vec![],
+        z_m: z_m.iter().map(|z| z + 0.).collect(),
         electric_real: vec![],
         electric_imag: vec![],
         magnetic_real: vec![],
@@ -380,7 +436,63 @@ fn hybrid_sensitivity(
         sample_failures: vec![],
         power_fractions: None,
         power_fraction_rates: None,
-    })
+    };
+    let rate = if coupled {
+        // With no requested samples, sample one point for the power
+        // bookkeeping and drop it.
+        let probe = [0.];
+        let requested = if z_m.is_empty() { &probe[..] } else { z_m };
+        let frame = match frame {
+            rec::Frame::MaterialAttached => GuidedObservationFrame::MaterialAttached,
+            rec::Frame::FixedLab => GuidedObservationFrame::FixedLab,
+        };
+        let power = match point.hybrid_power_field_tangent_with(
+            &Scatter4::new(),
+            &direction,
+            &sampling(&solved.record.input.stack, requested)?,
+            frame,
+        ) {
+            Ok(power) => power,
+            Err(e) => return Err(refused(e, d, "field sensitivity")),
+        };
+        if power.samples.len() != requested.len() {
+            return Err(Failure::Derivatives(
+                "sample count changed during recovery".into(),
+            ));
+        }
+        let samples = if z_m.is_empty() {
+            &power.samples[..0]
+        } else {
+            &power.samples[..]
+        };
+        pack(
+            &mut record,
+            samples,
+            &power.regional_power,
+            factor * d.per_unit,
+        );
+        power.rate
+    } else {
+        point
+            .hybrid_beta_rate_with(&Scatter4::new(), &direction)
+            .map_err(|e| refused(e, d, "eigenvalue sensitivity"))?
+    };
+    record.dbeta_rad_per_m = c2(rate.beta_rate * (factor * d.per_unit / M_PER_CM));
+    record.conditioning.characteristic_direction = c2(rate.characteristic_direction * factor);
+    record.conditioning.characteristic_beta = c2(rate.characteristic_beta);
+    Ok(record)
+}
+
+/// A direction that couples TE and TM on a TE or TM mode is invalid input;
+/// other failures are failed derivatives.
+fn refused(error: HybridFieldError, d: &Direction, context: &str) -> Failure {
+    match error {
+        HybridFieldError::CouplesPolarisations { .. } => Failure::Invalid(format!(
+            "{context} along {}: {error}; count on the coupled channel (family \"all\")",
+            d.name
+        )),
+        other => Failure::Derivatives(format!("{context}: {other}")),
+    }
 }
 
 /// The group index of a mode counted by the argument principle: dβ/dk0
@@ -491,17 +603,6 @@ pub fn sensitivity(
     } else {
         &power.samples[..]
     };
-    // Components [Ex, Ey, Ez, Z0 Hx, Z0 Hy, Z0 Hz]: H to A/m; rates to per SI unit.
-    let split = |values: &[Complex; 6], scale: f64| {
-        let e = |i: usize| values[i] * scale;
-        let h = |i: usize| values[i + 3] * (scale / Z0_OHM);
-        (
-            [e(0).re, e(1).re, e(2).re],
-            [e(0).im, e(1).im, e(2).im],
-            [h(0).re, h(1).re, h(2).re],
-            [h(0).im, h(1).im, h(2).im],
-        )
-    };
     let mut record = rec::GuidedSensitivity {
         schema: rec::SENSITIVITY_SCHEMA.to_owned(),
         schema_version: rec::SCHEMA_VERSION,
@@ -528,43 +629,11 @@ pub fn sensitivity(
         power_fractions: None,
         power_fraction_rates: None,
     };
-    for sample in samples {
-        let (er, ei, hr, hi) = split(&sample.field, 1.);
-        record.electric_real.push(er);
-        record.electric_imag.push(ei);
-        record.magnetic_real.push(hr);
-        record.magnetic_imag.push(hi);
-        let (tangent, failure) = match &sample.tangent {
-            Ok(t) => (*t, None),
-            Err(e) => ([Complex::ZERO; 6], Some(format!("{e:?}"))),
-        };
-        let (er, ei, hr, hi) = split(&tangent, direction.per_unit);
-        record.d_electric_real.push(er);
-        record.d_electric_imag.push(ei);
-        record.d_magnetic_real.push(hr);
-        record.d_magnetic_imag.push(hi);
-        record.sample_failures.push(failure);
-    }
-    // Regional powers are normalised by |P|; their sum is the sign of P.
-    let sign: f64 = power
-        .regional_power
-        .iter()
-        .map(|r| r.power_w_per_m)
-        .sum::<f64>()
-        .signum();
-    record.power_fractions = Some(
-        power
-            .regional_power
-            .iter()
-            .map(|r| r.power_w_per_m * sign)
-            .collect(),
-    );
-    record.power_fraction_rates = Some(
-        power
-            .regional_power
-            .iter()
-            .map(|r| r.power_rate_w_per_m * sign * direction.per_unit)
-            .collect(),
+    pack(
+        &mut record,
+        samples,
+        &power.regional_power,
+        direction.per_unit,
     );
     Ok(record)
 }

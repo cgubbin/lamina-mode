@@ -274,9 +274,13 @@ An argument-principle count keeps its rectangles clear of the light-line branch 
 margin is 1e-6 k0 (1e-5 rad/m for TE and TM). Modes so counted are solved through the 4×4 (Berreman)
 characteristic: their profiles carry all six components, name their phase reference (`"Ey+Z0Hy"`, or `"Ex+Z0Hx"`
 where that vanishes) and record the unconjugated norm (1/2) ∫ (E × H) · x dz; their sensitivities give dβ/dp with
-its conditioning but no field derivatives or power fractions (request no `z_m`); their group index is certified
-against the energy estimate of the full tensors, which for hybrid modes may need a `tolerance` near 1e-6. Pairings
-and local derivatives take TE and TM modes of isotropic and diagonal regions; others raise `InvalidInput`.
+its conditioning, and the unit-power fields at `z_m` with their derivatives and the regional power fractions with
+theirs, along any parameter, in either frame; their group index is certified
+against the energy estimate of the full tensors, which for hybrid modes may need a `tolerance` near 1e-6. A TE or TM
+mode counted by its oscillation index gives field derivatives only along real diagonal rates; along a rate that
+couples TE and TM (an off-diagonal component, a rotation) it gives dβ/dp alone, and `z_m` raises `InvalidInput`:
+count on the coupled channel (`family="all"`) for its fields. Pairings and local derivatives take TE and TM modes
+of isotropic and diagonal regions; others raise `InvalidInput`.
 
 ## Conventions
 

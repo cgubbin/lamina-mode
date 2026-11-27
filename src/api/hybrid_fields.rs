@@ -35,6 +35,17 @@ pub enum HybridFieldError {
     IllConditioned,
     #[error(transparent)]
     Termination(#[from] PmlIntegral),
+    /// The direction couples TE and TM in `region` (an `xy`, `yx`, `yz` or
+    /// `zy` tensor rate), which a mode of a TE or TM channel cannot follow:
+    /// count it on the coupled channel.
+    #[error(
+        "the direction couples TE and TM in region {region}, which a TE or TM mode cannot follow"
+    )]
+    CouplesPolarisations { region: usize },
+    /// The direction moves the stack frame's origin, and with it the
+    /// stack, against its walls.
+    #[error("the direction moves the stack against its walls")]
+    MovesAgainstWalls,
 }
 
 /// The left-interface field made real and positive by the phase rule.
@@ -45,6 +56,34 @@ pub enum HybridPhaseReference {
     /// `E_x + Z₀H_x`, where `E_y + Z₀H_y` is below `1e-6` of the tangential
     /// field there.
     ExPlusZ0Hx,
+}
+
+impl HybridPhaseReference {
+    /// The rule's reference at the left interface `left`.
+    fn of(left: &[Complex; 6]) -> Result<Self, HybridFieldError> {
+        let tangential = [left[0], left[1], left[3], left[4]]
+            .iter()
+            .map(|v| v.norm_sqr())
+            .sum::<f64>()
+            .sqrt();
+        let rule = match (left[1] + left[4]).norm() >= 1e-6 * tangential {
+            true => Self::EyPlusZ0Hy,
+            false => Self::ExPlusZ0Hx,
+        };
+        let reference = rule.value(left).norm();
+        if reference == 0.0 || !reference.is_finite() {
+            return Err(HybridFieldError::IllConditioned);
+        }
+        Ok(rule)
+    }
+
+    /// The reference of the six components `f` (or of their tangent).
+    fn value(self, f: &[Complex; 6]) -> Complex {
+        match self {
+            Self::EyPlusZ0Hy => f[1] + f[4],
+            Self::ExPlusZ0Hx => f[0] + f[3],
+        }
+    }
 }
 
 /// Fields scaled to unit longitudinal power and the phase rule.
@@ -164,18 +203,8 @@ impl ModePoint {
             lamina_units::Length::zero(),
         ));
         let left = components(&self.seed_fields(backend, &at, one)?)[0];
-        let tangential = [left[0], left[1], left[3], left[4]]
-            .iter()
-            .map(|v| v.norm_sqr())
-            .sum::<f64>()
-            .sqrt();
-        let (phase_reference, reference) = match left[1] + left[4] {
-            r if r.norm() >= 1e-6 * tangential => (HybridPhaseReference::EyPlusZ0Hy, r),
-            _ => (HybridPhaseReference::ExPlusZ0Hx, left[0] + left[3]),
-        };
-        if reference.norm() == 0.0 || !reference.norm().is_finite() {
-            return Err(HybridFieldError::IllConditioned);
-        }
+        let phase_reference = HybridPhaseReference::of(&left)?;
+        let reference = phase_reference.value(&left);
         let scale = reference.conj() / reference.norm() / power.abs().sqrt();
         let bilinear = scale * scale * pairing;
         Ok(HybridProfile {
@@ -234,6 +263,10 @@ pub struct HybridPerturbation {
     pub thickness_rates: Vec<f64>,
     pub k0_rate: f64,
     pub tensor_rates: Vec<[[[Complex; 3]; 3]; 2]>,
+    /// The lab-frame velocity of the first interface, the origin of the
+    /// stack frame, in cm per unit: it moves fixed-lab samples relative to
+    /// the stack and changes nothing else. A walled stack refuses it.
+    pub origin_velocity: f64,
 }
 
 /// A direction's malformed or unevaluable input.
@@ -248,6 +281,7 @@ impl HybridPerturbation {
             thickness_rates: vec![0.0; stack.len()],
             k0_rate: 0.0,
             tensor_rates: vec![[[[Complex::ZERO; 3]; 3]; 2]; stack.len() + 2],
+            origin_velocity: 0.0,
         }
     }
 
@@ -307,7 +341,82 @@ pub struct HybridBetaRate {
     pub characteristic_beta: Complex,
 }
 
+/// The jets of a direction at an accepted point: k0, β and the exterior
+/// wavevectors with their rates, the layers' thickness rates and every
+/// region's full-tensor rates.
+struct Moving {
+    provenance: Provenance,
+    coordinates: CanonicalCoordinates<crate::problem::J>,
+    exterior: lamina_core::ExteriorWavevectors<crate::problem::J>,
+    thickness: Vec<f64>,
+    rates: Vec<[ConstitutiveTensor<Complex>; 2]>,
+}
+
+impl Moving {
+    fn direction(
+        &self,
+    ) -> ModalCharacteristicDirection<
+        '_,
+        Region,
+        [ConstitutiveTensor<Complex>; 2],
+        lamina_core::Channel,
+    > {
+        ModalCharacteristicDirection {
+            stack: self.provenance.stack(),
+            coordinates: &self.coordinates,
+            exterior: &self.exterior,
+            polarisation: self.provenance.channel(),
+            thickness_rates: &self.thickness,
+            constitutive_rates: &self.rates,
+        }
+    }
+}
+
 impl ModePoint {
+    /// The direction's jets with β moving at `beta_rate`, the exterior
+    /// pairs continued along it.
+    fn moving(
+        &self,
+        k0_rate: f64,
+        beta_rate: Complex,
+        thickness: &[f64],
+        tensors: &[[[[Complex; 3]; 3]; 2]],
+    ) -> Result<Moving, HybridFieldError> {
+        let signature = self.signature().map_err(|_| HybridFieldError::Branch)?;
+        let provenance = self.provenance();
+        let stack = provenance.stack();
+        let (k, beta) = (signature.k0, signature.k_parallel);
+        if thickness.len() != stack.len() || tensors.len() != stack.len() + 2 || k.im != 0.0 {
+            return Err(HybridFieldError::Ineligible);
+        }
+        if provenance.channel() != lamina_core::Channel::Coupled
+            && let Some(region) = tensors.iter().position(|pair| {
+                pair.iter()
+                    .any(|t| [t[0][1], t[1][0], t[1][2], t[2][1]] != [Complex::ZERO; 4])
+            })
+        {
+            return Err(HybridFieldError::CouplesPolarisations { region });
+        }
+        let exteriors = GuidedExteriors::new(stack, k.re, provenance.channel())
+            .map_err(|_| HybridFieldError::Ineligible)?;
+        let last = stack.len() + 1;
+        let rates = exteriors
+            .rates(beta, k0_rate, beta_rate, [tensors[0], tensors[last]])
+            .ok_or(HybridFieldError::Exterior {
+                side: StackSide::Left,
+            })?;
+        Ok(Moving {
+            coordinates: CanonicalCoordinates::new(seed(k, k0_rate.into()), seed(beta, beta_rate)),
+            exterior: exterior_jets(signature, rates),
+            thickness: thickness.to_vec(),
+            rates: tensors
+                .iter()
+                .map(|pair| pair.map(ConstitutiveTensor::Full))
+                .collect(),
+            provenance,
+        })
+    }
+
     /// `dβ/dp = −(∂F/∂p)/(∂F/∂β)` through the backend's characteristic,
     /// with the exterior pairs continued along the direction.
     pub fn hybrid_beta_rate_with<B: ModalDerivativeBackend>(
@@ -315,62 +424,29 @@ impl ModePoint {
         backend: &B,
         direction: &HybridPerturbation,
     ) -> Result<HybridBetaRate, HybridFieldError> {
-        let signature = self.signature().map_err(|_| HybridFieldError::Branch)?;
-        let provenance = self.provenance();
-        let stack = provenance.stack();
-        let (k, beta) = (signature.k0, signature.k_parallel);
-        if direction.thickness_rates.len() != stack.len()
-            || direction.tensor_rates.len() != stack.len() + 2
-            || k.im != 0.0
-        {
-            return Err(HybridFieldError::Ineligible);
+        let stack = self.provenance().stack().clone();
+        if !stack.is_open() && direction.origin_velocity != 0.0 {
+            return Err(HybridFieldError::MovesAgainstWalls);
         }
-        let channel = self.provenance().channel();
-        let exteriors =
-            GuidedExteriors::new(stack, k.re, channel).map_err(|_| HybridFieldError::Ineligible)?;
-        let last = stack.len() + 1;
-        let evaluate = |k0_rate: f64,
-                        beta_rate: Complex,
-                        thickness: &[f64],
-                        tensors: &[[[[Complex; 3]; 3]; 2]]|
-         -> Result<Complex, HybridFieldError> {
-            let rates = exteriors
-                .rates(beta, k0_rate, beta_rate, [tensors[0], tensors[last]])
-                .ok_or(HybridFieldError::Exterior {
-                    side: StackSide::Left,
-                })?;
-            let coordinates =
-                CanonicalCoordinates::new(seed(k, k0_rate.into()), seed(beta, beta_rate));
-            let exterior = exterior_jets(signature, rates);
-            let constitutive: Vec<_> = tensors
-                .iter()
-                .map(|pair| pair.map(ConstitutiveTensor::Full))
-                .collect();
+        let evaluate = |moving: Moving| -> Result<Complex, HybridFieldError> {
             backend
-                .directional_characteristic(ModalCharacteristicDirection {
-                    stack,
-                    coordinates: &coordinates,
-                    exterior: &exterior,
-                    polarisation: channel,
-                    thickness_rates: thickness,
-                    constitutive_rates: &constitutive,
-                })
+                .directional_characteristic(moving.direction())
                 .map(|jet| jet.first()[()])
                 .map_err(HybridFieldError::Fields)
         };
-        let still = HybridPerturbation::none(stack);
-        let along_beta = evaluate(
+        let still = HybridPerturbation::none(&stack);
+        let along_beta = evaluate(self.moving(
             0.0,
             Complex::ONE,
             &still.thickness_rates,
             &still.tensor_rates,
-        )?;
-        let along = evaluate(
+        )?)?;
+        let along = evaluate(self.moving(
             direction.k0_rate,
             Complex::ZERO,
             &direction.thickness_rates,
             &direction.tensor_rates,
-        )?;
+        )?)?;
         let beta_rate = -along / along_beta;
         if !beta_rate.re.is_finite() || !beta_rate.im.is_finite() {
             return Err(HybridFieldError::IllConditioned);
@@ -539,4 +615,282 @@ pub fn hybrid_tracking_with<B: ModalDerivativeBackend>(
         subspaces,
         overlaps,
     })
+}
+
+/// Unit-power fields of a guided mode of any channel and their rates along
+/// a [`HybridPerturbation`], with the regional power fractions and their
+/// rates: the coupled-channel counterpart of
+/// [`GuidedBetaSensitivity::power_field_tangent_with`].
+#[derive(Clone, Debug)]
+pub struct HybridPowerSensitivity {
+    pub rate: HybridBetaRate,
+    pub phase_reference: HybridPhaseReference,
+    /// The rate of the logarithm of the unit-power multiplier of the
+    /// backend's seed: `−½ P′/P` (with the moving-boundary parts of `P′`)
+    /// plus `i` times the rate of the phase rule's phase.
+    pub scale_log_rate: Complex,
+    /// Fields in the unit-power, phase-rule gauge of
+    /// [`ModePoint::hybrid_power_profile_with`] and their rates in the frame.
+    pub samples: Vec<GuidedFieldSample>,
+    /// Left exterior, finite layers, then right exterior: each region's
+    /// power over `|P|` and its rate; they sum to the sign of the power.
+    pub regional_power: Vec<RegionalPowerSensitivity>,
+}
+
+/// `∂f/∂z` of the six components `f` in a region with stack-frame `[ε, μ]`,
+/// from Maxwell's equations at `(k0, β)`: `∇×E = i k0 μ η`,
+/// `∇×η = −i k0 ε E`, `∂x = iβ`, `∂y = 0`.
+fn normal_gradient(
+    f: &[Complex; 6],
+    [e, m]: &[[[Complex; 3]; 3]; 2],
+    k: Complex,
+    beta: Complex,
+) -> [Complex; 6] {
+    let i = Complex::I;
+    let ratio = beta / k;
+    let product = |t: &[[Complex; 3]; 3], v: [Complex; 3], row: usize| {
+        (0..3).map(|c| t[row][c] * v[c]).sum::<Complex>()
+    };
+    let (electric, magnetic) = ([f[0], f[1], f[2]], [f[3], f[4], f[5]]);
+    let dex = i * beta * f[2] + i * k * product(m, magnetic, 1);
+    let dey = -i * k * product(m, magnetic, 0);
+    let dhx = i * beta * f[5] - i * k * product(e, electric, 1);
+    let dhy = i * k * product(e, electric, 0);
+    // The normal components from (εE)_z = −(β/k0) η_y, (μη)_z = (β/k0) E_y.
+    let dez = (-ratio * dhy - e[2][0] * dex - e[2][1] * dey) / e[2][2];
+    let dhz = (ratio * dey - m[2][0] * dhx - m[2][1] * dhy) / m[2][2];
+    [dex, dey, dez, dhx, dhy, dhz]
+}
+
+impl ModePoint {
+    /// Fields at unit longitudinal power under the phase rule of
+    /// [`Self::hybrid_power_profile_with`], their rates along `direction`
+    /// in `frame`, and the regional power fractions and their rates.
+    ///
+    /// The rates follow from the backend's field and form jets along the
+    /// direction (β moving at its rate, exterior pairs continued): the rate
+    /// of the unit-power multiplier includes the moving ends of layers whose
+    /// thickness changes, and the phase rule's rate is that of its reference
+    /// at the left interface, the stack frame's origin. A
+    /// fixed-lab sample on an interface that moves between regions that
+    /// differ has no rate (`MovingInterface`).
+    pub fn hybrid_power_field_tangent_with<B: ModalDerivativeBackend>(
+        &self,
+        backend: &B,
+        direction: &HybridPerturbation,
+        sampling: &FieldSampling<f64>,
+        frame: GuidedObservationFrame,
+    ) -> Result<HybridPowerSensitivity, HybridFieldError> {
+        let signature = self.signature().map_err(|_| HybridFieldError::Branch)?;
+        let (k, beta) = (signature.k0, signature.k_parallel);
+        if k.re <= 0.0 || k.im != 0.0 || beta.im.abs() > 1e-9 * beta.norm() {
+            return Err(HybridFieldError::Ineligible);
+        }
+        let provenance = self.provenance();
+        let stack = provenance.stack();
+        crate::problem::walls(stack).map_err(|side| PmlIntegral { side })?;
+        let rate = self.hybrid_beta_rate_with(backend, direction)?;
+        let moving = self.moving(
+            direction.k0_rate,
+            rate.beta_rate,
+            &direction.thickness_rates,
+            &direction.tensor_rates,
+        )?;
+        // Regional power and its total rate, the layers' far ends moving.
+        let operand = lamina_core::ModalFormOperand {
+            direction: moving.direction(),
+            amplitude: Complex::ONE,
+        };
+        let integrals = backend
+            .directional_forms(
+                [operand, operand],
+                &[lamina_core::ModalForm {
+                    conjugate: true,
+                    weights: &[forms::flux()],
+                }],
+            )
+            .map_err(HybridFieldError::Fields)?;
+        let half = 0.5 * CM_TO_M_OVER_Z0;
+        let regional: Vec<[f64; 2]> = integrals[0]
+            .iter()
+            .map(|share| [half * share.value()[()].re, half * share.first()[()].re])
+            .collect();
+        let total: f64 = regional.iter().map(|p| p[0]).sum();
+        let total_rate: f64 = regional.iter().map(|p| p[1]).sum();
+        if !total.is_finite() || !total_rate.is_finite() || total == 0.0 {
+            return Err(HybridFieldError::IllConditioned);
+        }
+        let jets = |sampling: &FieldSampling<f64>| {
+            backend
+                .directional_fields(moving.direction(), sampling, Complex::ONE)
+                .map_err(HybridFieldError::Fields)
+        };
+        // The phase rule's reference and its rate at the left interface.
+        let at = FieldSampling::new().left_exterior(lamina_core::ExteriorSampling::point(
+            lamina_units::Length::zero(),
+        ));
+        let left = jets(&at)?;
+        let (value, tangent) = (components(&left.fields)[0], components(&left.tangent)[0]);
+        let phase_reference = HybridPhaseReference::of(&value)?;
+        let (reference, reference_rate) = (
+            phase_reference.value(&value),
+            phase_reference.value(&tangent),
+        );
+        let scale = reference.conj() / reference.norm() / total.abs().sqrt();
+        let log_rate = Complex::new(-0.5 * total_rate / total, -(reference_rate / reference).im);
+        if [scale, log_rate]
+            .iter()
+            .any(|v| !v.re.is_finite() || !v.im.is_finite())
+        {
+            return Err(HybridFieldError::IllConditioned);
+        }
+        // Region tensors, and the interfaces' lab-frame velocities.
+        let tensors: Vec<[[[Complex; 3]; 3]; 2]> = m::regions(stack)
+            .map(|(id, material)| {
+                m::full_tensors(id, material, k)
+                    .map(|[values, _]| values)
+                    .map_err(|_| HybridFieldError::Ineligible)
+            })
+            .collect::<Result<_, _>>()?;
+        let origin = direction.origin_velocity;
+        let velocities: Vec<f64> = std::iter::once(origin)
+            .chain(direction.thickness_rates.iter().scan(origin, |at, rate| {
+                *at += rate;
+                Some(*at)
+            }))
+            .collect();
+        let recovered = jets(sampling)?;
+        let (fields, tangents) = (
+            components(&recovered.fields),
+            components(&recovered.tangent),
+        );
+        let fixed_lab = frame == GuidedObservationFrame::FixedLab;
+        let samples = recovered
+            .fields
+            .sampling()
+            .positions()
+            .iter()
+            .zip(fields.into_iter().zip(tangents))
+            .map(|(&position, (field, tangent))| {
+                let observation = match fixed_lab {
+                    true => GuidedObservation::FixedLab(position),
+                    false => GuidedObservation::MaterialAttached(position),
+                };
+                let tangent = match fixed_lab {
+                    true => lab_tangent(
+                        &position,
+                        &field,
+                        tangent,
+                        stack,
+                        &velocities,
+                        &tensors,
+                        &direction.tensor_rates,
+                        k,
+                        beta,
+                    ),
+                    false => Ok(tangent),
+                }
+                .and_then(|tangent| {
+                    let scaled = tangent
+                        .iter()
+                        .zip(field)
+                        .map(|(t, f)| scale * (t + log_rate * f));
+                    let scaled: Vec<Complex> = scaled.collect();
+                    match scaled.iter().all(|v| v.re.is_finite() && v.im.is_finite()) {
+                        true => Ok(std::array::from_fn(|c| scaled[c])),
+                        false => Err(GuidedObservationError::NonFinite),
+                    }
+                });
+                GuidedFieldSample {
+                    observation,
+                    field: field.map(|f| scale * f),
+                    tangent,
+                }
+            })
+            .collect();
+        let regional_power = regional
+            .into_iter()
+            .map(|[power, rate]| RegionalPowerSensitivity {
+                power_w_per_m: power / total.abs(),
+                power_rate_w_per_m: (rate - power * total_rate / total) / total.abs(),
+            })
+            .collect();
+        Ok(HybridPowerSensitivity {
+            rate,
+            phase_reference,
+            scale_log_rate: log_rate,
+            samples,
+            regional_power,
+        })
+    }
+}
+
+/// The fixed-lab rate of a material-attached sample: its attached rate less
+/// its velocity times `∂f/∂z`. A sample on an interface that moves between
+/// regions whose tensors or tensor rates differ has none.
+#[allow(clippy::too_many_arguments)]
+fn lab_tangent(
+    position: &lamina_core::FieldPosition<f64>,
+    field: &[Complex; 6],
+    mut tangent: [Complex; 6],
+    stack: &ModeStack,
+    velocities: &[f64],
+    tensors: &[[[[Complex; 3]; 3]; 2]],
+    rates: &[[[[Complex; 3]; 3]; 2]],
+    k: Complex,
+    beta: Complex,
+) -> Result<[Complex; 6], GuidedObservationError> {
+    use lamina_core::{FieldPosition, ResolvedLayerPosition};
+    let last = velocities.len() - 1;
+    let (region, velocity, interface) = match position {
+        FieldPosition::LeftExterior { distance } => (
+            0,
+            velocities[0],
+            (distance.as_centimetres() == 0.0).then_some(0),
+        ),
+        FieldPosition::RightExterior { distance } => (
+            last + 1,
+            velocities[last],
+            (distance.as_centimetres() == 0.0).then_some(last),
+        ),
+        FieldPosition::Layer { index, position } => {
+            let i = index.get();
+            let width = stack.layers_left_to_right()[i].thickness().as_centimetres();
+            let (velocity, on_left, on_right) = match position {
+                ResolvedLayerPosition::FromLeft(d) => {
+                    let d = d.as_centimetres();
+                    (velocities[i], d == 0.0, d == width)
+                }
+                ResolvedLayerPosition::FromRight(d) => {
+                    let d = d.as_centimetres();
+                    (velocities[i + 1], d == width, d == 0.0)
+                }
+                ResolvedLayerPosition::Fraction(f) => (
+                    (1.0 - f) * velocities[i] + f * velocities[i + 1],
+                    *f == 0.0,
+                    *f == 1.0,
+                ),
+            };
+            let interface = match (on_left, on_right) {
+                (true, _) => Some(i),
+                (_, true) => Some(i + 1),
+                _ => None,
+            };
+            (i + 1, velocity, interface)
+        }
+    };
+    if let Some(interface) = interface
+        && velocities[interface] != 0.0
+        && (tensors[interface] != tensors[interface + 1]
+            || rates[interface] != rates[interface + 1])
+    {
+        return Err(GuidedObservationError::MovingInterface { interface });
+    }
+    if velocity != 0.0 {
+        let gradient = normal_gradient(field, &tensors[region], k, beta);
+        for (value, gradient) in tangent.iter_mut().zip(gradient) {
+            *value -= velocity * gradient;
+        }
+    }
+    Ok(tangent)
 }
