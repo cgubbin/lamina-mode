@@ -9,7 +9,8 @@ Added:
 
 - `GuidedBetaError::IneligibleEntry` and `GroupIndexError::IneligibleEntry`
   name the region, the entry (`ε_xx`) and its value when a sensitivity or group
-  index is refused for an entry that is not real and positive.
+  index is refused for an entry that is not lossless (complex, not finite or
+  zero); a lossy entry is named before the mode's complex β is refused.
 - Exterior sheets on the in-plane chart: `ExteriorSector` (proper, outgoing or
   incoming improper, real) and `BranchSignature::sectors`, so every point names
   the sheet of each exterior; `PropagationProblem::full_period_plan` and
@@ -250,6 +251,16 @@ Changed:
   `Integrals`; `HybridFieldError::Quadrature` is gone and `Mismatched` reports
   two modes whose stacks differ in layer thicknesses. Of the
   `guided_group_index_with` field-recovery settings only the amplitude enters.
+- `guided_beta_sensitivity_with`, `guided_group_index_with` and
+  `guided_power_profile_with` (and the field derivatives and power fractions
+  built on them) accept lossless entries of either sign: real, finite and
+  non-zero instead of real and positive. Modes of hyperbolic and
+  negative-permittivity layers (a lossless hBN film in either Reststrahlen
+  band, a surface phonon polariton) get a certified group index and unit-power
+  profiles; the energy certificate uses the Brillouin weight ∂(k0 ε)/∂k0,
+  positive in a lossless Lorentz medium also where ε < 0. Backward modes have
+  a negative group index and power. Requests that failed with
+  `IneligibleEntry` for a negative entry now succeed.
 
 
 Fixed:

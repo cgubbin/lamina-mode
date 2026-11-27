@@ -21,6 +21,14 @@ The result is certified only if the derivative is real (to round-off) and the tw
 caller's tolerance (default 1e-8 in the bindings). Otherwise it fails with both values (`Uncertified`).
 `value` is Re(dβ/dk0), signed like β. The result keeps the wavelength sensitivity's conditioning.
 
+Eligibility is losslessness, not sign: every entry the polarisation sees must be real, finite and non-zero at
+the mode's k0, so hyperbolic and negative-permittivity regions are certified. The identity n_g = c W / P
+follows from the variational form of the characteristic and holds for any real dispersion. In a lossless
+Lorentz medium the weight ∂(k0 ε)/∂k0 = ε∞ + Δε Ω² (Ω² + k0²)/(Ω² − k0²)² is the Brillouin (and, without
+loss, Loudon) energy density, positive also where ε < 0. A mode whose power runs against β (a backward mode)
+has a negative group index; a zero entry makes the characteristic singular and is refused, as is a complex
+entry, named with its region.
+
 ## Alternatives
 
 - **Certify by the imaginary part alone:** it detects a complex result, not a wrong one.

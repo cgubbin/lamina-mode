@@ -98,9 +98,10 @@ the left-interface primary (Ey for TE, Z₀Hy for TM) real and positive. The ret
 seed power, both exterior contributions and signed normalized power. Phase-sensitive
 parameter sweeps must maintain this reference or explicitly change gauge.
 
-The supported material class has real positive relative permittivity and
-permeability at the physical frequency, real propagation up to numerical tolerance,
-and two evanescent exteriors. In a region whose ε and μ are diagonal in the stack
+The supported material class is lossless: real, finite, non-zero relative
+permittivity and permeability of either sign at the physical frequency (hyperbolic
+and negative-permittivity layers included), real propagation up to numerical
+tolerance, and two evanescent exteriors. In a region whose ε and μ are diagonal in the stack
 frame this applies to the entries the polarisation sees: μ_xx, μ_zz and ε_yy for TE,
 ε_xx, ε_zz and μ_yy for TM. Each field component then carries its own entry: the
 tails decay as exp(−α|z|) with α = √(t/n) √(β² − v n k0²) for the entries t, n, v
